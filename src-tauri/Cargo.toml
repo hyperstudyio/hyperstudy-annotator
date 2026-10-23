@@ -1,0 +1,27 @@
+[package]
+name = "hyperstudy-annotator"
+version = "0.1.0"
+description = "View, edit and add data to HyperStudy perception track bundles"
+edition = "2021"
+
+[lib]
+name = "hyperstudy_annotator_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

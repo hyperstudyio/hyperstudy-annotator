@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened runtime, Developer ID distribution, no App Sandbox: the app reads bundles and videos wherever the user
+  keeps them, and remembers their paths between launches, which sandboxing would turn into security-scoped
+  bookmarks. Network access is for the updater only. No JIT, debugger or device entitlements (the app runs no
+  models and talks to no hardware).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

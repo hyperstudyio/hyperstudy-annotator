@@ -1,0 +1,149 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { describe, expect, test } from 'vitest';
+import { Bundle, type Layers } from './bundle';
+import { NOT_PERSON, UNKNOWN } from './corrections';
+import { MemoryStorage, SHA, face, makeBundle } from './fixture.test-helpers';
+import { Session, coVisible, stampAfter } from './session.svelte';
+import { View } from './view.svelte';
+import { LocalCorrectionStore } from '../source';
+
+function session(bundle = makeBundle(), storage = new MemoryStorage()) {
+  const s = new Session(bundle, new LocalCorrectionStore(bundle.sha256, storage), new View(bundle.sha256, storage));
+  return { s, storage };
+}
+
+describe('people', () => {
+  test('a reassigned track and a merge both change who a face is', async () => {
+    const { s } = session();
+    const [f0, , , f3] = s.bundle.faces;
+    expect(s.personOf(f3)).toBe(UNKNOWN);   // the clusterer's null
+    await s.commit({ op: 'track.assign', track: 'face:3', person: 'person:Person B' });
+    expect(s.personOf(f3)).toBe('person:Person B');
+    await s.commit({ op: 'person.merge', from: 'person:Person B', into: 'person:Person A' });
+    expect(s.personOf(f3)).toBe('person:Person A');
+    expect(s.personOf(f0)).toBe('person:Person A');
+    expect(s.people).toEqual(['person:Person A', 'person:Person C', UNKNOWN, NOT_PERSON]);
+  });
+
+  test('people are ordered by screen time; renamed people keep their machine label', async () => {
+    const { s } = session();
+    expect(s.people.slice(0, 3)).toEqual(['person:Person A', 'person:Person B', 'person:Person C']);
+    await s.commit({ op: 'person.rename', person: 'person:Person C', name: 'Alyssa' });
+    expect(s.nameOf('person:Person C')).toBe('Alyssa');
+    expect(s.machineLabel('person:Person C')).toBe('Alyssa (Person C)');
+  });
+
+  test('not a person is excluded from agents by default, and a track follows its person unless set itself', async () => {
+    const { s } = session();
+    const f4 = s.bundle.face.get('face:4')!;
+    await s.commit({ op: 'person.not_person', person: 'person:Person C' });
+    expect(s.personOf(f4)).toBe(NOT_PERSON);
+    expect(s.includedFace(f4)).toBe(false);
+    await s.commit({ op: 'entity.include', id: 'face:4', included: true });
+    expect(s.includedFace(f4)).toBe(true);
+  });
+
+  test('two faces of one person on screen together at different places are reported', () => {
+    expect(coVisible([face(0, 'p', 0, 0, 2, 0), face(1, 'p', 0, 1, 3, 600)]).length).toBe(1);
+    expect(coVisible([face(0, 'p', 0, 0, 2, 0), face(1, 'p', 0, 1, 3, 10)]).length).toBe(0);   // the same face twice
+    expect(coVisible([face(0, 'p', 0, 0, 2, 0), face(1, 'p', 1, 1, 3, 600)]).length).toBe(0);  // different shots
+  });
+});
+
+describe('speakers and the review queue', () => {
+  test('only utterances with faces on screen and an unsure speaker model are queued', () => {
+    const { s } = session();
+    // utt:0 confident, utt:1 small gap, utt:2 no faces (off-screen by definition), utt:3 no face scored as speaking
+    expect(s.queue.speakers.map((u) => u.id)).toEqual(['utt:1', 'utt:3']);
+    expect(s.queue.sounds.map((x) => x.id)).toEqual(['sound:1']);
+  });
+
+  test('similar people are suggested once per pair, never when seen together, and not after "different"', async () => {
+    const { s } = session();
+    expect(s.queue.pairs.map((p) => [p.a, p.b])).toEqual([['person:Person A', 'person:Person C']]);
+    await s.commit({ op: 'person.distinct', a: 'person:Person C', b: 'person:Person A' });
+    expect(s.queue.pairs).toEqual([]);
+  });
+
+  test('choosing a speaker marks it reviewed and moves to the next open utterance', async () => {
+    const { s } = session();
+    const u1 = s.bundle.utt.get('utt:1')!;
+    expect(s.openInQueue).toBe(3);   // two speakers and one pair
+    s.select('utt', 'utt:1');
+    await s.setSpeaker(u1, { kind: 'face', face: 'face:0' });
+    expect(s.reviewed(u1)).toBe(true);
+    expect(s.speakerPerson(s.speakerOf(u1))).toBe('person:Person A');
+    expect(s.selection).toEqual({ kind: 'utt', id: 'utt:3' });
+    expect(s.openInQueue).toBe(2);
+  });
+
+  test('speech dropped on a person is their face when on screen in that shot, else them off camera', () => {
+    const { s } = session();
+    const u0 = s.bundle.utt.get('utt:0')!, u3 = s.bundle.utt.get('utt:3')!;
+    expect(s.speakerForPerson(u0, 'person:Person B')).toEqual({ kind: 'face', face: 'face:1' });
+    expect(s.speakerForPerson(u3, 'person:Person A')).toEqual({ kind: 'person', person: 'person:Person A' });
+    expect(s.speakerForPerson(u3, UNKNOWN)).toBeNull();
+  });
+});
+
+describe('the op log', () => {
+  test('undo removes the last commit as a whole', async () => {
+    const { s } = session();
+    await s.commit({ op: 'person.rename', person: 'person:Person A', name: 'x' });
+    await s.commit({ op: 'person.create', person: 'person:New 1', name: 'y' }, { op: 'track.assign', track: 'face:3', person: 'person:New 1' });
+    expect(s.ops.length).toBe(3);
+    await s.undo();
+    expect(s.ops.map((o) => o.op)).toEqual(['person.rename']);
+    expect(await s.store.load()).toEqual(s.ops);
+  });
+
+  test('a commit made while another tab also saved keeps both', async () => {
+    const storage = new MemoryStorage();
+    const { s: a } = session(makeBundle(), storage);
+    const { s: b } = session(makeBundle(), storage);
+    await a.commit({ op: 'person.rename', person: 'person:Person A', name: 'from a' });
+    await b.commit({ op: 'person.rename', person: 'person:Person B', name: 'from b' });   // b had loaded nothing
+    expect(b.ops.map((o) => (o as { name: string }).name)).toEqual(['from a', 'from b']);
+  });
+
+  test('an import naming ids this bundle lacks is refused as a whole', () => {
+    const { s } = session();
+    const file = (ops: unknown[]) => JSON.stringify({ format: 'perception-corrections/1', sha256: SHA, ops });
+    expect(s.parseCorrections(file([{ op: 'track.assign', track: 3, person: 'Person A', at: 't' }]))).toHaveLength(1);
+    expect(() => s.parseCorrections(file([{ op: 'track.assign', track: 99, person: 'Person A', at: 't' }]))).toThrow(/face:99/);
+  });
+});
+
+describe('segments', () => {
+  test('arrows step through the same person\'s tracks, and around the playhead with nothing selected', () => {
+    const { s } = session();
+    s.select('face', 'face:0');
+    s.step(1);
+    expect(s.selection).toEqual({ kind: 'face', id: 'face:2' });
+    expect(s.playback.clip).toEqual({ start: 10, end: 14 });
+    s.step(1);
+    expect(s.selection).toEqual({ kind: 'face', id: 'face:2' });   // the last one: stays
+    s.selection = null;
+    s.playback.time = 3;
+    s.step(-1);
+    expect(s.selection).toEqual({ kind: 'utt', id: 'utt:1' });
+  });
+});
+
+// The user's cleaned identity file from the prototype, against the bundle converted from the same run.
+const RUN = '/Users/lukechang/Github/hyperstudy/.claude/worktrees/video-perception-bakeoff/tools/perception-bakeoff/runs/ooo-genz-clip1';
+test.skipIf(!existsSync(`${RUN}/perception_corrections.json`))('the prototype\'s real corrections file imports with no unknown ids', () => {
+  const manifest = JSON.parse(readFileSync(`${RUN}/bundle/manifest.json`, 'utf8'));
+  const layers = Object.fromEntries(['shots', 'transcript', 'speakers', 'faces', 'bodies', 'hands', 'gestures', 'facing', 'gaze', 'objects', 'sounds', 'text', 'prosody', 'waveform']
+    .map((n) => [n, manifest.layers[n] && n !== 'bodies' && n !== 'hands' ? JSON.parse(readFileSync(`${RUN}/bundle/${manifest.layers[n].file}`, 'utf8')) : null])) as unknown as Layers;
+  const s = new Session(new Bundle(manifest, layers), new LocalCorrectionStore(manifest.video.sha256, new MemoryStorage()), new View('x', null));
+  const ops = s.parseCorrections(readFileSync(`${RUN}/perception_corrections.json`, 'utf8'));
+  expect(ops).toHaveLength(88);
+});
+
+test('two commits in the same millisecond get different timestamps', () => {
+  const now = new Date('2026-10-23T10:00:00.000Z');
+  expect(stampAfter('2026-10-23T10:00:00.000Z', now)).toBe('2026-10-23T10:00:00.001Z');
+  expect(stampAfter('2026-10-23T09:00:00.000Z', now)).toBe('2026-10-23T10:00:00.000Z');
+  expect(stampAfter(undefined, now)).toBe('2026-10-23T10:00:00.000Z');
+});
