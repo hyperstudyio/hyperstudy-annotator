@@ -1,15 +1,19 @@
 //! Reading and checking track bundles (hyperstudy-perception `schema/README.md`).
 //!
 //! Import checks what the app relies on: the format marker, a schema major version this app reads, and that every
-//! layer and side file listed in the manifest exists with the recorded size and sha256. Full schema validation is
-//! the pipeline's job (`pipeline/bundle/validate.py`); the app trusts a bundle whose files match its manifest.
+//! layer, side file and asset listed in the manifest exists with the recorded size and sha256. Full schema validation
+//! is the pipeline's job (`pipeline/bundle/validate.py`); the app trusts a bundle whose files match its manifest.
+//!
+//! Bundles come from other people, so their paths are untrusted. Every listed entry must be complete (an entry the
+//! checks skipped could still be read later), and every path is checked with `safe_path` each time it is used, on
+//! import and on every read: plain relative components only, and nothing that resolves outside the bundle folder.
 
 use crate::error::{Error, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 pub const FORMAT: &str = "hyperstudy-perception-bundle";
 /// Schema major versions this app can read.
@@ -31,25 +35,57 @@ pub fn read_manifest(dir: &Path) -> Result<Value> {
     if manifest["video"]["sha256"].as_str().map_or(true, |s| s.len() != 64) {
         return Err(Error::Bundle("manifest has no video sha256".into()));
     }
+    for (file, _, _) in listed_files(&manifest)? {
+        relative_components(&file)?;
+    }
     Ok(manifest)
 }
 
-/// Every file the manifest lists (layers, side files and assets), as (relative path, bytes, sha256).
-pub fn listed_files(manifest: &Value) -> Vec<(String, u64, String)> {
-    let layer_files = manifest["layers"].as_object().into_iter().flat_map(|m| m.values())
-        .flat_map(|entry| std::iter::once(entry).chain(entry["side_files"].as_array().into_iter().flatten()));
-    let assets = manifest["assets"].as_array().into_iter().flatten();
-    layer_files.chain(assets)
-        .filter_map(|f| Some((f["file"].as_str()?.to_string(), f["bytes"].as_u64()?, f["sha256"].as_str()?.to_string())))
-        .collect()
+/// Every file the manifest lists (layers, side files and assets), as (relative path, bytes, sha256). An entry missing
+/// any of the three is an error, never skipped.
+pub fn listed_files(manifest: &Value) -> Result<Vec<(String, u64, String)>> {
+    let mut entries: Vec<(String, &Value)> = Vec::new();
+    for (name, entry) in manifest["layers"].as_object().into_iter().flatten() {
+        entries.push((format!("layer {name}"), entry));
+        for side in entry["side_files"].as_array().into_iter().flatten() {
+            entries.push((format!("a side file of layer {name}"), side));
+        }
+    }
+    for asset in manifest["assets"].as_array().into_iter().flatten() {
+        entries.push(("an asset".to_string(), asset));
+    }
+    entries.into_iter().map(|(what, f)| match (f["file"].as_str(), f["bytes"].as_u64(), f["sha256"].as_str()) {
+        (Some(file), Some(bytes), Some(sha)) => Ok((file.to_string(), bytes, sha.to_string())),
+        _ => Err(Error::Bundle(format!("manifest entry for {what} lacks file, bytes or sha256"))),
+    }).collect()
+}
+
+/// A manifest path made only of plain relative components: no root, drive prefix, `.` or `..`.
+fn relative_components(rel: &str) -> Result<()> {
+    let path = Path::new(rel);
+    if rel.is_empty() || !path.components().all(|c| matches!(c, Component::Normal(_))) {
+        return Err(Error::Bundle(format!("manifest lists a path outside the bundle: {rel:?}")));
+    }
+    Ok(())
+}
+
+/// `rel` inside `dir`, checked: relative components only, and if the file exists, its real location (symlinks
+/// resolved) must be inside `dir`'s real location.
+pub fn safe_path(dir: &Path, rel: &str) -> Result<PathBuf> {
+    relative_components(rel)?;
+    let path = dir.join(rel);
+    if path.exists() {
+        let real = path.canonicalize()?;
+        if !real.starts_with(dir.canonicalize()?) {
+            return Err(Error::Bundle(format!("{rel} resolves outside the bundle")));
+        }
+    }
+    Ok(path)
 }
 
 pub fn verify_files(dir: &Path, manifest: &Value) -> Result<()> {
-    for (file, bytes, sha) in listed_files(manifest) {
-        if file.contains("..") || Path::new(&file).is_absolute() {
-            return Err(Error::Bundle(format!("manifest lists a path outside the bundle: {file}")));
-        }
-        let path = dir.join(&file);
+    for (file, bytes, sha) in listed_files(manifest)? {
+        let path = safe_path(dir, &file)?;
         let meta = fs::metadata(&path).map_err(|_| Error::Bundle(format!("missing {file}")))?;
         if meta.len() != bytes || sha256_file(&path)? != sha {
             return Err(Error::Bundle(format!("{file} does not match its manifest checksum")));
@@ -80,12 +116,13 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
 pub fn copy_listed(src: &Path, dst: &Path, manifest: &Value) -> Result<()> {
     fs::create_dir_all(dst)?;
     fs::copy(src.join("manifest.json"), dst.join("manifest.json"))?;
-    for (file, _, _) in listed_files(manifest) {
-        let target = dst.join(&file);
+    for (file, _, _) in listed_files(manifest)? {
+        let from = safe_path(src, &file)?;
+        let target = dst.join(&file);   // the same checked relative path, under a folder the app made
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(src.join(&file), target)?;
+        fs::copy(from, target)?;
     }
     Ok(())
 }
@@ -136,6 +173,41 @@ mod tests {
 
         fs::write(src.path().join("assets/crops/face_0.jpg"), b"changed").unwrap();
         assert!(verify_files(src.path(), &manifest).unwrap_err().to_string().contains("face_0.jpg"));
+    }
+
+    #[test]
+    fn a_listed_file_without_a_checksum_is_rejected_not_skipped() {
+        // An entry missing bytes/sha256 used to be skipped by verification, yet still readable by path later.
+        let src = tempfile::tempdir().unwrap();
+        let mut manifest = bundle(src.path(), br#"{"layer":"shots"}"#, None);
+        manifest["layers"]["faces"] = json!({"file": "../outside.json", "licence_mode": "commercial-ok", "stage": "faces"});
+        fs::write(src.path().join("manifest.json"), manifest.to_string()).unwrap();
+        let err = read_manifest(src.path()).unwrap_err().to_string();
+        assert!(err.contains("faces"), "{err}");
+    }
+
+    #[test]
+    fn paths_that_leave_the_bundle_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in ["../x.json", "layers/../../x.json", "/etc/passwd", "./x.json", ""] {
+            assert!(safe_path(dir.path(), bad).is_err(), "{bad} was accepted");
+        }
+        assert!(safe_path(dir.path(), "layers/shots.json").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_out_of_the_bundle_is_rejected_at_import() {
+        let outside = tempfile::tempdir().unwrap();
+        let secret = br#"{"secret":true}"#;
+        fs::write(outside.path().join("secret.json"), secret).unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let mut manifest = bundle(src.path(), br#"{"layer":"shots"}"#, None);
+        std::os::unix::fs::symlink(outside.path().join("secret.json"), src.path().join("layers/faces.json")).unwrap();
+        manifest["layers"]["faces"] = json!({"file": "layers/faces.json", "sha256": sha256_bytes(secret), "bytes": secret.len(),
+                                             "licence_mode": "commercial-ok", "stage": "faces"});
+        let err = verify_files(src.path(), &manifest).unwrap_err().to_string();
+        assert!(err.contains("outside the bundle"), "{err}");
     }
 
     #[test]

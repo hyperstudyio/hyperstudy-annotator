@@ -135,17 +135,17 @@ pub fn read_layer(dir: &Path, name: &str) -> Result<String> {
     let manifest = bundle::read_manifest(dir)?;
     let file = manifest["layers"][name]["file"].as_str()
         .ok_or_else(|| Error::NotFound(format!("this bundle has no {name} layer")))?;
-    Ok(fs::read_to_string(dir.join(file))?)
+    Ok(fs::read_to_string(bundle::safe_path(dir, file)?)?)
 }
 
 /// A file the manifest lists (a side file such as `layers/faces_detail.json`), as text. Nothing else in the bundle
 /// folder can be read this way.
 pub fn read_bundle_file(dir: &Path, rel: &str) -> Result<String> {
     let manifest = bundle::read_manifest(dir)?;
-    if !bundle::listed_files(&manifest).iter().any(|(file, _, _)| file == rel) {
+    if !bundle::listed_files(&manifest)?.iter().any(|(file, _, _)| file == rel) {
         return Err(Error::NotFound(format!("{rel} is not a file this bundle lists")));
     }
-    Ok(fs::read_to_string(dir.join(rel))?)
+    Ok(fs::read_to_string(bundle::safe_path(dir, rel)?)?)
 }
 
 /// The folder a bundle was imported from.
@@ -351,5 +351,20 @@ mod tests {
         assert_eq!(replace_corrections(&conn, &id, &[op(7), op(8)]).unwrap(), 2);
         assert_eq!(load_corrections(&conn, &id).unwrap(), vec![op(7), op(8)]);
         assert!(load_corrections(&conn, "no-such-bundle").is_err());
+    }
+
+    #[test]
+    fn a_layer_path_cannot_read_files_outside_the_bundle() {
+        // An imported copy whose manifest names a path outside it (as a crafted bundle could, before import rejected it).
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("secret.txt"), "private").unwrap();
+        let dir = root.path().join("bundle");
+        make_bundle(&dir, b"video bytes");
+        let mut m: Value = serde_json::from_str(&fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+        m["layers"]["faces"] = json!({"file": "../secret.txt", "sha256": "0".repeat(64), "bytes": 7,
+                                      "licence_mode": "commercial-ok", "stage": "faces"});
+        fs::write(dir.join("manifest.json"), m.to_string()).unwrap();
+        assert!(read_layer(&dir, "faces").is_err());
+        assert!(read_bundle_file(&dir, "../secret.txt").is_err());
     }
 }
