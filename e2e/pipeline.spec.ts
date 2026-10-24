@@ -70,6 +70,11 @@ test('a node that can run in several places can be moved, and the plan says how 
   const dialog = await planned(page, '/?pipeline-demo');
   const faces = dialog.getByRole('row', { name: /^Run faces/ });
   await expect(faces).toContainText('about 1 min 36 s');
+  const menu = faces.getByRole('combobox', { name: 'Where faces runs' });
+  await expect(menu.getByRole('option')).toHaveText(['native:mps · about 1 min 36 s', 'native:cpu · no estimate yet']);   // compare before moving
+  // a menu is as wide as its longest option: it stays inside its column, not over the estimate beside it
+  const [box, cell] = await Promise.all([menu.boundingBox(), menu.locator('xpath=ancestor::td').boundingBox()]);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(cell!.x + cell!.width);
   await faces.getByRole('combobox', { name: 'Where faces runs' }).selectOption('native:cpu');
   await expect(dialog.getByRole('row', { name: /^Run faces/ })).toContainText('no estimate yet');
   await expect(dialog.getByText(/^Estimated time: about/)).toBeVisible();
@@ -82,4 +87,11 @@ test('unticking a step leaves out what needs it, and the time, cost and consent 
   await expect(dialog.getByRole('checkbox', { name: 'Run captions' })).not.toBeChecked();   // captions needs faces
   await expect(dialog.getByRole('checkbox', { name: /^Send frames/ })).toHaveCount(0);       // nothing uploads now
   await expect(dialog.getByText(/^Estimated time: about 2 s$/)).toBeVisible();              // asr only (decode is cached)
+});
+
+test('a pipeline that does not say what each step needs offers no choice of steps, and runs the whole graph', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=no-needs');
+  await expect(dialog.getByRole('row', { name: /^faces/ })).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: /^Run / })).toHaveCount(0);
+  await expect(dialog.getByRole('combobox', { name: 'Where faces runs' })).toBeVisible();   // places can still be chosen
 });
