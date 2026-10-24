@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting, type Ticked } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -176,4 +176,79 @@ test('a plan that does not say what each step needs is drawn one step after anot
   const plan: Plan = { ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] };
   expect(schedule(plan)).toEqual({ asr: { start: 0, seconds: 2 }, faces: { start: 2, seconds: 96 } });
   expect(totalEstimate(plan)).toEqual({ seconds: 98, fastest: 98, unknown: [] });   // no range the app cannot vouch for
+});
+
+// --- other machines (perception #15/#16): a lab server over SSH, a cloud GPU ---------------------------------------
+
+const PLACES = { 'native:mps': { title: 'This machine', remote: false, accelerator: 'mps' }, 'ssh-lab:cuda': { title: 'lab (SSH)', remote: true, accelerator: 'cuda' },
+  'cloud:cuda': { title: 'Cloud GPU (AWS L4)', remote: true, accelerator: 'cuda' } };
+const remoteNode = (place: string, over: Partial<PlanNode> = {}): PlanNode => {
+  const estimates = {
+    'native:mps': { estimate_s: 96, estimate_basis: 'median of 3 runs', cost_usd: 0, uploads: [], upload_to: null },
+    'ssh-lab:cuda': { estimate_s: null, estimate_basis: 'no runs yet', cost_usd: 0, uploads: ['video'], upload_to: 'lab (SSH)' },
+    'cloud:cuda': { estimate_s: null, estimate_basis: 'no runs yet', cost_usd: 0.4888, uploads: ['video'], upload_to: 'Cloud GPU (AWS L4)' },
+  } as Record<string, { estimate_s: number | null; estimate_basis: string; cost_usd: number; uploads: string[]; upload_to: string | null }>;
+  const e = estimates[place];
+  return { id: 'faces', uses: 'vision.face-track@1.0.0', where: place, why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: e.cost_usd, cost_note: '',
+           uploads: e.uploads, upload_to: e.upload_to, place, options: Object.keys(estimates), estimates, needs: ['decode'], settings: [], ...over };
+};
+const decodeNode = (over: Partial<PlanNode> = {}): PlanNode => ({ id: 'decode', uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [],
+  missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], upload_to: null, place: 'native:cpu', options: ['native:cpu'], needs: [], settings: [], ...over });
+const planOf = (...nodes: PlanNode[]): Plan => ({ ok: true, estimated_usd: 0, nodes, places: PLACES, max_cost_usd: 0.5 });
+
+test('choosing another machine for a step is the choice to send it that step\'s inputs, and only to that machine', () => {
+  const here = planOf(decodeNode(), remoteNode('native:mps'));
+  expect(placeTick(here.nodes[1], 'ssh-lab:cuda')).toEqual({ kinds: ['video'], service: 'lab (SSH)' });
+  const ticked: Ticked = { faces: placeTick(here.nodes[1], 'ssh-lab:cuda')! };
+  const there = planOf(decodeNode(), remoteNode('ssh-lab:cuda'));
+  expect(unagreed(there, ticked)).toEqual([]);
+  expect(consentFor(there, ticked).uploads).toEqual({ faces: { kinds: ['video'], service: 'lab (SSH)' } });
+  // agreeing to the lab server is not agreeing to the cloud, nor is any agreement left when nothing was chosen
+  expect(unagreed(planOf(decodeNode(), remoteNode('cloud:cuda')), ticked)).toEqual(['faces']);
+  expect(unagreed(there, {})).toEqual(['faces']);
+  // a plan from before perception #15 says nothing of where a place sends: choosing it agrees to nothing
+  expect(placeTick({ ...here.nodes[1], estimates: { 'ssh-lab:cuda': { estimate_s: null, estimate_basis: '' } } }, 'ssh-lab:cuda')).toBeNull();
+});
+
+test('a step on another machine sends its inputs there even when they hold none of the kinds', () => {
+  const n = remoteNode('ssh-lab:cuda', { uploads: [] });
+  expect(dest(n)).toBe('lab (SSH)');
+  expect(sends(n)).toBe(true);
+  expect(unagreed(planOf(n), {})).toEqual(['faces']);
+  expect(consentFor(planOf(n), { faces: { kinds: [], service: 'lab (SSH)' } }).uploads).toEqual({ faces: { kinds: [], service: 'lab (SSH)' } });
+  // older plans: the API's service is where kinds go
+  expect(dest({ ...decodeNode(), upload_to: undefined, uploads: ['frames'], service: 'Anthropic API' })).toBe('Anthropic API');
+  expect(sends({ ...decodeNode(), upload_to: undefined })).toBe(false);
+});
+
+test('the agreement a chosen place gave stands while the place does, for a step held on for another feature too', () => {
+  // decode (held on for faces) moved to the lab server: faces stays on, and decode's agreement with it
+  const decodeThere = decodeNode({ place: 'ssh-lab:cpu', uploads: ['video'], upload_to: 'lab (SSH)' });
+  const plan = planOf(decodeThere, remoteNode('native:mps'));
+  const ticked: Ticked = { decode: { kinds: ['video'], service: 'lab (SSH)' } };
+  expect(keepChoices(plan, new Set(['faces']), ticked, ['decode'])).toEqual({ wanted: new Set(['faces']), ticked });
+  // without the place, the tick would not stand for a step that is not itself a feature: the next plan turns faces off
+  const after = keepChoices(plan, new Set(['faces']), ticked, []);
+  expect(after.ticked).toEqual({});
+  expect(keepChoices(plan, after.wanted, after.ticked, []).wanted).toEqual(new Set());
+  // nor does a step whose sending was agreed by its place keep a feature waiting to be turned on
+  expect(mustTurnOnFirst(plan, new Set(), 'faces', ticked)).toEqual([]);
+  expect(mustTurnOnFirst(plan, new Set(), 'faces', {})).toEqual(['decode']);
+});
+
+test('places read as the plan names them, with what each would take and cost', () => {
+  const n = remoteNode('native:mps');
+  expect(placeName('ssh-lab:cuda', PLACES)).toBe('NVIDIA GPU on lab (SSH)');
+  expect(placeName('cloud:cuda', PLACES)).toBe('Cloud GPU (AWS L4)');
+  expect(placeName('ssh-lab:cuda')).toBe('NVIDIA GPU on lab');      // a plan without titles
+  expect(placeLabel(n, 'native:mps', PLACES)).toBe('Apple GPU, about 1 min 36 s');
+  expect(placeLabel(n, 'cloud:cuda', PLACES)).toBe('Cloud GPU (AWS L4), no estimate yet, up to $0.49');
+});
+
+test('a run\'s spending cap covers the graph\'s APIs and each cloud machine a step runs on', () => {
+  const plan = planOf(decodeNode(), remoteNode('cloud:cuda'));
+  expect(spendingCap(plan, ['decode', 'faces'])).toBe(0.99);                 // 0.50 + 0.4888, up to the cent
+  expect(spendingCap(plan, ['decode'])).toBe(0.5);                            // faces does not run
+  expect(spendingCap(planOf(decodeNode(), remoteNode('cloud:cuda', { cached: true })), ['decode', 'faces'])).toBe(0.5);
+  expect(spendingCap({ ...plan, max_cost_usd: undefined }, ['decode', 'faces'])).toBeNull();   // the CLI keeps the graph's
 });

@@ -81,14 +81,15 @@ pub type Uploads = std::collections::BTreeMap<String, Agreed>;
 #[derive(Debug, Default, Clone, serde::Deserialize, PartialEq)]
 pub struct Agreed {
     pub kinds: Vec<String>,
-    /// the hosted API it sends them to (the plan's `service`), or none
+    /// where it sends them: the hosted API (the plan's `service`) or the other machine it runs on (`upload_to`), or none
     pub service: Option<String>,
 }
 
 /// The app's own check, against a fresh plan of what is about to run, that nothing leaves this machine beyond what the
-/// user agreed to: a node that sends a kind of data not agreed for it is refused. Every node counts, cached ones too (a
-/// cache can be gone by the time the run starts), and a plan that does not say what a node sends (a CLI from before
-/// plans carried `uploads`) is refused.
+/// user agreed to: a node that sends a kind of data not agreed for it, or sends anything to a place not agreed for it
+/// (a node on another machine always sends its inputs there, even holding none of the kinds), is refused. Every node
+/// counts, cached ones too (a cache can be gone by the time the run starts), and a plan that does not say what a node
+/// sends (a CLI from before plans carried `uploads`) is refused.
 pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
     let nodes = plan["nodes"].as_array().ok_or_else(|| Error::Bundle("the pipeline's plan lists no nodes; nothing could be checked".into()))?;
     for n in nodes {
@@ -100,17 +101,34 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
         // an entry that is not a kind's name is not something that was agreed to: the plan is refused, not read around
         let kinds = uploads.iter().map(|u| u.as_str()).collect::<Option<Vec<&str>>>()
             .ok_or_else(|| Error::Bundle(format!("the pipeline's plan does not say plainly what {id} sends off this machine")))?;
-        let beyond: Vec<&str> = kinds.into_iter().filter(|k| !agreed.iter().any(|a| a == k)).collect();
+        let beyond: Vec<&str> = kinds.iter().copied().filter(|k| !agreed.iter().any(|a| a == k)).collect();
         if !beyond.is_empty() {
             return Err(Error::Bundle(format!("{id} would send {} off this machine, which was not agreed to", beyond.join(", "))));
         }
+        // where to: `upload_to` (perception #15), else the API's `service` for a node that sends kinds
+        let to = match n.get("upload_to") {
+            Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.as_str()),
+            Some(_) => return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data"))),
+            None if !kinds.is_empty() => n["service"].as_str(),
+            None => None,
+        };
         // the same data sent somewhere else is not what was agreed to either
-        let service = n["service"].as_str();
-        if !uploads.is_empty() && allowed.get(id).and_then(|a| a.service.as_deref()) != service {
-            return Err(Error::Bundle(format!("{id} would send its data to {}, which was not agreed to", service.unwrap_or("another place"))));
+        if (to.is_some() || !kinds.is_empty()) && allowed.get(id).map(|a| a.service.as_deref()) != Some(to) {
+            return Err(Error::Bundle(format!("{id} would send its data to {}, which was not agreed to", to.unwrap_or("another place"))));
         }
     }
     Ok(())
+}
+
+/// `--max-cost-usd N` for the run's spending cap (the graph's, raised by what a cloud machine costs: the dialog
+/// computes it), checked as a plain amount.
+pub fn cost_args(cap: Option<f64>) -> Result<Vec<String>> {
+    match cap {
+        None => Ok(vec![]),
+        Some(c) if c.is_finite() && (0.0..10_000.0).contains(&c) => Ok(vec!["--max-cost-usd".into(), format!("{c:.2}")]),
+        Some(c) => Err(Error::Bundle(format!("not a spending cap: {c}"))),
+    }
 }
 
 /// The run in progress: whether there is one, its CLI process, and a cancel asked for before that existed, all under
@@ -529,6 +547,33 @@ mod tests {
         assert!(upload_gate(&older, &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("does not say what captions sends"));
         let empty = serde_json::json!({"v": 1, "type": "plan", "ok": true});   // no node list: nothing was checked
         assert!(upload_gate(&empty, &agreed(&[])).unwrap_err().to_string().contains("no nodes"));
+    }
+
+    #[test]
+    fn a_node_on_another_machine_needs_that_machine_agreed_to_even_when_its_inputs_hold_no_kinds() {
+        let on = |to: Value, kinds: Value| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
+            {"id": "faces", "cached": false, "uploads": kinds, "upload_to": to, "service": null}]});
+        let agreed_to = |to: &str, kinds: &[&str]| -> Uploads {
+            [("faces".to_string(), Agreed { kinds: kinds.iter().map(|k| k.to_string()).collect(), service: Some(to.into()) })].into_iter().collect()
+        };
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!([])), &Uploads::new()).unwrap_err().to_string().contains("to lab (SSH)"));
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).is_ok());
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!(["video"])), &agreed_to("lab (SSH)", &["video"])).is_ok());
+        // another machine than the one agreed to, or more than was agreed, is refused
+        assert!(upload_gate(&on(serde_json::json!("gpu2 (SSH)"), serde_json::json!(["video"])), &agreed_to("lab (SSH)", &["video"])).is_err());
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!(["video", "audio"])), &agreed_to("lab (SSH)", &["video"])).is_err());
+        // nothing leaves: no agreement needed; an answer that is not a place is refused (fail closed)
+        assert!(upload_gate(&on(Value::Null, serde_json::json!([])), &Uploads::new()).is_ok());
+        assert!(upload_gate(&on(serde_json::json!({"host": "lab"}), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).unwrap_err().to_string().contains("plainly"));
+    }
+
+    #[test]
+    fn the_spending_cap_is_a_plain_amount() {
+        assert_eq!(cost_args(None).unwrap(), Vec::<String>::new());
+        assert_eq!(cost_args(Some(0.989)).unwrap(), vec!["--max-cost-usd", "0.99"]);
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 1e6] {
+            assert!(cost_args(Some(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]
