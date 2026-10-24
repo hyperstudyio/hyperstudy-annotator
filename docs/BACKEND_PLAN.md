@@ -34,7 +34,11 @@ dialogs by hand, is still open).
    - **The stored log is never rewritten.** Only an explicit undo (truncate) or import (replace) changes a log, as
      now. Carrying over appends the re-anchored ops to the *new* version's log, each pointing back to the op it came
      from; the old version's log and bundle are left as they were. Because `corrections.bundle_id` cascades on
-     delete, removing an old version must not be the only thing that kept an op: carried-over ops are copies.
+     delete, removing an old version must not be the only thing that kept an op: carried-over ops are copies, and
+     the ops left for review are stored with the new version's carry-over record, which has no foreign key to the
+     old version.
+   - **Carried ops never override newer edits.** A carry-over goes only onto an empty log, as one batch (one undo
+     takes it all back), so `fold`'s last-write-wins cannot put an old correction over a newer one.
    - **Older ops keep loading.** Ops in SQLite and in `perception-corrections/2` files (and `/1`, through
      `opFromV1`) have no author or base version. They load with base version = the bundle whose log holds them and
      author = unknown, never as unmatched or rejected. If the fields change the file format, it becomes `/3`, and
@@ -54,14 +58,19 @@ dialogs by hand, is still open).
      Until a node has measurements on a device, the estimate says so instead of guessing.
    - **SSH servers.** An orchestrator backend that sends single nodes to a user's machine over SSH, using the
      node file protocol as is: rsync the node, its uv environment definition and its inputs; run it; rsync `out/`
-     and `response.json` back and check them like any other result. The server needs only uv, ffmpeg and the
-     drivers, no root. Hosts come from the user's `~/.ssh/config` and keys from their ssh-agent: the app never
+     and `response.json` back and check them like any other result. The server needs uv, ffmpeg, the
+     drivers and a copy of the perception orchestrator (for `perception doctor` and the node SDK), and no root. Hosts come from the user's `~/.ssh/config` and keys from their ssh-agent: the app never
      stores private keys or passwords. The server is probed once (`perception doctor --json` over SSH) so placement
      knows its platform and accelerators. SkyPilot's SSH Node Pools were considered: they install k3s on each
      machine, which needs root and is heavy for a shared lab server.
      - **Nothing left behind on a shared server.** Each attempt gets a private workdir (mode 0700, created with
        umask 077), deleted once `out/` is fetched and checked, and also on cancel or failure. Study videos are often
        copyrighted or identifiable, and other accounts on a lab server could otherwise read them.
+     - **Secrets** reach the remote node in its environment through the SSH channel (sent on stdin), never as
+       command-line arguments (visible to every account in `ps`) or as files on the server.
+     - **Dropped connections and crashes.** Each workdir holds a lease file renewed while the laptop is connected.
+       The next connection to that server removes workdirs whose lease has expired, so an interrupted run leaves
+       nothing behind beyond the next run.
      - **Fetched results are untrusted.** rsync runs without copying links (`--no-links`), and `out/` then goes
        through the same checks as an import: no links or special files, every path through `bundle::safe_path`, and
        manifest entries without `file`, `bytes` and `sha256` rejected.
@@ -72,9 +81,11 @@ dialogs by hand, is still open).
    second implementation of rules the app enforces, so it carries them over:
    - paths resolved as `bundle::safe_path` does (relative components only, no symlink out of the bundle), and
      manifest entries without `file`, `bytes` and `sha256` rejected: analysts will point it at bundles from anywhere;
-   - `perception-corrections/1` (with the `opFromV1` id mapping) and `/2` accepted, unknown fields ignored;
+   - `perception-corrections/1` (with the `opFromV1` id mapping), `/2` and whatever the app writes next accepted,
+     unknown fields ignored;
    - `fold` giving what `corrections.ts` gives. Both implementations are tested against shared fixtures (a bundle,
-     an op log and the expected folded result), so neither can drift.
+     an op log and the expected folded result), so neither can drift. The fixtures are synthetic: real bundles carry
+     face crops and frames of study videos.
 4. **HyperStudy integration (paused, to be designed).** Endpoints for bundles and corrections of record, the
    Python SDK building on the reader of step 3, and `Workspace.svelte` embedded in HyperStudy through a third
    `BundleSource`. Design questions: where bundles are stored (next to the videos, keyed by sha256?), how the
