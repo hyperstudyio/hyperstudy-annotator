@@ -1,0 +1,68 @@
+# Tests on every pull request and on main. Linux runners only (the repository is private, and macOS minutes cost ten
+# times as much). No study media, bundles or secrets: browser tests that need the bake-off data skip themselves, and
+# the Rust end-to-end test against the real pipeline runs only where PERCEPTION_REPO is set.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend (svelte-check, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npx vitest run
+
+  browser:
+    name: Browser (Playwright in Chrome)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Google Chrome is preinstalled on GitHub's Ubuntu runners (playwright.config.ts uses channel: chrome); the
+      # config starts the Vite dev server.
+      - run: npx playwright test
+
+  rust:
+    name: Rust (cargo test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Tauri's Linux libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      # tauri-build checks bundle.externalBin, so the bundled uv must be there before anything compiles (and this
+      # checks the sha256 pinned for x86_64-unknown-linux-gnu)
+      - run: bash scripts/fetch-uv.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
