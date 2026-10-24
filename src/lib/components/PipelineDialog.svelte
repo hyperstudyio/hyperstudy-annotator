@@ -3,7 +3,7 @@
   // `perception doctor`), a video, one of the pipeline's graphs, the plan (where each node runs, what is cached, what
   // must be downloaded, what it costs), then the run, node by node.
   import { latestOnly } from '../latest';
-  import { blockers, foldRun, runnable, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
+  import { blockers, duration, foldRun, runnable, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -15,6 +15,7 @@
   let plan = $state<Plan | null>(null);
   let allowDownloads = $state(false);
   let allowUploads = $state(false);
+  let places = $state<Places>({});   // nodes the user moved to another place they can run here
   let msgs = $state.raw<PipelineMessage[]>([]);
   let started = $state(false);
   let error = $state<string | null>(null);
@@ -51,12 +52,14 @@
     folder = path;
     // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
     // flight from the old one is superseded too)
-    graph = null; plan = null; allowDownloads = false; allowUploads = false;
+    graph = null; plan = null; allowDownloads = false; allowUploads = false; places = {};
     newestPlan(Promise.resolve(null), (p) => (plan = p), () => {});
     graphs = await api.graphs();
   });
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };
-  const chooseGraph = async (file: string) => { graph = file; await makePlan(); };
+  const chooseGraph = async (file: string) => { graph = file; places = {}; await makePlan(); };
+  const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(); };
+  const total = $derived(plan ? totalEstimate(plan) : null);
   // A permission to download is for the plan on screen: a new plan takes it back. Only the newest plan request may set
   // the plan, so a slow one cannot show one graph while another would run.
   const newestPlan = latestOnly();
@@ -64,11 +67,11 @@
     plan = null; allowDownloads = false; allowUploads = false; error = null;
     if (!graph || !video) return;
     busy = 'Planning…';
-    newestPlan(api.plan(graph, video), (p) => { plan = p; busy = null; }, (e) => { error = String(e); busy = null; });
+    newestPlan(api.plan(graph, video, places), (p) => { plan = p; busy = null; }, (e) => { error = String(e); busy = null; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = [];
-    try { stop = await api.run(graph!, video!, consent, (m) => { msgs = [...msgs, m]; }); }
+    try { stop = await api.run(graph!, video!, consent, places, (m) => { msgs = [...msgs, m]; }); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
@@ -117,10 +120,18 @@
             {@const s = view.nodes[n.id]}
             <tr>
               <td class="node">{n.id}</td>
-              <td class="where">{n.cached ? 'cached' : (n.where ?? 'cannot run here')}</td>
+              <td class="where">
+                {#if n.cached}cached
+                {:else if !started && (n.options?.length ?? 0) > 1}
+                  <select aria-label={`Where ${n.id} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
+                    {#each n.options ?? [] as o (o)}<option value={o}>{o}</option>{/each}
+                  </select>
+                {:else}{n.place ?? n.where ?? 'cannot run here'}{/if}
+              </td>
               <td>
                 {#if started}<span class="state {s.state}">{STATE_LABEL[s.state]}</span> <span class="meta">{s.message}</span>
                 {:else}
+                  {#if !n.cached}<span class="meta" title={n.estimate_basis}>{n.estimate_s != null ? `about ${duration(n.estimate_s)}` : 'no estimate yet'}</span>{/if}
                   {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
                   {#if n.uploads?.length}<span class="uploads">sends {n.uploads.join(', ')} off this machine</span>{/if}
                   {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
@@ -132,6 +143,9 @@
           {/each}
         </tbody>
       </table>
+      {#if total && !started}
+        <div class="meta">Estimated time: about {duration(total.seconds)}{total.unknown.length ? `, not counting ${total.unknown.join(', ')} (no estimate yet: never run here in that place)` : ''}</div>
+      {/if}
       {#if uploading.length && !started}
         <label class="row"><input type="checkbox" bind:checked={allowUploads} /> Send {[...new Set(uploading.flatMap((n) => n.uploads ?? []))].join(', ')} off this machine ({uploading.map((n) => n.id).join(', ')})</label>
       {/if}

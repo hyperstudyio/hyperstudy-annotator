@@ -65,3 +65,12 @@ test('choosing another pipeline folder takes back the graph, the plan and every 
   await expect(dialog.getByRole('radio', { checked: true })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
 });
+
+test('a node that can run in several places can be moved, and the plan says how long each step takes', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  const faces = dialog.getByRole('row', { name: /^faces/ });
+  await expect(faces).toContainText('about 1 min 36 s');
+  await faces.getByRole('combobox', { name: 'Where faces runs' }).selectOption('native:cpu');
+  await expect(dialog.getByRole('row', { name: /^faces/ })).toContainText('no estimate yet');
+  await expect(dialog.getByText(/^Estimated time: about/)).toBeVisible();
+});

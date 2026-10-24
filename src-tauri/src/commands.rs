@@ -218,19 +218,23 @@ pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
 
 /// What a run of `graph` on `video` would do: placement, cache, downloads, missing secrets and cost per node.
 #[tauri::command]
-pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: String) -> Result<Value> {
+pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: String,
+                           places: Option<std::collections::BTreeMap<String, String>>) -> Result<Value> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
-    blocking(move || p.one(&["plan", &g.to_string_lossy(), "--input", &format!("video={video}")], "plan")).await
+    let mut args = vec!["plan".to_string(), g.to_string_lossy().into_owned(), "--input".into(), format!("video={video}")];
+    args.extend(pipeline::place_args(&places.unwrap_or_default())?);
+    blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "plan")).await
 }
 
 /// Start a run. Its objects arrive as `pipeline` events; when it succeeds, the bundle is exported, imported into the
 /// library and its video recorded, then an `imported` event carries the bundle's summary.
 #[tauri::command]
 pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool,
-                    allow_uploads: bool) -> Result<()> {
+                    allow_uploads: bool, places: Option<std::collections::BTreeMap<String, String>>) -> Result<()> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
+    let places = pipeline::place_args(&places.unwrap_or_default())?;
     {
         let mut running = state.running.lock().unwrap();
         if running.is_some() {
@@ -240,7 +244,7 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     }
     std::thread::spawn(move || {
         let _clear = ClearRun(app.clone());   // even if this thread panics, the next run is not refused forever
-        let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads) {
+        let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads, &places) {
             Ok(last) => last,
             Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
         };
@@ -253,9 +257,15 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     Ok(())
 }
 
+/// Clears the run-in-progress state if the run thread panics (normally the thread clears it before its last event; a
+/// second clear afterwards could wipe a run started in between).
 struct ClearRun(AppHandle);
 impl Drop for ClearRun {
-    fn drop(&mut self) { clear_run(&self.0); }
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            clear_run(&self.0);
+        }
+    }
 }
 fn clear_run(app: &AppHandle) {
     let state = app.state::<AppState>();
@@ -271,18 +281,25 @@ pub fn check_cancel(running: Option<&str>, run: &str) -> Result<()> {
 
 /// The run, then its import; the final `imported` event, for the caller to send once the run is no longer in progress.
 fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool,
-                  allow_uploads: bool) -> Result<Option<Value>> {
+                  allow_uploads: bool, places: &[String]) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
     let input = format!("video={video}");
     let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
     // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
-    pipeline::upload_gate(&p.one(&["plan", graph, "--input", &input], "plan")?, allow_uploads)?;
+    let places: Vec<&str> = places.iter().map(String::as_str).collect();
+    let plan_args = [&["plan", graph, "--input", &input][..], &places].concat();
+    pipeline::upload_gate(&p.one(&plan_args, "plan")?, allow_uploads)?;
     state.start_gate.check()?;   // canceled while that plan ran: nothing starts
-    let mut args = vec!["run", graph, "--input", &input];
+    let mut args = [&["run", graph, "--input", &input][..], &places].concat();
     if allow_downloads {
         args.push("--allow-downloads");
     }
-    let outcome = p.run_to_end_with(&args, |pid| *state.child.lock().unwrap() = Some(pid), |o| {
+    let outcome = p.run_to_end_with(&args, |pid| {
+        *state.child.lock().unwrap() = Some(pid);
+        if state.start_gate.check().is_err() {   // canceled between the consent check and now: stop what just started
+            let _ = pipeline::stop_process(pid);
+        }
+    }, |o| {
         if o["type"] == "run.created" {   // only an id in the CLI's form stands for the run in progress
             if let Some(id) = o["run"].as_str().and_then(|r| pipeline::run_id(r).ok()) {
                 *state.running.lock().unwrap() = Some(id.to_string());

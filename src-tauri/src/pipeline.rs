@@ -78,7 +78,8 @@ pub fn stop_process(pid: u32) -> Result<()> {
 /// counts, cached ones too (a cache can be gone by the time the run starts), and a plan that does not say what a node
 /// sends (a CLI from before plans carried `uploads`) is refused.
 pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
-    for n in plan["nodes"].as_array().into_iter().flatten() {
+    let nodes = plan["nodes"].as_array().ok_or_else(|| Error::Bundle("the pipeline's plan lists no nodes; nothing could be checked".into()))?;
+    for n in nodes {
         let id = n["id"].as_str().unwrap_or("?");
         let Some(uploads) = n["uploads"].as_array() else {
             return Err(Error::Bundle(format!("the pipeline does not say what {id} sends off this machine; update hyperstudy-perception")));
@@ -107,6 +108,22 @@ impl StartGate {
             Ok(())
         }
     }
+}
+
+/// `--place NODE=PLACE` arguments for where the user chose nodes run. Node ids and places must have the CLI's own form
+/// (an id; `backend:accelerator`), so nothing else reaches its command line.
+pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result<Vec<String>> {
+    let id_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let low = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase());
+    let mut out = vec![];
+    for (node, place) in places {
+        let ok = id_ok(node) && place.split_once(':').is_some_and(|(b, a)| low(b) && low(a));
+        if !ok {
+            return Err(Error::Bundle(format!("not a node and a place: {node:?} = {place:?}")));
+        }
+        out.extend(["--place".to_string(), format!("{node}={place}")]);
+    }
+    Ok(out)
 }
 
 /// The problems of an `error` object, as one message.
@@ -377,6 +394,8 @@ mod tests {
         assert!(upload_gate(&plan(serde_json::json!([])), false).is_ok());
         let older = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [{"id": "captions", "cached": false}]});
         assert!(upload_gate(&older, true).unwrap_err().to_string().contains("does not say what captions sends"));
+        let empty = serde_json::json!({"v": 1, "type": "plan", "ok": true});   // no node list: nothing was checked
+        assert!(upload_gate(&empty, true).unwrap_err().to_string().contains("no nodes"));
     }
 
     #[test]
@@ -403,6 +422,18 @@ mod tests {
         gate.request();
         assert!(gate.check().unwrap_err().to_string().contains("canceled before it started"));
         assert!(gate.check().is_ok(), "a request is used once");
+    }
+
+    #[test]
+    fn places_become_place_arguments_and_only_in_their_own_form() {
+        let mut places = std::collections::BTreeMap::new();
+        places.insert("faces".to_string(), "native:cpu".to_string());
+        assert_eq!(place_args(&places).unwrap(), vec!["--place".to_string(), "faces=native:cpu".to_string()]);
+        for (node, place) in [("faces", "native:cpu --allow-downloads"), ("../x", "native:cpu"), ("faces", "NATIVE:CPU"), ("faces", "native")] {
+            let mut bad = std::collections::BTreeMap::new();
+            bad.insert(node.to_string(), place.to_string());
+            assert!(place_args(&bad).is_err(), "{node}={place}");
+        }
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).
