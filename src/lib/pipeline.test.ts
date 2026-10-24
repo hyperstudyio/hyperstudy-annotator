@@ -44,9 +44,9 @@ test('a plan can run when every node has a place and its secrets; downloads are 
 test('turning on a feature that sends data off is the consent to send it, and a plan that does not say what leaves is not run', () => {
   const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.1, cost_note: '', uploads: ['frames'], needs: [], settings: [] };
   const plan = (n: Partial<PlanNode>): Plan => ({ ok: true, estimated_usd: 0.1, nodes: [{ ...node, ...n }] });
-  expect(consentFor(plan({}), new Set(['captions']))).toEqual({ downloads: true, uploads: { captions: ['frames'] } });   // exactly what it sends
-  expect(consentFor(plan({ uploads: [] }), new Set(['captions']))).toEqual({ downloads: true, uploads: {} });   // nothing to send: none given
-  expect(consentFor(plan({}), new Set())).toEqual({ downloads: true, uploads: {} });   // not turned on by the user: nothing agreed
+  expect(consentFor(plan({}), new Set(['captions']))).toEqual({ uploads: { captions: ['frames'] } });   // exactly what it sends
+  expect(consentFor(plan({ uploads: [] }), new Set(['captions']))).toEqual({ uploads: {} });   // nothing to send: none given
+  expect(consentFor(plan({}), new Set())).toEqual({ uploads: {} });   // not turned on by the user: nothing agreed
   const beforeSettings = plan({});
   delete beforeSettings.nodes[0].settings;   // a CLI from before perception #14: no --allow-uploads
   expect(blockers(beforeSettings)).toEqual(['captions sends data off this machine and this pipeline cannot be told it may (update hyperstudy-perception)']);

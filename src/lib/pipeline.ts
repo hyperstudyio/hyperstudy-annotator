@@ -96,8 +96,9 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
   return v;
 }
 
-/** What a run lets happen: `uploads` is node id -> the kinds of data it may send off this machine. */
-export interface Consent { downloads: boolean; uploads: Record<string, string[]> }
+/** What a run lets happen: `uploads` is node id -> the kinds of data it may send off this machine. (Models download as
+ *  part of running: the app always lets them.) */
+export interface Consent { uploads: Record<string, string[]> }
 
 /** What a run of these steps lets happen: its models download as part of running, and turning on a feature that sends
  *  data to a cloud API is the choice to send what the plan shows it sends (such features start off, see
@@ -105,7 +106,6 @@ export interface Consent { downloads: boolean; uploads: Record<string, string[]>
  *  agreed to nothing (see mustTurnOnFirst). The app holds a fresh plan to exactly this before it starts, so a step
  *  that would send data the plan on screen did not show, or that the user did not turn on, is refused. */
 export const consentFor = (plan: Plan, wanted: Set<string>): Consent => ({
-  downloads: true,
   uploads: Object.fromEntries(plan.nodes.filter((n) => wanted.has(n.id) && n.uploads?.length).map((n) => [n.id, [...n.uploads!]])),
 });
 
@@ -257,7 +257,7 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     plan: (graph, video, places, settings) => invoke<Plan>('pipeline_plan', { graph, video, places, settings }),
     async run(graph, video, allow, places, only, settings, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
-      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, uploads: allow.uploads, places, only, settings }); }
+      try { await invoke('pipeline_run', { graph, video, uploads: allow.uploads, places, only, settings }); }
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },

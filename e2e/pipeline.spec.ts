@@ -22,7 +22,7 @@ test('nothing to approve: what a step downloads or sends off is in its details, 
   await expect(asr).not.toContainText('Downloads');                               // not on the row
   await dialog.getByRole('button', { name: 'Speech transcript' }).click();
   await expect(asr).toContainText('Downloads first');
-  await expect(asr).toContainText('mlx-community/parakeet-tdt-0.6b-v3 (2.3 GB)');
+  await expect(asr).toContainText('mlx-community/parakeet-tdt-0.6b-v3 (2.3 GB, commercial use allowed)');
   await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();           // turning it on is the choice to send
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
 });
@@ -83,6 +83,14 @@ test('a run can be stopped before the pipeline has named it (a slow first enviro
   await dialog.getByRole('button', { name: 'Cancel run' }).click();          // no run id yet
   await expect(dialog.getByText(/ended without finishing the run/)).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
+});
+
+test('another video takes back the features turned on: sending one video\'s data is not the choice to send the next\'s', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
+  await dialog.getByRole('button', { name: 'Change…' }).nth(1).click();      // the video
+  await expect(dialog.getByRole('heading', { name: /steps? to run/ })).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: 'Run Shot captions' })).not.toBeChecked();
 });
 
 test('choosing another pipeline folder takes back the features and the plan', async ({ page }) => {

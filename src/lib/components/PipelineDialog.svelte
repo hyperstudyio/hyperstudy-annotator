@@ -93,14 +93,15 @@
     graphs = await api.graphs();
     if (graphs.some((g) => g.file === FULL_GRAPH)) await chooseGraph(FULL_GRAPH);
   });
-  const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };
+  // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
+  // not the choice to send the next one's
+  const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; await makePlan(); } };
   const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; settings = {}; open = null; await makePlan(); };
   const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(true); };
   const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
-  // A permission to download is for the plan on screen: a new plan takes it back. Only the newest plan request may set
-  // the plan, so a slow one cannot show one graph while another would run.
+  // Only the newest plan request may set the plan, so a slow one cannot show one graph while another would run.
   const newestPlan = latestOnly();
   // `keep`: a new place or setting replans the same steps, so the plan stays on screen (and the control just changed
   // keeps the keyboard) while Start run waits for the new one
@@ -252,7 +253,7 @@
                   {#if fixed.length}<dt>Uses</dt>
                     <dd>{#each fixed as m (m.id)}<span title={m.source ?? undefined}>{m.id}</span> <span class="muted">({LICENCE[m.licence_mode] ?? m.licence_mode}{m.size_gb ? `, ${m.size_gb} GB` : ''})</span><br />{/each}</dd>{/if}
                   {#if n.downloads.length}<dt>Downloads first</dt>
-                    <dd>{#each n.downloads as d (d.id)}<span title={d.source ?? undefined}>{d.id}</span> <span class="muted">({d.size_gb ? `${d.size_gb} GB` : 'size unknown'})</span><br />{/each}</dd>{/if}
+                    <dd>{#each n.downloads as d (d.id)}<span title={d.source ?? undefined}>{d.id}</span> <span class="muted">({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}, {LICENCE[d.licence_mode] ?? d.licence_mode}{d.gated ? ', gated: needs access granted on Hugging Face' : ''})</span><br />{/each}</dd>{/if}
                   <dt>Leaves this machine</dt><dd>{n.uploads?.length ? `${list(n.uploads)}${n.service ? `, sent to the ${n.service}` : ''}` : 'Nothing'}</dd>
                   {#if n.service}<dt>Runs on</dt><dd>The {n.service}, in the cloud</dd>
                   {:else if n.options?.length}<dt>Can run on</dt>
