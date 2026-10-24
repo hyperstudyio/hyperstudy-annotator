@@ -128,7 +128,8 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
 dialog (`PipelineDialog.svelte`) that goes in order:
 - **Pipeline folder.** The hyperstudy-perception folder (a setting, migration 3), checked with `perception doctor`.
 - **Video and graph.** A video, and one of the pipeline's `graphs/*.yaml`.
-- **Plan.** Placement, cache hits, model downloads (allowed explicitly), missing secrets and cost per node.
+- **Plan.** Placement, cache hits, model downloads, missing secrets and cost per node. (Downloads were first allowed
+  explicitly, as uploads were; both are now part of running the features chosen, see Features below.)
 - **Run.** Node by node as it happens. On success the bundle is exported, imported into the library, its video's
   sha256 checked and its location recorded, and the dialog offers to open it.
 

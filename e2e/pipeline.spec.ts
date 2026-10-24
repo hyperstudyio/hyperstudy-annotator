@@ -23,7 +23,7 @@ test('nothing to approve: what a step downloads or sends off is in its details, 
   await dialog.getByRole('button', { name: 'Speech transcript' }).click();
   await expect(asr).toContainText('Downloads first');
   await expect(asr).toContainText('mlx-community/parakeet-tdt-0.6b-v3 (2.3 GB)');
-  await dialog.getByRole('checkbox', { name: 'Run captions' }).check();           // turning it on is the choice to send
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();           // turning it on is the choice to send
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
 });
 
@@ -60,9 +60,9 @@ test('the dialog takes the keyboard, and Escape closes it when no run is going',
 
 test('a feature that sends data off this machine or costs money is off until turned on', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await expect(dialog.getByRole('checkbox', { name: 'Run captions' })).not.toBeChecked();
+  await expect(dialog.getByRole('checkbox', { name: 'Run Shot captions' })).not.toBeChecked();
   await expect(dialog.getByRole('heading', { name: /^2 steps to run, about 1 min 38 s$/ })).toBeVisible();   // no cost
-  await dialog.getByRole('checkbox', { name: 'Run captions' }).check();
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
   await expect(dialog.getByRole('heading', { name: /\$0\.16$/ })).toBeVisible();
 });
 
@@ -76,9 +76,9 @@ test('a run can be stopped before the pipeline has named it (a slow first enviro
 
 test('choosing another pipeline folder takes back the features and the plan', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await dialog.getByRole('checkbox', { name: 'Run captions' }).check();
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
   await dialog.getByRole('button', { name: 'Change…' }).first().click();     // the pipeline folder
-  await expect(dialog.getByRole('checkbox', { name: 'Run captions' })).not.toBeChecked();   // back to the defaults
+  await expect(dialog.getByRole('checkbox', { name: 'Run Shot captions' })).not.toBeChecked();   // back to the defaults
 });
 
 test('a node that can run in several places can be moved, and the plan says how long each step takes', async ({ page }) => {
@@ -97,13 +97,14 @@ test('a node that can run in several places can be moved, and the plan says how 
 
 test('turning a feature on brings what it needs, held on while it runs; turning it off lets them go', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  const faces = dialog.getByRole('checkbox', { name: 'Run faces' });
+  const faces = dialog.getByRole('checkbox', { name: 'Run Face tracks' });
   await expect(dialog.getByRole('heading', { name: /^2 steps to run/ })).toBeVisible();   // speech and faces (shots are done)
-  await dialog.getByRole('checkbox', { name: 'Run captions' }).check();
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
   await expect(faces).toBeChecked();
   await expect(faces).toBeDisabled();                                         // turned off, it would come straight back
+  await expect(faces).toHaveAccessibleDescription('Needed by Shot captions');   // and says why to a screen reader too
   await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('Needed by Shot captions');
-  await dialog.getByRole('checkbox', { name: 'Run captions' }).uncheck();
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).uncheck();
   await expect(faces).toBeEnabled();
   await faces.uncheck();
   await expect(dialog.getByRole('heading', { name: '1 step to run, about 2 s' })).toBeVisible();   // speech only
@@ -111,7 +112,7 @@ test('turning a feature on brings what it needs, held on while it runs; turning 
 
 test('a step\'s details say what it makes, uses and sends, and its settings change the plan', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await dialog.getByRole('checkbox', { name: 'Run captions' }).check();
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
   await dialog.getByRole('button', { name: 'Shot captions' }).click();
   const captions = dialog.getByRole('listitem', { name: 'captions' });
   await expect(captions).toContainText('Leaves this machine');
@@ -120,8 +121,10 @@ test('a step\'s details say what it makes, uses and sends, and its settings chan
   const model = captions.getByRole('combobox', { name: 'Model' });
   await expect(model.getByRole('option')).toHaveText(['claude-haiku-5-5, $0.003 per shot', 'claude-opus-5-5, $0.12 per shot']);
   await expect(dialog.getByRole('heading', { name: /\$0\.16$/ })).toBeVisible();
+  await model.focus();                                                        // as from the keyboard
   await model.selectOption('claude-opus-5-5');
   await expect(dialog.getByRole('heading', { name: /\$6\.24$/ })).toBeVisible();
+  await expect(model).toBeFocused();                                          // the replan kept the control (and the keyboard)
   await expect(dialog.getByRole('button', { name: 'Shot captions' })).toHaveAttribute('aria-expanded', 'true');   // still open
 });
 

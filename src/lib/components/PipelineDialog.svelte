@@ -38,7 +38,8 @@
   }
   const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && runnable(active) && !started);
+  let planning = $state(false);   // a newer plan is on its way: the one on screen is not what would run
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && runnable(active) && !started && !planning);
   const why = $derived(active && !started ? blockers(active) : []);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
@@ -94,18 +95,22 @@
   });
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };
   const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; settings = {}; open = null; await makePlan(); };
-  const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(); };
-  const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(); };
+  const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(true); };
+  const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
   // A permission to download is for the plan on screen: a new plan takes it back. Only the newest plan request may set
   // the plan, so a slow one cannot show one graph while another would run.
   const newestPlan = latestOnly();
-  const makePlan = async () => {
-    plan = null; error = null;
+  // `keep`: a new place or setting replans the same steps, so the plan stays on screen (and the control just changed
+  // keeps the keyboard) while Start run waits for the new one
+  const makePlan = async (keep = false) => {
+    if (!keep) plan = null;
+    error = null;
     if (!graph || !video) return;
-    busy = 'Planning…';
-    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; wanted ??= defaultFeatures(p); busy = null; }, (e) => { error = String(e); busy = null; });
+    busy = 'Planning…'; planning = true;
+    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; wanted ??= defaultFeatures(p); busy = null; planning = false; },
+      (e) => { plan = null; error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = []; arrived = []; now = Date.now();
@@ -197,7 +202,7 @@
           {@const on = pick.chosen.includes(n.id)}
           {@const needers = pick.neededBy[n.id]}
           <li class="step {started ? s.state : ''}" class:off={!on} aria-label={n.id}>
-            <span class="pick">{#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${n.id}`} checked={on} disabled={!!needers}
+            <span class="pick">{#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${title(n)}`} checked={on} disabled={!!needers} aria-describedby={needers ? `needed-${n.id}` : undefined}
               title={needers ? `Needed by ${list(needers.map(titleOf))}` : undefined} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}</span>
             <button class="name" aria-expanded={open === n.id} aria-controls={`details-${n.id}`} onclick={() => (open = open === n.id ? null : n.id)}>
               <span class="chev" aria-hidden="true"></span>{title(n)}
@@ -227,7 +232,7 @@
             <div class="notes">
               {#if started}{#if s.message}<span class="muted">{s.message}</span>{/if}
               {:else if on}
-                {#if needers}<span class="muted">Needed by {list(needers.map(titleOf))}</span>{/if}
+                {#if needers}<span class="muted" id={`needed-${n.id}`}>Needed by {list(needers.map(titleOf))}</span>{/if}
                 {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
                 {#each n.missing_secrets as k (k)}<span class="error">Needs {k}</span>{/each}
