@@ -90,7 +90,10 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
             return Err(Error::Bundle(format!("the pipeline does not say what {id} sends off this machine; update hyperstudy-perception")));
         };
         let agreed = allowed.get(id).map(Vec::as_slice).unwrap_or_default();
-        let beyond: Vec<&str> = uploads.iter().filter_map(|u| u.as_str()).filter(|k| !agreed.iter().any(|a| a == k)).collect();
+        // an entry that is not a kind's name is not something that was agreed to: the plan is refused, not read around
+        let kinds = uploads.iter().map(|u| u.as_str()).collect::<Option<Vec<&str>>>()
+            .ok_or_else(|| Error::Bundle(format!("the pipeline's plan does not say plainly what {id} sends off this machine")))?;
+        let beyond: Vec<&str> = kinds.into_iter().filter(|k| !agreed.iter().any(|a| a == k)).collect();
         if !beyond.is_empty() {
             return Err(Error::Bundle(format!("{id} would send {} off this machine, which was not agreed to", beyond.join(", "))));
         }
@@ -498,6 +501,9 @@ mod tests {
         assert!(upload_gate(&plan(serde_json::json!(["frames", "transcript"])), &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("send transcript"));
         assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[("decode", &["frames"])])).is_err());
         assert!(upload_gate(&plan(serde_json::json!([])), &agreed(&[])).is_ok());
+        // an entry that is not a kind's name is refused, not skipped (fail closed)
+        assert!(upload_gate(&plan(serde_json::json!(["frames", 1])), &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("plainly"));
+        assert!(upload_gate(&plan(serde_json::json!([{"kind": "video"}])), &agreed(&[])).is_err());
         let older = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [{"id": "captions", "cached": false}]});
         assert!(upload_gate(&older, &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("does not say what captions sends"));
         let empty = serde_json::json!({"v": 1, "type": "plan", "ok": true});   // no node list: nothing was checked
