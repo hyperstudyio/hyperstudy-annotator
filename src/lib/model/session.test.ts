@@ -183,7 +183,8 @@ describe('which run a corrections file was made on', () => {
   const lineage = (versions: Record<string, ReturnType<typeof makeBundle>>) => ({
     record: async () => null, previous: async () => null, carry: async () => 0, decline: async () => {}, dismiss: async () => { throw new Error(); },
     others: async () => Object.keys(versions).length,
-    find: async (key: string) => versions[key] ? { id: key, label: key, corrections: 0, open: async () => ({ bundle: versions[key] }) } as never : null,
+    // library ids differ from manifest hashes: provenance must name the portable one
+    find: async (key: string) => versions[key] ? { id: `lib-${key}`, label: key, corrections: 0, open: async () => ({ bundle: versions[key] }) } as never : null,
   });
   const load = async (v: { open(): Promise<unknown> }) => ((await v.open()) as { bundle: ReturnType<typeof makeBundle> }).bundle;
 

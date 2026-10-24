@@ -26,6 +26,7 @@
   $effect(() => source.corrections.subscribe?.(() => { s.load(); }));   // another tab of this bundle saved
 
   function onkeydown(e: KeyboardEvent) {
+    if (s.modal) return;   // a dialog waits for its answer (CarryOffer); its buttons take the keyboard
     // Space means play/pause everywhere except while typing text. A focused dropdown, slider or checkbox gives it up
     // (after you touch a picker, Space would otherwise stop working), and so does a focused button, which would also
     // "click" on key-up so that one press did two things.

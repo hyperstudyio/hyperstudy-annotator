@@ -78,6 +78,8 @@ export class Session {
   marking = $state<number | null>(null);
   message = $state<{ text: string; n: number } | null>(null);
   lightbox = $state<Lightbox | null>(null);
+  /** A dialog is open that needs an answer first: the workspace's keys do nothing meanwhile. */
+  modal = $state(false);
   /** What this version carried over from an earlier one (the ops it could not match wait for review). */
   carry = $state<CarryRecord | null>(null);
   /** The name being edited, as "<id>@<area>" (a rename link opens the editor of the name in that area). */
@@ -142,7 +144,7 @@ export class Session {
     if (doc.bundle && this.bundle.key && doc.bundle !== this.bundle.key) {
       const v = lineage ? await lineage.find(doc.bundle) : null;
       if (!v) throw new ImportError('the file was made on another run of this video that is not in the library. Import it into that run, then open this run to carry its corrections over');
-      const r = carryOver(ops, await load(v), this.bundle, v.id);
+      const r = carryOver(ops, await load(v), this.bundle, doc.bundle);   // provenance by manifest sha256: portable
       if (r.unmatched.length) throw new ImportError(`the file was made on another run of this video. ${v.label}: ${r.unmatched.length} of its ${plural(ops.length, 'correction')} could not be matched to this run. Import it into that run, then open this run to carry it over: the ones that do not match are then listed for review`);
       // not a carry-over (no record, and the index is the op's place in the file, not in a log)
       return r.ops.map(({ carried_from, ...op }) => ({ ...op, reanchored_from: carried_from }) as Op);

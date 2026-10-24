@@ -12,6 +12,9 @@
   const s = useSession(), source = useSource();
   let offer = $state<EarlierVersion | null>(null);
   let busy = $state(false);
+  let carryButton = $state<HTMLButtonElement>();
+  $effect(() => { s.modal = !!offer; });
+  $effect(() => { if (offer) carryButton?.focus(); });
   let error = $state<string | null>(null);
 
   // Checked on opening (which also loads what was not carried) and whenever the log becomes empty or stops being
@@ -31,7 +34,8 @@
     try {
       const prev = await from.open();
       const [bundle, ops] = await Promise.all([Bundle.load(prev), prev.corrections.load()]);
-      const r = carryOver(ops, bundle, s.bundle, from.id, stampAfter(undefined));
+      // provenance by manifest sha256, which means the same on every machine (from.id is this library's)
+      const r = carryOver(ops, bundle, s.bundle, bundle.key ?? from.id, stampAfter(undefined));
       await lineage.carry(from.id, r.ops, r.unmatched);
       await s.load();
       s.carry = await lineage.record();
@@ -57,7 +61,7 @@
     {#if error}<p class="error">{error}</p>{/if}
     <div class="actions">
       <button onclick={decline} disabled={busy}>Start fresh</button>
-      <button class="primary" onclick={carry} disabled={busy}>{busy ? 'Carrying over…' : 'Carry over'}</button>
+      <button class="primary" bind:this={carryButton} onclick={carry} disabled={busy}>{busy ? 'Carrying over…' : 'Carry over'}</button>
     </div>
   </div>
 {/if}
