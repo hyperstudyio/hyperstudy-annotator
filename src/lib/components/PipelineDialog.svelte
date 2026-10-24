@@ -5,7 +5,7 @@
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
-  import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor, runnable,
+  import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
     settingsFor, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
@@ -43,10 +43,11 @@
   const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
   let planning = $state(false);   // a newer plan is on its way: the one on screen is not what would run
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && runnable(active) && !started && !planning);
   // what blocks a run: the plan's own problems, and a step that would send data off beyond what the user agreed to
   const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
+  // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
