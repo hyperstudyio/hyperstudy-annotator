@@ -57,6 +57,22 @@ pub fn check_folder(folder: &Path, data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `path`, resolved, if it is inside `dir` (the CLI reports where it wrote an export; it must be where it was asked).
+pub fn inside(path: &Path, dir: &Path) -> Result<PathBuf> {
+    let (p, d) = (path.canonicalize()?, dir.canonicalize()?);
+    if p.starts_with(&d) { Ok(p) } else { Err(Error::Bundle(format!("the pipeline wrote to {}, not inside {}", path.display(), dir.display()))) }
+}
+
+/// Stop a process (the CLI before it has named its run). Its exit then ends `run_to_end`, which reports it.
+pub fn stop_process(pid: u32) -> Result<()> {
+    let status = if cfg!(windows) {
+        Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).status()?
+    } else {
+        Command::new("kill").args(["-TERM", &pid.to_string()]).status()?
+    };
+    if status.success() { Ok(()) } else { Err(Error::Bundle(format!("could not stop the pipeline process {pid}"))) }
+}
+
 /// The problems of an `error` object, as one message.
 pub fn problems(v: &Value) -> String {
     v["problems"].as_array().map(|p| p.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; ")).unwrap_or_default()
@@ -122,8 +138,15 @@ impl Pipeline {
     /// Run `run` (or `resume`, `rerun`) to its end, calling `on` for each object as it arrives. Returns the run's id
     /// and status, or None when the CLI refused it in its own objects (a plan that cannot run, an error object: `on`
     /// has seen them). A CLI that ends any other way (uv could not sync, a crash) is an error with its last words.
-    pub fn run_to_end(&self, args: &[&str], mut on: impl FnMut(&Value)) -> Result<Option<(String, String)>> {
+    #[cfg(test)]
+    pub fn run_to_end(&self, args: &[&str], on: impl FnMut(&Value)) -> Result<Option<(String, String)>> {
+        self.run_to_end_with(args, |_| {}, on)
+    }
+
+    /// `run_to_end`, telling `on_spawn` the CLI's process id as soon as it starts (so it can be stopped early).
+    pub fn run_to_end_with(&self, args: &[&str], on_spawn: impl FnOnce(u32), mut on: impl FnMut(&Value)) -> Result<Option<(String, String)>> {
         let mut child = self.command(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        on_spawn(child.id());
         let stderr = child.stderr.take().map(|e| std::thread::spawn(move || {   // read apart: a full pipe would block
             let mut tail = std::collections::VecDeque::with_capacity(6);   // only the last lines are kept
             for line in BufReader::new(e).lines().map_while(|l| l.ok()) {
@@ -269,6 +292,32 @@ mod tests {
         assert!(check_folder(&inside, data.path()).unwrap_err().to_string().contains("inside the app's own data"));
         let elsewhere = tempfile::tempdir().unwrap();
         assert!(check_folder(elsewhere.path(), data.path()).is_ok());
+    }
+
+    #[test]
+    fn a_run_can_be_stopped_by_its_process_before_it_has_an_id() {
+        let dir = repo();
+        let script = dir.path().join("slow-uv");
+        fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();   // a first environment sync that does not end
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let p = Pipeline::new(dir.path(), script).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::time::Instant::now();
+        let run = std::thread::spawn(move || p.run_to_end_with(&["run"], |pid| tx.send(pid).unwrap(), |_| {}));
+        stop_process(rx.recv().unwrap()).unwrap();
+        let err = run.join().unwrap().unwrap_err().to_string();
+        assert!(err.contains("ended without finishing the run"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn an_export_must_be_inside_the_folder_it_was_asked_for() {
+        let out = tempfile::tempdir().unwrap();
+        fs::create_dir_all(out.path().join("bundle")).unwrap();
+        assert!(inside(&out.path().join("bundle"), out.path()).is_ok());
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert!(inside(elsewhere.path(), out.path()).is_err());
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).

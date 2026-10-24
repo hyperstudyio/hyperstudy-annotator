@@ -35,7 +35,8 @@ export interface PipelineApi {
   plan(graph: string, video: string): Promise<Plan>;
   /** Start a run; `on` receives its messages until `imported` or `error`. Resolves to a function that stops listening. */
   run(graph: string, video: string, allowDownloads: boolean, on: (m: PipelineMessage) => void): Promise<() => void>;
-  cancel(run: string): Promise<void>;
+  /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. */
+  cancel(run: string | null): Promise<void>;
   pickFolder(): Promise<string | null>;
   pickVideo(): Promise<string | null>;
 }
@@ -73,17 +74,23 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
   return v;
 }
 
+export interface Consent { downloads: boolean; uploads: boolean }
+
 /** Why a run cannot start, one line per problem; empty when it can. The CLI's own rule (plan.ok): every node needs a
- *  place to run here (cached ones too: the CLI checks the whole graph), its secrets, and any download allowed. */
-export function blockers(plan: Plan, allowDownloads: boolean): string[] {
+ *  place to run here (cached ones too: the CLI checks the whole graph), its secrets, and any download allowed. And the
+ *  app's: data leaving this machine is allowed explicitly, like a download, and a plan that does not say what leaves
+ *  (a CLI from before plans carried `uploads`) is not run. */
+export function blockers(plan: Plan, allow: Consent): string[] {
   return plan.nodes.flatMap((n) => [
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
-    ...(n.downloads.length && !allowDownloads ? [`${n.id} needs a model download (tick the box below the plan)`] : []),
+    ...(n.downloads.length && !allow.downloads ? [`${n.id} needs a model download (tick the box below the plan)`] : []),
+    ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]
+      : n.uploads.length && !n.cached && !allow.uploads ? [`${n.id} sends ${n.uploads.join(', ')} off this machine (tick the box below the plan)`] : []),
   ]);
 }
 
-export const runnable = (plan: Plan, allowDownloads: boolean) => !blockers(plan, allowDownloads).length;
+export const runnable = (plan: Plan, allow: Consent) => !blockers(plan, allow).length;
 
 export async function tauriPipeline(): Promise<PipelineApi> {
   const { invoke } = await import('@tauri-apps/api/core');

@@ -14,17 +14,17 @@ async function planned(page: Page, url: string) {
 
 test('allowing a download is for the plan on screen: changing the graph takes the permission back', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  const allow = dialog.getByRole('checkbox');
+  const allow = dialog.getByRole('checkbox', { name: /^Download/ });
   await allow.check();
   await dialog.getByRole('radio').nth(0).check();                            // another graph: a new plan
   await dialog.getByRole('radio').nth(1).check();
-  await expect(dialog.getByRole('checkbox')).not.toBeChecked();
+  await expect(dialog.getByRole('checkbox', { name: /^Download/ })).not.toBeChecked();
   await expect(dialog.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
 });
 
 test('a run the app refuses to start leaves the dialog usable, with the reason', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=reject-run');
-  await dialog.getByRole('checkbox').check();
+  for (const box of await dialog.getByRole('checkbox').all()) await box.check();
   await dialog.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(dialog.getByText('a pipeline run is already in progress')).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
@@ -41,5 +41,18 @@ test('the dialog takes the keyboard, and Escape closes it when no run is going',
 
 test('the plan says what each node sends off this machine', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await expect(dialog.getByText('sends frames, faces, transcript off this machine')).toBeVisible();
+  await expect(dialog.getByRole('row', { name: /^captions/ })).toContainText('sends frames, faces, transcript off this machine');
+  await expect(dialog.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();   // until it is allowed
+  await dialog.getByRole('checkbox', { name: /^Send frames/ }).check();
+  await dialog.getByRole('checkbox', { name: /^Download/ }).check();
+  await expect(dialog.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
+});
+
+test('a run can be stopped before the pipeline has named it (a slow first environment sync)', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=slow-start');
+  for (const box of await dialog.getByRole('checkbox').all()) await box.check();
+  await dialog.getByRole('button', { name: 'Run', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Cancel run' }).click();          // no run id yet
+  await expect(dialog.getByText(/ended without finishing the run/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
 });

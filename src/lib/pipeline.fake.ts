@@ -17,11 +17,11 @@ const graphs: GraphPreset[] = [
 ];
 const plan: Plan = {
   ok: false, estimated_usd: 0.156, nodes: [
-    { id: 'decode', uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '' },
+    { id: 'decode', uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] },
     { id: 'asr', uses: 'audio.asr@1.0.0', where: 'native (mps)', why_not: '', cached: false,
       downloads: [{ id: 'parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', size_gb: 2.4, gated: false, licence_mode: 'commercial-ok' }],
-      missing_secrets: [], cost_usd: 0, cost_note: '' },
-    { id: 'faces', uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '' },
+      missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] },
+    { id: 'faces', uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] },
     { id: 'captions', uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
       uploads: ['frames', 'faces', 'transcript'] },
   ],
@@ -44,9 +44,12 @@ const script: PipelineMessage[] = [
     imported_at: '', layers: {}, video_path: '/videos/clip.mp4', corrections: 0, manifest_sha256: 'e'.repeat(64) } },
 ];
 
-/** `rejectRun`: the app refuses to start the run (as when another run is in progress). */
-export function fakePipeline(stepMs = 400, { rejectRun = false } = {}): PipelineApi {
+/** `rejectRun`: the app refuses to start the run (as when another run is in progress). `slowStart`: the first message
+ *  takes a long time (a first environment sync), so the run can be canceled before it has an id. */
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false } = {}): PipelineApi {
   let folder: string | null = null;
+  let listener: ((m: PipelineMessage) => void) | null = null;
+  let timers: ReturnType<typeof setTimeout>[] = [];
   return {
     folder: async () => folder,
     setFolder: async (path) => { folder = path; return doctor; },
@@ -55,10 +58,16 @@ export function fakePipeline(stepMs = 400, { rejectRun = false } = {}): Pipeline
     plan: async () => plan,
     async run(_graph, _video, _allow, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
-      const timers = script.map((m, i) => setTimeout(() => on(m), stepMs * (i + 1)));   // the demo's pacing
+      listener = on;
+      const first = slowStart ? 60_000 : 0;
+      timers = script.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
       return () => timers.forEach(clearTimeout);
     },
-    cancel: async () => {},
+    async cancel(run) {
+      timers.forEach(clearTimeout);
+      listener?.(run ? { v: 1, type: 'run.finished', run, status: 'canceled' }
+        : { v: 1, type: 'error', problems: ['the pipeline ended without finishing the run (stopped)'] });
+    },
     pickFolder: async () => '/Users/you/Github/hyperstudy-perception',
     pickVideo: async () => '/videos/clip.mp4',
   };

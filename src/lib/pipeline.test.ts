@@ -30,15 +30,27 @@ test('the imported bundle and any error are kept', () => {
   expect(foldRun(['a'], [{ v: 1, type: 'error', problems: ['uv is missing'] }]).problems).toEqual(['uv is missing']);
 });
 
+const NONE = { downloads: false, uploads: false }, ALL = { downloads: true, uploads: true };
+
 test('a plan can run when every node has a place and its secrets, downloads allowed or not needed', () => {
-  const node: PlanNode = { id: 'a', uses: 'x@1', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '' };
+  const node: PlanNode = { id: 'a', uses: 'x@1', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] };
   const plan = (n: Partial<PlanNode>): Plan => ({ ok: false, estimated_usd: 0, nodes: [{ ...node, ...n }] });
-  expect(runnable(plan({}), false)).toBe(true);
-  expect(runnable(plan({ where: null, why_not: 'needs cuda' }), true)).toBe(false);
-  expect(runnable(plan({ missing_secrets: ['ANTHROPIC_API_KEY'] }), true)).toBe(false);
+  expect(runnable(plan({}), NONE)).toBe(true);
+  expect(runnable(plan({ where: null, why_not: 'needs cuda' }), ALL)).toBe(false);
+  expect(runnable(plan({ missing_secrets: ['ANTHROPIC_API_KEY'] }), ALL)).toBe(false);
   const needs = plan({ downloads: [{ id: 'w', source: 'hf://x', size_gb: 1, gated: false, licence_mode: 'academic-only' }] });
-  expect(runnable(needs, false)).toBe(false);
-  expect(runnable(needs, true)).toBe(true);
+  expect(runnable(needs, NONE)).toBe(false);
+  expect(runnable(needs, { downloads: true, uploads: false })).toBe(true);
   // a cached node that has nowhere to run here still blocks (the CLI checks the whole graph), and says why
-  expect(blockers(plan({ cached: true, where: null, why_not: 'needs cuda' }), true)).toEqual(['a cannot run here: needs cuda']);
+  expect(blockers(plan({ cached: true, where: null, why_not: 'needs cuda' }), ALL)).toEqual(['a cannot run here: needs cuda']);
+});
+
+test('data leaving this machine needs the same consent as a download, and a plan that does not say is not run', () => {
+  const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.1, cost_note: '', uploads: ['frames'] };
+  const plan = (n: Partial<PlanNode>): Plan => ({ ok: true, estimated_usd: 0.1, nodes: [{ ...node, ...n }] });
+  expect(blockers(plan({}), NONE)).toEqual(['captions sends frames off this machine (tick the box below the plan)']);
+  expect(runnable(plan({}), { downloads: false, uploads: true })).toBe(true);
+  const older = plan({});
+  delete older.nodes[0].uploads;   // a CLI from before plans said what leaves the machine
+  expect(blockers(older, ALL)).toEqual(['the pipeline does not say what captions sends off this machine (update hyperstudy-perception)']);
 });

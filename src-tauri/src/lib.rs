@@ -15,7 +15,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(data_dir.join("bundles"))?;
             let conn = db::open(&data_dir.join("annotator.db"))?;
-            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None) });
+            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), child: Mutex::new(None) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

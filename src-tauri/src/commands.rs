@@ -1,5 +1,5 @@
-//! Commands the frontend invokes: thin wrappers over `library`. The app never runs models: it imports bundles,
-//! finds their videos, and serves layer files to the viewer.
+//! Commands the frontend invokes: thin wrappers over `library` (import bundles, find their videos, serve layer files to
+//! the viewer) and `pipeline` (run the perception CLI, whose processes run the models, and import what it makes).
 
 use crate::error::{Error, Result};
 use crate::library::{self, BundleSummary, Carryover};
@@ -17,6 +17,8 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// a pipeline run in progress (one at a time: GPU nodes are exclusive); its run id once the CLI has said it
     pub running: Mutex<Option<String>>,
+    /// the CLI process of that run, to stop it before it has named the run (a slow first environment sync)
+    pub child: Mutex<Option<u32>>,
 }
 
 const PIPELINE_FOLDER: &str = "pipeline_folder";
@@ -234,17 +236,28 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
         *running = Some(String::new());
     }
     std::thread::spawn(move || {
+        let _clear = ClearRun(app.clone());   // even if this thread panics, the next run is not refused forever
         let last = match run_and_import(&app, &p, &g, &video, allow_downloads) {
             Ok(last) => last,
             Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
         };
         // cleared before the last event: once the dialog hears it, a new run may start
-        *app.state::<AppState>().running.lock().unwrap() = None;
+        clear_run(&app);
         if let Some(last) = last {
             let _ = app.emit("pipeline", last);
         }
     });
     Ok(())
+}
+
+struct ClearRun(AppHandle);
+impl Drop for ClearRun {
+    fn drop(&mut self) { clear_run(&self.0); }
+}
+fn clear_run(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    *state.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *state.child.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// Cancel only the run in progress (a stale dialog must not cancel another).
@@ -261,7 +274,7 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     if allow_downloads {
         args.push("--allow-downloads");
     }
-    let outcome = p.run_to_end(&args, |o| {
+    let outcome = p.run_to_end_with(&args, |pid| *state.child.lock().unwrap() = Some(pid), |o| {
         if o["type"] == "run.created" {   // only an id in the CLI's form stands for the run in progress
             if let Some(id) = o["run"].as_str().and_then(|r| pipeline::run_id(r).ok()) {
                 *state.running.lock().unwrap() = Some(id.to_string());
@@ -279,7 +292,8 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     let imported = (|| {
         let exported = p.one(&["export", &run, "--output", &out.to_string_lossy()], "exported")?;
         let path = exported["path"].as_str().ok_or_else(|| Error::Bundle("the pipeline exported no path".into()))?;
-        library::import_dir(&state.db, std::path::Path::new(path), &state.data_dir)
+        let path = pipeline::inside(std::path::Path::new(path), &out)?;   // where it was asked, so it is removed below
+        library::import_dir(&state.db, &path, &state.data_dir)
     })();
     if out.exists() {
         std::fs::remove_dir_all(&out)?;   // the library holds its own copy (or the import failed): frames and crops go
@@ -292,8 +306,19 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     Ok(Some(serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary})))
 }
 
+/// Cancel the run in progress: through `perception cancel` once the CLI has named it, else by stopping its process
+/// (it has not started a node yet: an environment sync, or the coordinator starting).
 #[tauri::command]
-pub async fn pipeline_cancel(state: State<'_, AppState>, run: String) -> Result<()> {
+pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) -> Result<()> {
+    let Some(run) = run else {
+        let named = state.running.lock().unwrap().as_deref().is_some_and(|r| !r.is_empty());
+        let pid = *state.child.lock().unwrap();
+        return match (named, pid) {
+            (false, Some(pid)) => pipeline::stop_process(pid),
+            (true, _) => Err(Error::Bundle("the run has an id now; cancel it by its id".into())),
+            (false, None) => Err(Error::Bundle("no pipeline run is in progress".into())),
+        };
+    };
     check_cancel(state.running.lock().unwrap().as_deref(), &run)?;
     let p = pipeline(&state)?;
     blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await

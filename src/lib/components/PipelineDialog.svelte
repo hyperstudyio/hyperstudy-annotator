@@ -14,6 +14,7 @@
   let video = $state<string | null>(null);
   let plan = $state<Plan | null>(null);
   let allowDownloads = $state(false);
+  let allowUploads = $state(false);
   let msgs = $state.raw<PipelineMessage[]>([]);
   let started = $state(false);
   let error = $state<string | null>(null);
@@ -24,8 +25,10 @@
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
   const downloads = $derived(plan?.nodes.flatMap((n) => n.downloads) ?? []);
   const downloadGb = $derived(downloads.reduce((a, d) => a + (d.size_gb ?? 0), 0));
-  const canRun = $derived(!!plan && runnable(plan, allowDownloads) && !started);
-  const why = $derived(plan && !started ? blockers(plan, allowDownloads) : []);
+  const uploading = $derived(plan?.nodes.filter((n) => n.uploads?.length && !n.cached) ?? []);
+  const consent = $derived({ downloads: allowDownloads, uploads: allowUploads });
+  const canRun = $derived(!!plan && runnable(plan, consent) && !started);
+  const why = $derived(plan && !started ? blockers(plan, consent) : []);
   let first = $state<HTMLButtonElement>();
   $effect(() => { first?.focus(); });   // the dialog takes the keyboard (the library behind it is inert)
   function onkeydown(e: KeyboardEvent) { if (e.key === 'Escape' && !(started && !done)) onclose(); }
@@ -54,7 +57,7 @@
   // the plan, so a slow one cannot show one graph while another would run.
   const newestPlan = latestOnly();
   const makePlan = async () => {
-    plan = null; allowDownloads = false; error = null;
+    plan = null; allowDownloads = false; allowUploads = false; error = null;
     if (!graph || !video) return;
     busy = 'Planning…';
     newestPlan(api.plan(graph, video), (p) => { plan = p; busy = null; }, (e) => { error = String(e); busy = null; });
@@ -64,7 +67,7 @@
     try { stop = await api.run(graph!, video!, allowDownloads, (m) => { msgs = [...msgs, m]; }); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
-  const cancel = () => step('Canceling…', async () => { if (view.run) await api.cancel(view.run); });
+  const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
 
   const name = (p: string | null) => p?.split('/').pop() ?? '';
   const STATE_LABEL = { waiting: 'waiting', cached: 'cached', running: 'running', retrying: 'retrying', succeeded: 'done', failed: 'failed', canceled: 'canceled' };
@@ -125,6 +128,9 @@
           {/each}
         </tbody>
       </table>
+      {#if uploading.length && !started}
+        <label class="row"><input type="checkbox" bind:checked={allowUploads} /> Send {[...new Set(uploading.flatMap((n) => n.uploads ?? []))].join(', ')} off this machine ({uploading.map((n) => n.id).join(', ')})</label>
+      {/if}
       {#if downloads.length && !started}
         <label class="row"><input type="checkbox" bind:checked={allowDownloads} /> Download {downloads.length === 1 ? 'this model' : `these ${downloads.length} models`}{downloadGb ? ` (${downloadGb.toFixed(1)} GB)` : ''} before running</label>
       {/if}
@@ -142,7 +148,7 @@
       <span class="muted">Imported into the library.</span>
       <button class="primary" onclick={() => onopen(view.imported!.id)}>Open</button>
     {:else if started && !done}
-      <button onclick={cancel} disabled={!view.run}>Cancel run</button>
+      <button onclick={cancel}>Cancel run</button>
     {:else if !started}
       <button class="primary" onclick={run} disabled={!canRun}>Run</button>
     {/if}
