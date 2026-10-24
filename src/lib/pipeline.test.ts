@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, duration, foldRun, picked, placeLabel, placesFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
+import { blockers, canPick, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -66,8 +66,8 @@ test('times read as people say them, and a plan totals what will run (not what i
   expect(duration(3725)).toBe('1 h 2 min');
   const node = (id: string, estimate_s: number | null, cached = false): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached,
     downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], estimate_s, estimate_basis: '' });
-  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] })).toEqual({ seconds: 98, unknown: [] });
-  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('asr', 2), node('faces', null)] })).toEqual({ seconds: 2, unknown: ['faces'] });
+  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] })).toEqual({ seconds: 98, fastest: 96, unknown: [] });
+  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('asr', 2), node('faces', null)] })).toEqual({ seconds: 2, fastest: 2, unknown: ['faces'] });
 });
 
 test('a CLI that gives no estimates shows none, rather than nothing estimated', () => {
@@ -99,7 +99,26 @@ test('each place in the menu says how long the step would take there, when the p
   const node: PlanNode = { id: 'faces', uses: 'x@1', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [],
     cost_usd: 0, cost_note: '', uploads: [], options: ['native:mps', 'native:cpu'],
     estimates: { 'native:mps': { estimate_s: 96, estimate_basis: '' }, 'native:cpu': { estimate_s: null, estimate_basis: '' } } };
-  expect(placeLabel(node, 'native:mps')).toBe('native:mps · about 1 min 36 s');
-  expect(placeLabel(node, 'native:cpu')).toBe('native:cpu · no estimate yet');
-  expect(placeLabel({ ...node, estimates: undefined }, 'native:cpu')).toBe('native:cpu');   // an older CLI
+  expect(placeLabel(node, 'native:mps')).toBe('Apple GPU, about 1 min 36 s');
+  expect(placeLabel(node, 'native:cpu')).toBe('CPU, no estimate yet');
+  expect(placeLabel({ ...node, estimates: undefined }, 'native:cpu')).toBe('CPU');   // an older CLI
+});
+
+test('places read as people say them', () => {
+  expect(placeName('native:mps')).toBe('Apple GPU');
+  expect(placeName('native:cpu')).toBe('CPU');
+  expect(placeName('ssh:cuda')).toBe('NVIDIA GPU on ssh');
+  expect(placeName('native:tpu')).toBe('tpu');
+});
+
+test('steps start after what they need, side by side otherwise, and the time is a range between the two ways of running', () => {
+  const node = (id: string, needs: string[], estimate_s: number | null, cached = false): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '',
+    cached, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], needs, estimate_s, estimate_basis: '' });
+  const plan: Plan = { ok: true, estimated_usd: 0, nodes: [node('decode', [], 30, true), node('asr', ['decode'], 2), node('faces', ['decode'], 96),
+    node('captions', ['decode', 'asr', 'faces'], 176)] };
+  expect(schedule(plan)).toEqual({ asr: { start: 0, seconds: 2 }, faces: { start: 0, seconds: 96 }, captions: { start: 96, seconds: 176 } });
+  expect(totalEstimate(plan)).toEqual({ seconds: 274, fastest: 272, unknown: [] });
+  const unknown = { ...plan, nodes: plan.nodes.map((n) => n.id === 'faces' ? { ...n, estimate_s: null } : n) };
+  expect(schedule(unknown).captions).toEqual({ start: 2, seconds: 176 });   // a step with no estimate holds nothing up
+  expect(totalEstimate(unknown)).toEqual({ seconds: 178, fastest: 178, unknown: ['faces'] });
 });

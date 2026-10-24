@@ -123,11 +123,19 @@ export function picked(plan: Plan, skipped: Set<string>): { chosen: string[]; dr
  *  would otherwise let a step be left out while what needs it still runs). */
 export const canPick = (plan: Plan) => plan.nodes.every((n) => Array.isArray(n.needs));
 
+const ACCELERATORS: Record<string, string> = { mps: 'Apple GPU', cuda: 'NVIDIA GPU', cpu: 'CPU' };
+/** A place (backend:accelerator) as people say it: "Apple GPU" here, "NVIDIA GPU on ssh" elsewhere. */
+export function placeName(place: string): string {
+  const [backend, accelerator = ''] = place.split(':');
+  const what = ACCELERATORS[accelerator] ?? accelerator;
+  return backend === 'native' || backend === 'self' ? what : `${what} on ${backend}`;
+}
+
 /** A place as the menu shows it: with how long the step would take there, when the plan says. */
 export function placeLabel(n: PlanNode, place: string): string {
   const e = n.estimates?.[place];
-  if (!e) return place;
-  return `${place} · ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}`;
+  if (!e) return placeName(place);
+  return `${placeName(place)}, ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}`;
 }
 
 /** The places to send: only for steps that run (a place for a node --only leaves out is a CLI error). */
@@ -144,12 +152,35 @@ export function duration(seconds: number): string {
   return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
 }
 
+/** When each step that will run starts and how long it takes, in estimated seconds from the run's start: after the
+ *  steps it needs (cached ones take no time), as the coordinator runs independent steps side by side. A step with no
+ *  estimate has `seconds` null and holds up nothing (what needs it starts when its other inputs are ready). */
+export function schedule(plan: Plan): Record<string, { start: number; seconds: number | null }> {
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const out: Record<string, { start: number; seconds: number | null }> = {};
+  const end = (id: string): number => {
+    const n = byId.get(id);
+    if (!n || n.cached) return 0;
+    if (!(id in out)) {
+      const start = Math.max(0, ...(n.needs ?? []).map(end));
+      out[id] = { start, seconds: n.estimate_s ?? null };
+    }
+    return out[id].start + (out[id].seconds ?? 0);
+  };
+  plan.nodes.forEach((n) => end(n.id));
+  return out;
+}
+
 /** The plan's estimated time: what will run (cached nodes do not), and the nodes with no estimate yet; null when the
- *  pipeline gives no estimates at all (a CLI from before plans carried them). */
-export function totalEstimate(plan: Plan): { seconds: number; unknown: string[] } | null {
+ *  pipeline gives no estimates at all (a CLI from before plans carried them). `seconds` is every step one after
+ *  another; `fastest`, steps side by side where nothing they need is in the way. A run takes between the two: the
+ *  coordinator runs independent steps together only within the machine's CPU, memory and GPU. */
+export function totalEstimate(plan: Plan): { seconds: number; fastest: number; unknown: string[] } | null {
   if (!plan.nodes.some((n) => 'estimate_s' in n)) return null;
   const running = plan.nodes.filter((n) => !n.cached);
-  return { seconds: running.reduce((a, n) => a + (n.estimate_s ?? 0), 0), unknown: running.filter((n) => n.estimate_s == null).map((n) => n.id) };
+  const times = Object.values(schedule(plan));
+  return { seconds: running.reduce((a, n) => a + (n.estimate_s ?? 0), 0), fastest: Math.max(0, ...times.map((t) => t.start + (t.seconds ?? 0))),
+           unknown: running.filter((n) => n.estimate_s == null).map((n) => n.id) };
 }
 
 export async function tauriPipeline(): Promise<PipelineApi> {
