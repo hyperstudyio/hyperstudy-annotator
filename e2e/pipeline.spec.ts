@@ -58,13 +58,15 @@ test('the dialog takes the keyboard, and Escape closes it when no run is going',
   await expect(dialog).toHaveCount(0);
 });
 
-test('a step that sends data off and comes along for another feature says so on its row', async ({ page }) => {
+test('a feature that would bring along a step that sends data off waits until that step is turned on', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=summary');
-  await expect(dialog.getByRole('checkbox', { name: 'Run Summary' })).not.toBeChecked();   // it would bring captions along
-  await dialog.getByRole('checkbox', { name: 'Run Summary' }).check();
-  const captions = dialog.getByRole('listitem', { name: 'captions' });
-  await expect(captions).toContainText('Sends frames, faces and transcript to the Anthropic API, for Summary');
-  await expect(dialog.getByRole('checkbox', { name: 'Run Shot captions' })).toBeDisabled();
+  const summary = dialog.getByRole('checkbox', { name: 'Run Summary' });
+  await expect(summary).toBeDisabled();                                       // it would bring captions along
+  await expect(summary).toHaveAccessibleDescription('Turn on Shot captions first: it sends data off this machine');
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();   // sending is chosen here
+  await expect(summary).toBeEnabled();
+  await summary.check();
+  await expect(dialog.getByRole('checkbox', { name: 'Run Shot captions' })).toBeDisabled();   // held on while Summary needs it
 });
 
 test('a feature that sends data off this machine or costs money is off until turned on', async ({ page }) => {

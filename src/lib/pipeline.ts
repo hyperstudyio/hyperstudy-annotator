@@ -99,14 +99,22 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
 /** What a run lets happen: `uploads` is node id -> the kinds of data it may send off this machine. */
 export interface Consent { downloads: boolean; uploads: Record<string, string[]> }
 
-/** What a run of these steps lets happen: its models download as part of running, and turning a feature on that sends
+/** What a run of these steps lets happen: its models download as part of running, and turning on a feature that sends
  *  data to a cloud API is the choice to send what the plan shows it sends (such features start off, see
- *  defaultFeatures). The app holds a fresh plan to exactly this before it starts, so a step that would send data the
- *  plan on screen did not show is refused. */
-export const consentFor = (plan: Plan): Consent => ({
+ *  defaultFeatures). Only the steps the user turned on count (`wanted`): a step that came along for another feature
+ *  agreed to nothing (see mustTurnOnFirst). The app holds a fresh plan to exactly this before it starts, so a step
+ *  that would send data the plan on screen did not show, or that the user did not turn on, is refused. */
+export const consentFor = (plan: Plan, wanted: Set<string>): Consent => ({
   downloads: true,
-  uploads: Object.fromEntries(plan.nodes.filter((n) => n.uploads?.length).map((n) => [n.id, [...n.uploads!]])),
+  uploads: Object.fromEntries(plan.nodes.filter((n) => wanted.has(n.id) && n.uploads?.length).map((n) => [n.id, [...n.uploads!]])),
 });
+
+/** The steps that send data off which turning on `id` would bring along although the user has not turned them on:
+ *  `id` waits until they do (sending is chosen by turning on the step that sends, never by bringing it along). */
+export function mustTurnOnFirst(plan: Plan, wanted: Set<string>, id: string): string[] {
+  const { chosen } = picked(plan, new Set([...wanted, id]));
+  return chosen.filter((c) => c !== id && !wanted.has(c) && plan.nodes.find((n) => n.id === c)?.uploads?.length);
+}
 
 /** Why a run cannot start, one line per problem; empty when it can: every node needs a place to run here (cached ones
  *  too: the CLI checks the whole graph) and its secrets, and a plan that does not say what leaves the machine (a CLI
@@ -118,7 +126,9 @@ export function blockers(plan: Plan): string[] {
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
     ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]
-      : whole && n.uploads.length ? [`${n.id} sends ${n.uploads.join(', ')} off this machine and this pipeline cannot leave it out (update hyperstudy-perception)`] : []),
+      : whole && n.uploads.length ? [`${n.id} sends ${n.uploads.join(', ')} off this machine and this pipeline cannot leave it out (update hyperstudy-perception)`]
+      // a CLI from before plans carried settings (perception #14) does not know --allow-uploads: the run would fail
+      : n.uploads.length && !('settings' in n) ? [`${n.id} sends data off this machine and this pipeline cannot be told it may (update hyperstudy-perception)`] : []),
   ]);
 }
 
@@ -138,13 +148,6 @@ export function picked(plan: Plan, wanted: Set<string>): { chosen: string[]; nee
   const chosen = plan.nodes.filter((n) => on.has(n.id)).map((n) => n.id);
   const neededBy = Object.fromEntries(chosen.map((id) => [id, chosen.filter((c) => (byId.get(c)!.needs ?? []).includes(id))]).filter(([, by]) => by.length));
   return { chosen, neededBy, only: chosen.length === plan.nodes.length ? null : chosen };
-}
-
-/** Steps that send data off this machine and run only because a feature the user turned on needs them: the user did
- *  not turn these on, so the plan says on their rows what they send (a step the user turned on is their choice). */
-export function broughtAlong(plan: Plan, wanted: Set<string>): string[] {
-  const { chosen, neededBy } = picked(plan, wanted);
-  return chosen.filter((id) => !wanted.has(id) && neededBy[id] && plan.nodes.find((n) => n.id === id)?.uploads?.length);
 }
 
 /** The features on when a plan first shows: those that, with everything they need, keep all on this machine and cost
