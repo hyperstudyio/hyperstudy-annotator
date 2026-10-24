@@ -350,6 +350,23 @@ mod tests {
         assert!(upload_gate(&older, true).unwrap_err().to_string().contains("does not say what captions sends"));
     }
 
+    #[test]
+    fn a_cli_that_prints_something_else_is_stopped_not_left_running_unobserved() {
+        let dir = repo();
+        let script = dir.path().join("chatty-uv");
+        fs::write(&script, "#!/bin/sh\necho 'Resolved 12 packages in 3ms'\nsleep 30\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let p = Pipeline::new(dir.path(), script).unwrap();
+        let started = std::time::Instant::now();
+        let mut pid = 0;
+        let err = p.run_to_end_with(&["run"], |id| pid = id, |_| {}).unwrap_err().to_string();
+        assert!(err.contains("not JSON"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "it waited for the CLI instead of stopping it");
+        let alive = Command::new("kill").args(["-0", &pid.to_string()]).status().unwrap().success();
+        assert!(!alive, "the CLI is still running");
+    }
+
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).
     fn fake_uv(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
         let path = dir.join("fake-uv");
