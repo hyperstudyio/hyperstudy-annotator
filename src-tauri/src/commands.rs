@@ -244,7 +244,8 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
 fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool) -> Result<()> {
     let state = app.state::<AppState>();
     let input = format!("video={video}");
-    let mut args = vec!["run", graph.to_str().unwrap_or_default(), "--input", &input];
+    let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
+    let mut args = vec!["run", graph, "--input", &input];
     if allow_downloads {
         args.push("--allow-downloads");
     }
@@ -255,6 +256,7 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
         let _ = app.emit("pipeline", o);
     })?;
     let Some((run, status)) = outcome else { return Ok(()) };   // refused: its objects said why
+    let run = pipeline::run_id(&run)?.to_string();   // it names a folder this function deletes
     if status != "succeeded" {
         return Ok(());   // its events said what failed
     }
@@ -262,7 +264,8 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     let out = state.data_dir.join("exports").join(&run);
     let imported = (|| {
         let exported = p.one(&["export", &run, "--output", &out.to_string_lossy()], "exported")?;
-        library::import_dir(&state.db, std::path::Path::new(exported["path"].as_str().unwrap_or_default()), &state.data_dir)
+        let path = exported["path"].as_str().ok_or_else(|| Error::Bundle("the pipeline exported no path".into()))?;
+        library::import_dir(&state.db, std::path::Path::new(path), &state.data_dir)
     })();
     if out.exists() {
         std::fs::remove_dir_all(&out)?;   // the library holds its own copy (or the import failed): frames and crops go
@@ -278,6 +281,9 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
 
 #[tauri::command]
 pub async fn pipeline_cancel(state: State<'_, AppState>, run: String) -> Result<()> {
+    if state.running.lock().unwrap().as_deref() != Some(run.as_str()) {
+        return Err(Error::Bundle(format!("run {run} is not the one in progress")));
+    }
     let p = pipeline(&state)?;
     blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await
 }

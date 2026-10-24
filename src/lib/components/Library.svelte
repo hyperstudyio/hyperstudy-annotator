@@ -40,7 +40,7 @@
 {#if pipeline}
   <PipelineDialog api={pipeline} onclose={() => { pipeline = null; refresh(); }} onopen={(id) => { pipeline = null; onopen(id); }} />
 {/if}
-<div class="library">
+<div class="library" inert={!!pipeline}>
   <header>
     <h1>HyperStudy Annotator</h1>
     <span class="spacer"></span>

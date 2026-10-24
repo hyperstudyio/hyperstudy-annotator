@@ -37,6 +37,16 @@ pub fn parse_line(line: &str) -> Result<Value> {
     }
 }
 
+/// A run id as the CLI makes them (`20261024-095828-1ad462`). It names a folder the app later deletes, so nothing
+/// else (a `..`, a path) is ever accepted from the CLI's output.
+pub fn run_id(id: &str) -> Result<&str> {
+    let b = id.as_bytes();
+    let ok = b.len() == 22 && b[8] == b'-' && b[15] == b'-'
+        && b[..8].iter().chain(&b[9..15]).all(u8::is_ascii_digit)
+        && b[16..].iter().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c));
+    if ok { Ok(id) } else { Err(Error::Bundle(format!("the pipeline reported a run id that is not one: {id:?}"))) }
+}
+
 /// The problems of an `error` object, as one message.
 pub fn problems(v: &Value) -> String {
     v["problems"].as_array().map(|p| p.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; ")).unwrap_or_default()
@@ -226,6 +236,14 @@ mod tests {
     fn a_folder_that_is_not_the_pipeline_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         assert!(Pipeline::new(dir.path(), PathBuf::from("/bin/uv")).unwrap_err().to_string().contains("not a hyperstudy-perception folder"));
+    }
+
+    #[test]
+    fn only_a_run_id_in_the_clis_own_form_is_used_in_a_path() {
+        assert!(run_id("20261024-095828-1ad462").is_ok());
+        for bad in ["..", "../library", "/", "20261024-095828-1ad462/..", "", "20261024-095828-1AD462", "x"] {
+            assert!(run_id(bad).is_err(), "{bad:?} should be refused");
+        }
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).

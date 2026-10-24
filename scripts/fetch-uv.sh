@@ -23,7 +23,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 url=https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$triple.tar.gz
 curl -fsSL -o "$tmp/uv.tar.gz" "$url"
-actual=$(shasum -a 256 "$tmp/uv.tar.gz" | awk '{print $1}')
+if command -v shasum > /dev/null; then sum="shasum -a 256"; elif command -v sha256sum > /dev/null; then sum=sha256sum
+else echo "fetch-uv: neither shasum nor sha256sum is installed" >&2; exit 1; fi
+actual=$($sum "$tmp/uv.tar.gz" | awk '{print $1}')
 if [ "$expected" != "$actual" ]; then
   echo "fetch-uv: $url does not match the sha256 pinned for it ($actual, expected $expected)" >&2; exit 1
 fi

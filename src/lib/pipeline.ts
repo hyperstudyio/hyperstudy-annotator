@@ -71,10 +71,17 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
   return v;
 }
 
-/** Whether a run can start: every node has a place to run and its secrets, and any model download is allowed. */
-export function runnable(plan: Plan, allowDownloads: boolean): boolean {
-  return plan.nodes.every((n) => n.where && !n.missing_secrets.length && (allowDownloads || !n.downloads.length));
+/** Why a run cannot start, one line per problem; empty when it can. The CLI's own rule (plan.ok): every node needs a
+ *  place to run here (cached ones too: the CLI checks the whole graph), its secrets, and any download allowed. */
+export function blockers(plan: Plan, allowDownloads: boolean): string[] {
+  return plan.nodes.flatMap((n) => [
+    ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
+    ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
+    ...(n.downloads.length && !allowDownloads ? [`${n.id} needs a model download (tick the box below the plan)`] : []),
+  ]);
 }
+
+export const runnable = (plan: Plan, allowDownloads: boolean) => !blockers(plan, allowDownloads).length;
 
 export async function tauriPipeline(): Promise<PipelineApi> {
   const { invoke } = await import('@tauri-apps/api/core');

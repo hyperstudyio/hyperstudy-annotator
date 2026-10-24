@@ -2,7 +2,7 @@
   // Run the perception pipeline on a video and import the bundle it makes: the pipeline folder (checked by
   // `perception doctor`), a video, one of the pipeline's graphs, the plan (where each node runs, what is cached, what
   // must be downloaded, what it costs), then the run, node by node.
-  import { foldRun, runnable, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
+  import { blockers, foldRun, runnable, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -24,6 +24,10 @@
   const downloads = $derived(plan?.nodes.flatMap((n) => n.downloads) ?? []);
   const downloadGb = $derived(downloads.reduce((a, d) => a + (d.size_gb ?? 0), 0));
   const canRun = $derived(!!plan && runnable(plan, allowDownloads) && !started);
+  const why = $derived(plan && !started ? blockers(plan, allowDownloads) : []);
+  let first = $state<HTMLButtonElement>();
+  $effect(() => { first?.focus(); });   // the dialog takes the keyboard (the library behind it is inert)
+  function onkeydown(e: KeyboardEvent) { if (e.key === 'Escape' && !(started && !done)) onclose(); }
 
   async function step(label: string, f: () => Promise<void>) {
     busy = label; error = null;
@@ -59,9 +63,10 @@
   const STATE_LABEL = { waiting: 'waiting', cached: 'cached', running: 'running', retrying: 'retrying', succeeded: 'done', failed: 'failed', canceled: 'canceled' };
 </script>
 
+<svelte:window {onkeydown} />
 <div class="backdrop"></div>
 <div class="dialog" role="dialog" aria-modal="true" aria-label="Run the pipeline">
-  <header><h2>Run the pipeline</h2><span class="spacer"></span><button onclick={onclose} disabled={started && !done}>Close</button></header>
+  <header><h2>Run the pipeline</h2><span class="spacer"></span><button bind:this={first} onclick={onclose} disabled={started && !done}>Close</button></header>
 
   <section>
     <h3>Pipeline</h3>
@@ -118,6 +123,7 @@
     </section>
   {/if}
 
+  {#if why.length}<div class="error">Cannot run yet: {why.join('; ')}.</div>{/if}
   {#if busy}<p class="muted">{busy}</p>{/if}
   {#if error}<p class="error">{error}</p>{/if}
   {#each view.problems as p (p)}<p class="error">{p}</p>{/each}

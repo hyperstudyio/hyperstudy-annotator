@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { foldRun, runnable, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
+import { blockers, foldRun, runnable, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -39,4 +39,6 @@ test('a plan can run when every node has a place and its secrets, downloads allo
   const needs = plan({ downloads: [{ id: 'w', source: 'hf://x', size_gb: 1, gated: false, licence_mode: 'academic-only' }] });
   expect(runnable(needs, false)).toBe(false);
   expect(runnable(needs, true)).toBe(true);
+  // a cached node that has nowhere to run here still blocks (the CLI checks the whole graph), and says why
+  expect(blockers(plan({ cached: true, where: null, why_not: 'needs cuda' }), true)).toEqual(['a cannot run here: needs cuda']);
 });
