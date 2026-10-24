@@ -96,22 +96,29 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
   return v;
 }
 
-export interface Consent { downloads: boolean; uploads: boolean }
+/** What a run lets happen: `uploads` is node id -> the kinds of data it may send off this machine. */
+export interface Consent { downloads: boolean; uploads: Record<string, string[]> }
 
 /** What a run of these steps lets happen: its models download as part of running, and turning a feature on that sends
- *  data to a cloud API is the choice to send it (such features start off, see defaultFeatures). The app re-checks the
- *  uploads against a fresh plan before it starts, so a step that would send data the plan on screen did not show is
- *  refused. */
-export const consentFor = (plan: Plan): Consent => ({ downloads: true, uploads: plan.nodes.some((n) => n.uploads?.length) });
+ *  data to a cloud API is the choice to send what the plan shows it sends (such features start off, see
+ *  defaultFeatures). The app holds a fresh plan to exactly this before it starts, so a step that would send data the
+ *  plan on screen did not show is refused. */
+export const consentFor = (plan: Plan): Consent => ({
+  downloads: true,
+  uploads: Object.fromEntries(plan.nodes.filter((n) => n.uploads?.length).map((n) => [n.id, [...n.uploads!]])),
+});
 
 /** Why a run cannot start, one line per problem; empty when it can: every node needs a place to run here (cached ones
  *  too: the CLI checks the whole graph) and its secrets, and a plan that does not say what leaves the machine (a CLI
- *  from before plans carried `uploads`) is not run. */
+ *  from before plans carried `uploads`) is not run. Nor is a plan whose steps cannot be chosen (no `needs`: it runs
+ *  whole) while one of them sends data off: nobody turned that step on. */
 export function blockers(plan: Plan): string[] {
+  const whole = !canPick(plan);
   return plan.nodes.flatMap((n) => [
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
-    ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`] : []),
+    ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]
+      : whole && n.uploads.length ? [`${n.id} sends ${n.uploads.join(', ')} off this machine and this pipeline cannot leave it out (update hyperstudy-perception)`] : []),
   ]);
 }
 
@@ -133,11 +140,18 @@ export function picked(plan: Plan, wanted: Set<string>): { chosen: string[]; nee
   return { chosen, neededBy, only: chosen.length === plan.nodes.length ? null : chosen };
 }
 
-/** The features on when a plan first shows: those that keep everything on this machine and cost nothing (a node that
- *  sends data off or costs money is the user's choice). A plan that does not say what steps need runs whole. */
+/** The features on when a plan first shows: those that, with everything they need, keep all on this machine and cost
+ *  nothing (a step that sends data off or costs money is the user's choice, and so is a feature that would bring one
+ *  along). A plan that does not say what steps need runs whole. */
 export function defaultFeatures(plan: Plan): Set<string> {
   if (!canPick(plan)) return new Set(plan.nodes.map((n) => n.id));
-  return new Set(plan.nodes.filter((n) => !n.uploads?.length && !n.cost_usd && !n.cost_note).map((n) => n.id));
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const free = (n: PlanNode, seen = new Set<string>()): boolean => {
+    if (seen.has(n.id)) return true;
+    seen.add(n.id);
+    return !n.uploads?.length && !n.cost_usd && !n.cost_note && (n.needs ?? []).every((u) => !byId.has(u) || free(byId.get(u)!, seen));
+  };
+  return new Set(plan.nodes.filter((n) => free(n)).map((n) => n.id));
 }
 
 /** A setting's choice as its menu shows it: with its price, when the cost depends on it. */
@@ -233,7 +247,7 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     plan: (graph, video, places, settings) => invoke<Plan>('pipeline_plan', { graph, video, places, settings }),
     async run(graph, video, allow, places, only, settings, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
-      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, allowUploads: allow.uploads, places, only, settings }); }
+      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, uploads: allow.uploads, places, only, settings }); }
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },

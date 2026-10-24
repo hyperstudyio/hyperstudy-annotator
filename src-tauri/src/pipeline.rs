@@ -74,19 +74,25 @@ pub fn stop_process(pid: u32) -> Result<()> {
     if status.success() { Ok(()) } else { Err(Error::Bundle(format!("could not stop the pipeline process {pid}"))) }
 }
 
-/// The app's own check, against a fresh plan, that nothing leaves this machine without the user's consent. Every node
-/// counts, cached ones too (a cache can be gone by the time the run starts), and a plan that does not say what a node
-/// sends (a CLI from before plans carried `uploads`) is refused.
-pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
+/// What the user agreed may leave this machine: node id -> the kinds of data it sends (what the plan on screen showed
+/// for the features they turned on).
+pub type Uploads = std::collections::BTreeMap<String, Vec<String>>;
+
+/// The app's own check, against a fresh plan of what is about to run, that nothing leaves this machine beyond what the
+/// user agreed to: a node that sends a kind of data not agreed for it is refused. Every node counts, cached ones too (a
+/// cache can be gone by the time the run starts), and a plan that does not say what a node sends (a CLI from before
+/// plans carried `uploads`) is refused.
+pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
     let nodes = plan["nodes"].as_array().ok_or_else(|| Error::Bundle("the pipeline's plan lists no nodes; nothing could be checked".into()))?;
     for n in nodes {
         let id = n["id"].as_str().unwrap_or("?");
         let Some(uploads) = n["uploads"].as_array() else {
             return Err(Error::Bundle(format!("the pipeline does not say what {id} sends off this machine; update hyperstudy-perception")));
         };
-        if !uploads.is_empty() && !allowed {
-            let kinds: Vec<&str> = uploads.iter().filter_map(|u| u.as_str()).collect();
-            return Err(Error::Bundle(format!("{id} sends {} off this machine, which was not allowed", kinds.join(", "))));
+        let agreed = allowed.get(id).map(Vec::as_slice).unwrap_or_default();
+        let beyond: Vec<&str> = uploads.iter().filter_map(|u| u.as_str()).filter(|k| !agreed.iter().any(|a| a == k)).collect();
+        if !beyond.is_empty() {
+            return Err(Error::Bundle(format!("{id} would send {} off this machine, which was not agreed to", beyond.join(", "))));
         }
     }
     Ok(())
@@ -478,18 +484,24 @@ mod tests {
     }
 
     #[test]
-    fn a_run_is_refused_when_data_would_leave_without_consent_or_the_plan_does_not_say() {
+    fn a_run_is_refused_when_data_would_leave_beyond_what_was_agreed_or_the_plan_does_not_say() {
         let plan = |uploads: Value| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
             {"id": "decode", "cached": false, "uploads": []},
             {"id": "captions", "cached": true, "uploads": uploads}]});
-        assert!(upload_gate(&plan(serde_json::json!(["frames"])), true).is_ok());
-        // a cached node can still run (its cache can be gone by then): consent covers it too
-        assert!(upload_gate(&plan(serde_json::json!(["frames"])), false).unwrap_err().to_string().contains("captions sends frames"));
-        assert!(upload_gate(&plan(serde_json::json!([])), false).is_ok());
+        let agreed = |pairs: &[(&str, &[&str])]| -> Uploads {
+            pairs.iter().map(|(n, ks)| (n.to_string(), ks.iter().map(|k| k.to_string()).collect())).collect()
+        };
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[("captions", &["frames"])])).is_ok());
+        // a cached node can still run (its cache can be gone by then): it needs the agreement too
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[])).unwrap_err().to_string().contains("captions would send frames"));
+        // agreeing to frames is not agreeing to the transcript, nor is agreeing for another node
+        assert!(upload_gate(&plan(serde_json::json!(["frames", "transcript"])), &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("send transcript"));
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[("decode", &["frames"])])).is_err());
+        assert!(upload_gate(&plan(serde_json::json!([])), &agreed(&[])).is_ok());
         let older = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [{"id": "captions", "cached": false}]});
-        assert!(upload_gate(&older, true).unwrap_err().to_string().contains("does not say what captions sends"));
+        assert!(upload_gate(&older, &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("does not say what captions sends"));
         let empty = serde_json::json!({"v": 1, "type": "plan", "ok": true});   // no node list: nothing was checked
-        assert!(upload_gate(&empty, true).unwrap_err().to_string().contains("no nodes"));
+        assert!(upload_gate(&empty, &agreed(&[])).unwrap_err().to_string().contains("no nodes"));
     }
 
     #[test]

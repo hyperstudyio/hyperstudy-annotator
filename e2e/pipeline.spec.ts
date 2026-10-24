@@ -125,11 +125,13 @@ test('a step\'s details say what it makes, uses and sends, and its settings chan
   await expect(dialog.getByRole('button', { name: 'Shot captions' })).toHaveAttribute('aria-expanded', 'true');   // still open
 });
 
-test('a pipeline that does not say what each step needs offers no choice of steps, and runs the whole graph', async ({ page }) => {
+test('a pipeline that does not say what each step needs offers no choice of steps, and sends nothing for a step nobody chose', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=no-needs');
   await expect(dialog.getByRole('listitem', { name: 'faces' })).toBeVisible();
   await expect(dialog.getByRole('checkbox', { name: /^Run / })).toHaveCount(0);
-  await expect(dialog.getByRole('heading', { name: /^3 steps to run/ })).toBeVisible();          // captions runs too
+  await expect(dialog.getByRole('heading', { name: /^3 steps to run/ })).toBeVisible();          // it runs whole, captions too...
+  await expect(dialog.getByText(/^Captions sends frames, faces, transcript off this machine and this pipeline cannot leave it out/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();             // ...so it does not run
 });
 
 test('in a narrow window the plan fits without scrolling sideways', async ({ page }) => {
@@ -146,7 +148,7 @@ test('a pipeline from before plans named places or held a full graph offers its 
   await expect(dialog.getByRole('radio')).toHaveCount(2);
   await expect(dialog.getByText('Cannot run here')).toHaveCount(0);
   await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('native (mps)');
-  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();   // whole, with captions sending data off
 });
 
 test('a step already done fills its whole bar', async ({ page }) => {

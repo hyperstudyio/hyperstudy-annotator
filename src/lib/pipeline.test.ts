@@ -42,10 +42,10 @@ test('a plan can run when every node has a place and its secrets; downloads are 
 });
 
 test('turning on a feature that sends data off is the consent to send it, and a plan that does not say what leaves is not run', () => {
-  const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.1, cost_note: '', uploads: ['frames'] };
+  const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.1, cost_note: '', uploads: ['frames'], needs: [] };
   const plan = (n: Partial<PlanNode>): Plan => ({ ok: true, estimated_usd: 0.1, nodes: [{ ...node, ...n }] });
-  expect(consentFor(plan({}))).toEqual({ downloads: true, uploads: true });
-  expect(consentFor(plan({ uploads: [] }))).toEqual({ downloads: true, uploads: false });   // nothing to send: none given
+  expect(consentFor(plan({}))).toEqual({ downloads: true, uploads: { captions: ['frames'] } });   // exactly what it sends
+  expect(consentFor(plan({ uploads: [] }))).toEqual({ downloads: true, uploads: {} });   // nothing to send: none given
   expect(runnable(plan({}))).toBe(true);
   const older = plan({});
   delete older.nodes[0].uploads;   // a CLI from before plans said what leaves the machine
@@ -82,6 +82,11 @@ test('turning a feature on runs what it needs too, and says which features need 
   expect([...defaultFeatures(plan)]).toEqual(['decode', 'asr', 'faces']);   // captions sends data off and costs money
   const old = { ...plan, nodes: plan.nodes.map(({ needs: _, ...n }) => n) };
   expect([...defaultFeatures(old)]).toEqual(['decode', 'asr', 'faces', 'captions']);   // no needs: the whole graph
+  // ...which cannot run while a step in it sends data off: nobody chose that step
+  expect(blockers(old)).toEqual(['captions sends frames off this machine and this pipeline cannot leave it out (update hyperstudy-perception)']);
+  // a free feature that needs one that sends data off is not on by default either: it would bring the other along
+  const summary = node('summary', ['captions']);
+  expect([...defaultFeatures({ ...plan, nodes: [...plan.nodes, summary] })]).toEqual(['decode', 'asr', 'faces']);
 });
 
 test('a setting\'s choices show their price when the cost depends on them, and settings go only for steps that run', () => {
