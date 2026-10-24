@@ -1,6 +1,7 @@
 # Annotator backend: running the pipeline, keeping corrections, analysis, HyperStudy
 
-Status: plan, 2026-10-24. Follows the Svelte port (PORT_PLAN.md, done).
+Status: plan, 2026-10-24. Follows the Svelte port (PORT_PLAN.md: steps 1-8 done; step 9, checking the native
+dialogs by hand, is still open).
 
 ## Decisions (2026-10-24)
 
@@ -30,13 +31,24 @@ Status: plan, 2026-10-24. Follows the Svelte port (PORT_PLAN.md, done).
    guessed. Bundles of one video form a lineage (same video sha256), so the library shows one entry per video with
    its versions. Needed before anyone annotates in earnest: it is also what makes corrections usable as labels for
    evaluating new model versions.
+   - **The stored log is never rewritten.** Only an explicit undo (truncate) or import (replace) changes a log, as
+     now. Carrying over appends the re-anchored ops to the *new* version's log, each pointing back to the op it came
+     from; the old version's log and bundle are left as they were. Because `corrections.bundle_id` cascades on
+     delete, removing an old version must not be the only thing that kept an op: carried-over ops are copies.
+   - **Older ops keep loading.** Ops in SQLite and in `perception-corrections/2` files (and `/1`, through
+     `opFromV1`) have no author or base version. They load with base version = the bundle whose log holds them and
+     author = unknown, never as unmatched or rejected. If the fields change the file format, it becomes `/3`, and
+     `/2` is converted on import as `/1` is now.
+   - **Schema change by migration.** Lineages and versions are a new migration (version 2) appended to
+     `MIGRATIONS` in `db.rs`; version 1 is not edited.
 2. **Run the pipeline from the app.** The app drives the `perception` CLI as a sidecar: a machine-readable mode
    (`--json`, one event per line) for plan, run, status, cancel, resume and `rerun --from`. "Add video" runs the
    chosen stages and imports the bundle when it finishes. The stage picker comes from the node manifests (choosing
    a stage adds its upstream stages).
    - **Placement and estimates.** For each node, the choices it can run on here (its manifest runners against this
-     machine's probe, plus the cloud backend and API nodes), each with an estimated duration and price, and the
-     privacy consequence (what would leave the machine). Estimates come from measured runs: every task already
+     machine's probe, plus the cloud backend, SSH servers and API nodes), each with an estimated duration and price,
+     and the privacy consequence (what would leave the machine). An SSH server shows it too: its price is 0, but the
+     video and crops still leave this machine. Estimates come from measured runs: every task already
      records its seconds and usage; adding the device or instance type and the input's duration gives seconds per
      video minute per node per device, and price from that times the hourly rate (cloud) or per-unit cost (APIs).
      Until a node has measurements on a device, the estimate says so instead of guessing.
@@ -47,10 +59,22 @@ Status: plan, 2026-10-24. Follows the Svelte port (PORT_PLAN.md, done).
      stores private keys or passwords. The server is probed once (`perception doctor --json` over SSH) so placement
      knows its platform and accelerators. SkyPilot's SSH Node Pools were considered: they install k3s on each
      machine, which needs root and is heavy for a shared lab server.
+     - **Nothing left behind on a shared server.** Each attempt gets a private workdir (mode 0700, created with
+       umask 077), deleted once `out/` is fetched and checked, and also on cancel or failure. Study videos are often
+       copyrighted or identifiable, and other accounts on a lab server could otherwise read them.
+     - **Fetched results are untrusted.** rsync runs without copying links (`--no-links`), and `out/` then goes
+       through the same checks as an import: no links or special files, every path through `bundle::safe_path`, and
+       manifest entries without `file`, `bytes` and `sha256` rejected.
    - Model downloads and missing secrets are shown before the run (the dry run already reports both). Secrets live
      in the OS keychain.
 3. **Analysis export and a Python bundle reader.** In hyperstudy-perception: load a bundle, apply the op log, and
-   return tables (faces, speakers, captions, ...), raw and corrected side by side. No HyperStudy dependency.
+   return tables (faces, speakers, captions, ...), raw and corrected side by side. No HyperStudy dependency. It is a
+   second implementation of rules the app enforces, so it carries them over:
+   - paths resolved as `bundle::safe_path` does (relative components only, no symlink out of the bundle), and
+     manifest entries without `file`, `bytes` and `sha256` rejected: analysts will point it at bundles from anywhere;
+   - `perception-corrections/1` (with the `opFromV1` id mapping) and `/2` accepted, unknown fields ignored;
+   - `fold` giving what `corrections.ts` gives. Both implementations are tested against shared fixtures (a bundle,
+     an op log and the expected folded result), so neither can drift.
 4. **HyperStudy integration (paused, to be designed).** Endpoints for bundles and corrections of record, the
    Python SDK building on the reader of step 3, and `Workspace.svelte` embedded in HyperStudy through a third
    `BundleSource`. Design questions: where bundles are stored (next to the videos, keyed by sha256?), how the
