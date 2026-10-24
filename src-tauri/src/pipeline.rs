@@ -47,6 +47,16 @@ pub fn run_id(id: &str) -> Result<&str> {
     if ok { Ok(id) } else { Err(Error::Bundle(format!("the pipeline reported a run id that is not one: {id:?}"))) }
 }
 
+/// A pipeline folder must not be inside the app's own data (the library's bundle copies are made from files a bundle
+/// lists, so a bundle could otherwise supply the code this app runs with uv).
+pub fn check_folder(folder: &Path, data_dir: &Path) -> Result<()> {
+    let (f, d) = (folder.canonicalize()?, data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf()));
+    if f.starts_with(&d) {
+        return Err(Error::Bundle(format!("{} is inside the app's own data; choose your hyperstudy-perception folder", folder.display())));
+    }
+    Ok(())
+}
+
 /// The problems of an `error` object, as one message.
 pub fn problems(v: &Value) -> String {
     v["problems"].as_array().map(|p| p.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; ")).unwrap_or_default()
@@ -115,9 +125,12 @@ impl Pipeline {
     pub fn run_to_end(&self, args: &[&str], mut on: impl FnMut(&Value)) -> Result<Option<(String, String)>> {
         let mut child = self.command(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
         let stderr = child.stderr.take().map(|e| std::thread::spawn(move || {   // read apart: a full pipe would block
-            let mut tail: Vec<String> = BufReader::new(e).lines().map_while(|l| l.ok()).collect();
-            tail.drain(..tail.len().saturating_sub(5));
-            tail.join(" | ")
+            let mut tail = std::collections::VecDeque::with_capacity(6);   // only the last lines are kept
+            for line in BufReader::new(e).lines().map_while(|l| l.ok()) {
+                if tail.len() == 5 { tail.pop_front(); }
+                tail.push_back(line);
+            }
+            Vec::from(tail).join(" | ")
         }));
         let (mut run, mut finished, mut refused) = (None::<String>, None::<String>, false);
         let read = lines(&mut child, |o| {
@@ -143,7 +156,9 @@ impl Pipeline {
 
     /// A graph of the pipeline's graphs/ folder, by file name only: nothing outside that folder can be named.
     pub fn graph(&self, file: &str) -> Result<PathBuf> {
-        let ok = !file.is_empty() && file.ends_with(".yaml") && !file.contains('/') && !file.contains('\\') && !file.starts_with('.');
+        // one plain file name: no separators, no `..`, no drive (`C:x.yaml` is relative to a drive on Windows)
+        let plain = matches!(Path::new(file).components().collect::<Vec<_>>()[..], [std::path::Component::Normal(_)]);
+        let ok = plain && file.ends_with(".yaml") && !file.contains(['/', '\\', ':']) && !file.starts_with('.');
         let path = self.repo.join("graphs").join(file);
         if !ok || !path.is_file() {
             return Err(Error::NotFound(format!("the pipeline has no graph {file:?}")));
@@ -227,7 +242,7 @@ mod tests {
         assert_eq!(p.graphs().unwrap(), vec![GraphPreset { file: "faces.yaml".into(), pipeline: "perception-faces".into(),
                                                            description: "Decode and face tracks. perception run ...".into() }]);
         assert!(p.graph("faces.yaml").is_ok());
-        for bad in ["../faces.yaml", "/etc/passwd", "sub/faces.yaml", "notes.txt", ".hidden.yaml", "missing.yaml"] {
+        for bad in ["../faces.yaml", "/etc/passwd", "sub/faces.yaml", "notes.txt", ".hidden.yaml", "missing.yaml", "C:faces.yaml", "C:\\faces.yaml"] {
             assert!(p.graph(bad).is_err(), "{bad} should be refused");
         }
     }
@@ -244,6 +259,16 @@ mod tests {
         for bad in ["..", "../library", "/", "20261024-095828-1ad462/..", "", "20261024-095828-1AD462", "x"] {
             assert!(run_id(bad).is_err(), "{bad:?} should be refused");
         }
+    }
+
+    #[test]
+    fn the_pipeline_folder_cannot_be_inside_the_apps_own_data() {
+        let data = tempfile::tempdir().unwrap();
+        let inside = data.path().join("bundles").join("some-bundle");
+        fs::create_dir_all(&inside).unwrap();
+        assert!(check_folder(&inside, data.path()).unwrap_err().to_string().contains("inside the app's own data"));
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert!(check_folder(elsewhere.path(), data.path()).is_ok());
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).

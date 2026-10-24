@@ -22,7 +22,8 @@ const plan: Plan = {
       downloads: [{ id: 'parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', size_gb: 2.4, gated: false, licence_mode: 'commercial-ok' }],
       missing_secrets: [], cost_usd: 0, cost_note: '' },
     { id: 'faces', uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '' },
-    { id: 'captions', uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '' },
+    { id: 'captions', uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
+      uploads: ['frames', 'faces', 'transcript'] },
   ],
 };
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'demo-run', node, kind, message, at: null });

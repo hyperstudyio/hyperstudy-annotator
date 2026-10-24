@@ -7,6 +7,8 @@ export interface Download { id: string; source: string | null; size_gb: number |
 export interface PlanNode {
   id: string; uses: string; where: string | null; why_not: string; cached: boolean;
   downloads: Download[]; missing_secrets: string[]; cost_usd: number; cost_note: string;
+  /** Data kinds the node sends off this machine (frames, transcript...); absent from older CLIs. */
+  uploads?: string[];
 }
 export interface Plan { ok: boolean; estimated_usd: number; nodes: PlanNode[] }
 export interface GraphPreset { file: string; pipeline: string; description: string }

@@ -30,3 +30,16 @@ test('a run the app refuses to start leaves the dialog usable, with the reason',
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
   await expect(dialog.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 });
+
+test('the dialog takes the keyboard, and Escape closes it when no run is going', async ({ page }) => {
+  await page.goto('/?pipeline-demo');
+  const dialog = page.getByRole('dialog', { name: 'Run the pipeline' });
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
+
+test('the plan says what each node sends off this machine', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  await expect(dialog.getByText('sends frames, faces, transcript off this machine')).toBeVisible();
+});

@@ -115,6 +115,7 @@
                 {#if started}<span class="state {s.state}">{STATE_LABEL[s.state]}</span> <span class="meta">{s.message}</span>
                 {:else}
                   {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
+                  {#if n.uploads?.length}<span class="uploads">sends {n.uploads.join(', ')} off this machine</span>{/if}
                   {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
                   {#each n.missing_secrets as k (k)}<span class="error">needs {k}</span>{/each}
                   {#each n.downloads as d (d.id)}<span class="meta">downloads {d.id} ({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}{d.gated ? ', gated' : ''}, {d.licence_mode})</span>{/each}
@@ -163,6 +164,7 @@
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }   /* columns do not move as states change */
   td { padding: 4px 6px; border-top: 1px solid var(--color-border-default); vertical-align: top; }
   td span + span { margin-left: 8px; }
+  .uploads { color: var(--color-caution); font-size: 12px; }
   .node { font-weight: 600; white-space: nowrap; width: 18%; }
   .where { white-space: nowrap; color: var(--color-text-secondary); width: 22%; }
   .state { font-size: 11px; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--color-border-strong); }

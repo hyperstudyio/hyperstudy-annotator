@@ -176,14 +176,15 @@ pub fn dismiss_unmatched(state: State<'_, AppState>, id: String, index: u64) -> 
 
 // --- running the perception pipeline (pipeline.rs) ---
 
-fn pipeline_at(folder: &str) -> Result<Pipeline> {
+fn pipeline_at(folder: &str, data_dir: &std::path::Path) -> Result<Pipeline> {
+    pipeline::check_folder(std::path::Path::new(folder), data_dir)?;
     Pipeline::new(std::path::Path::new(folder), pipeline::bundled_uv(&std::env::current_exe()?)?)
 }
 
 fn pipeline(state: &AppState) -> Result<Pipeline> {
     let folder = library::get_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER)?
         .ok_or_else(|| Error::NotFound("choose the hyperstudy-perception folder first".into()))?;
-    pipeline_at(&folder)
+    pipeline_at(&folder, &state.data_dir)
 }
 
 #[tauri::command]
@@ -194,8 +195,8 @@ pub fn get_pipeline_folder(state: State<'_, AppState>) -> Result<Option<String>>
 /// Check a folder with `perception doctor` and remember it; returns what the doctor found.
 #[tauri::command]
 pub async fn set_pipeline_folder(state: State<'_, AppState>, path: String) -> Result<Value> {
-    let folder = path.clone();
-    let doctor = blocking(move || pipeline_at(&folder)?.one(&["doctor"], "doctor")).await?;
+    let (folder, data_dir) = (path.clone(), state.data_dir.clone());
+    let doctor = blocking(move || pipeline_at(&folder, &data_dir)?.one(&["doctor"], "doctor")).await?;
     library::set_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER, &path)?;
     Ok(doctor)
 }
@@ -261,8 +262,10 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
         args.push("--allow-downloads");
     }
     let outcome = p.run_to_end(&args, |o| {
-        if o["type"] == "run.created" {
-            *state.running.lock().unwrap() = o["run"].as_str().map(String::from);
+        if o["type"] == "run.created" {   // only an id in the CLI's form stands for the run in progress
+            if let Some(id) = o["run"].as_str().and_then(|r| pipeline::run_id(r).ok()) {
+                *state.running.lock().unwrap() = Some(id.to_string());
+            }
         }
         let _ = app.emit("pipeline", o);
     })?;
