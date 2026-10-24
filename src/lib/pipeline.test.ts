@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, mustTurnOnFirst, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -47,6 +47,13 @@ test('turning on a feature that sends data off is the consent to send it, and a 
   expect(consentFor(plan({}), new Set(['captions']))).toEqual({ uploads: { captions: ['frames'] } });   // exactly what it sends
   expect(consentFor(plan({ uploads: [] }), new Set(['captions']))).toEqual({ uploads: {} });   // nothing to send: none given
   expect(consentFor(plan({}), new Set())).toEqual({ uploads: {} });   // not turned on by the user: nothing agreed
+  // a default that a new plan makes send data off (a cloud place, say) goes off: only a step the user ticked may send
+  expect([...keepChoices(plan({}), new Set(['captions']), new Set())]).toEqual([]);
+  expect([...keepChoices(plan({}), new Set(['captions']), new Set(['captions']))]).toEqual(['captions']);
+  expect([...keepChoices(plan({ uploads: [] }), new Set(['captions']), new Set())]).toEqual(['captions']);   // sends nothing: stays
+  const whole = plan({});
+  delete whole.nodes[0].needs;   // cannot be chosen from: it runs whole, and blockers keeps it from sending
+  expect([...keepChoices(whole, new Set(), new Set())]).toEqual(['captions']);
   const beforeSettings = plan({});
   delete beforeSettings.nodes[0].settings;   // a CLI from before perception #14: no --allow-uploads
   expect(blockers(beforeSettings)).toEqual(['captions sends data off this machine and this pipeline cannot be told it may (update hyperstudy-perception)']);

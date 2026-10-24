@@ -102,12 +102,21 @@ export interface Consent { uploads: Record<string, string[]> }
 
 /** What a run of these steps lets happen: its models download as part of running, and turning on a feature that sends
  *  data to a cloud API is the choice to send what the plan shows it sends (such features start off, see
- *  defaultFeatures). Only the steps the user turned on count (`wanted`): a step that came along for another feature
- *  agreed to nothing (see mustTurnOnFirst). The app holds a fresh plan to exactly this before it starts, so a step
+ *  defaultFeatures). Only the steps the user ticked on themselves count (`ticked`): a default, or a step that came
+ *  along for another feature, agreed to nothing (see mustTurnOnFirst, keepChoices). The app holds a fresh plan to exactly this before it starts, so a step
  *  that would send data the plan on screen did not show, or that the user did not turn on, is refused. */
-export const consentFor = (plan: Plan, wanted: Set<string>): Consent => ({
-  uploads: Object.fromEntries(plan.nodes.filter((n) => wanted.has(n.id) && n.uploads?.length).map((n) => [n.id, [...n.uploads!]])),
+export const consentFor = (plan: Plan, ticked: Set<string>): Consent => ({
+  uploads: Object.fromEntries(plan.nodes.filter((n) => ticked.has(n.id) && n.uploads?.length).map((n) => [n.id, [...n.uploads!]])),
 });
+
+/** The features still on when a new plan arrives: a step that now sends data off (a new place, a new setting) stays on
+ *  only if the user turned it on themselves (`ticked`): a default, or a choice made before it sent anything, is not the
+ *  choice to send. A plan whose steps cannot be chosen runs whole (blockers refuses it if a step sends data off). */
+export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Set<string>): Set<string> {
+  if (!canPick(plan)) return defaultFeatures(plan);
+  const sends = new Set(plan.nodes.filter((n) => n.uploads?.length).map((n) => n.id));
+  return new Set([...wanted].filter((id) => !sends.has(id) || ticked.has(id)));
+}
 
 /** The steps that send data off which turning on `id` would bring along although the user has not turned them on:
  *  `id` waits until they do (sending is chosen by turning on the step that sends, never by bringing it along). */
