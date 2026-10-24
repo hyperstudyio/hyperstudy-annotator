@@ -41,3 +41,29 @@ test('what could not be carried over is listed with a Dismiss button that says w
   await page.getByRole('button', { name: 'Carry over', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Dismiss: 58 excluded (face)' })).toBeVisible();
 });
+
+test('the "which run?" question for a file found next to the bundle is asked only while the log is empty', async ({ page }) => {
+  for (const b of ['bundle-l4', 'bundle-pipeline']) {
+    const res = await page.request.get(`${RUN}/${b}/manifest.json`);
+    test.skip(!res.ok(), `the clip 2 bundles are not served at ${RUN}`);
+  }
+  const sha = (await (await page.request.get(`${RUN}/bundle-l4/manifest.json`)).json()).video.sha256;
+  // a corrections file next to the bundle that does not name its run (served by the test, nothing on disk)
+  let served!: () => void;
+  const fileServed = new Promise<void>((r) => (served = r));
+  await page.route(`**${RUN}/perception_corrections.json`, async (route) => {
+    await route.fulfill({ json: { format: 'perception-corrections/2', sha256: sha,
+      ops: [{ op: 'person.rename', person: 'person:Person A', name: 'x', at: '2026-10-24T00:00:00.000Z' }] } });
+    served();
+  });
+  // this run (the L4 one) already has a correction of its own, and was started fresh
+  await page.addInitScript(([log, record]) => {
+    localStorage.setItem(log, JSON.stringify([{ op: 'shot.caption', shot: 'shot:0', caption: 'mine', at: '2026-10-24T00:00:00.000Z' }]));
+    localStorage.setItem(record, JSON.stringify({ from_bundle_id: 'x', status: 'declined', carried: 0, unmatched: [], created_at: '' }));
+  }, [`hyperstudy-annotator:corrections:${sha}:${RUN}/bundle-l4`, `hyperstudy-annotator:carryover:${RUN}/bundle-l4`]);
+  await page.goto(URL);
+  await expect(page.getByText('1 correction', { exact: true })).toBeVisible();
+  await fileServed;   // the found-file check has the file; two frames for it to finish and render
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await expect(page.getByText('do not say which run')).toHaveCount(0);
+});

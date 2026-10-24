@@ -69,18 +69,20 @@
   <button onclick={importFile} title="Import a corrections file (from this app or the annotator prototype)">Import</button>
   <button class="primary" onclick={exportFile}>Export corrections</button>
 </header>
-{#if ask}
-  <div class="banner">
-    Corrections from {ask.from} do not say which run of this video they were made on, and the library has {ask.runs} runs of it.
-    Were they made on this one? Their ids name this run's faces only if they were.
-    <button class="primary" onclick={importAsThisRun}>Yes, import them here</button>
-    <button onclick={() => (ask = null)}>Cancel</button>
-  </div>
-{:else if pending}
+{#if pending}
   <div class="banner">
     Importing replaces your {plural(s.ops.length, 'correction')} with {plural(pending.ops.length, 'correction')} from {pending.from}.
     <button class="primary" onclick={() => pending && apply(pending.ops, pending.from)}>Replace</button>
     <button onclick={() => (pending = null)}>Cancel</button>
+  </div>
+{:else if ask && (ask.from !== 'the prototype' || (!s.ops.length && !dismissed))}
+  <!-- a file the user picked is asked about at once; one found next to the bundle, like its import offer, only while
+       the log is empty -->
+  <div class="banner">
+    Corrections from {ask.from} do not say which run of this video they were made on, and the library has {ask.runs} runs of it.
+    Were they made on this one? Their ids name this run's faces only if they were.
+    <button class="primary" onclick={importAsThisRun}>Yes, import them here</button>
+    <button onclick={() => { if (ask?.from === 'the prototype') dismissed = true; ask = null; }}>Cancel</button>
   </div>
 {:else if found && !dismissed && !s.ops.length}
   <div class="banner">

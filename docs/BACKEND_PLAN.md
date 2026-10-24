@@ -41,6 +41,10 @@ dialogs by hand, is still open).
      has corrections of its own, it is no longer offered), as one batch re-stamped with the carry time (one undo
      takes it all back), so `fold`'s last-write-wins cannot put an old correction over a newer one. An op replaced
      later by one that cannot be carried is not carried either.
+   - **Provenance.** A carried op names the op it copies (`carried_from`) and an imported, re-anchored op its place
+     in the file (`reanchored_from`), each with the earlier run's manifest sha256 as `bundle`. Ops carried before
+     that was settled (2026-10-24, browser testing only) named the library's id instead; a 64-hex-digit value is a
+     manifest sha256.
    - **Importing a corrections file into a re-run.** Exports so far record only the video's sha256, not the bundle
      they were made on, so on a video with several versions their ids may name other faces. From now on an export
      records its bundle (manifest sha256). A file for another version is re-anchored like a carry-over when that
