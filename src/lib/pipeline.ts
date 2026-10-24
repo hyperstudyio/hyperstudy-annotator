@@ -17,7 +17,16 @@ export interface PlanNode {
   needs?: string[];
   /** Each of `options` -> its estimate, to compare places before choosing one; absent from older CLIs. */
   estimates?: Record<string, { estimate_s: number | null; estimate_basis: string }>;
+  /** What it gives, in a few words ("Face tracks"), and the rest of what its details show; absent from older CLIs. */
+  title?: string; service?: string | null; description?: string; outputs?: Record<string, string>;
+  models?: { id: string; source: string | null; licence_mode: string; size_gb: number | null }[];
+  settings?: Setting[];
 }
+
+/** A node setting with a fixed list of choices (a model, an effort), and each choice's price when the cost depends on it. */
+export interface Setting { key: string; description: string; value: string | null; choices: string[]; prices: Record<string, number> | null; per: string | null }
+/** The settings the user chose: node id -> key -> value. */
+export type Settings = Record<string, Record<string, string>>;
 
 /** Where the user moved nodes: node id -> place. */
 export type Places = Record<string, string>;
@@ -43,11 +52,11 @@ export interface PipelineApi {
   setFolder(path: string): Promise<Doctor>;
   doctor(): Promise<Doctor>;
   graphs(): Promise<GraphPreset[]>;
-  plan(graph: string, video: string, places: Places): Promise<Plan>;
+  plan(graph: string, video: string, places: Places, settings: Settings): Promise<Plan>;
   /** Start a run; `on` receives its messages until `imported` or `error`. Resolves to a function that stops listening.
    *  The app checks the consent again against a fresh plan before it starts. */
   /** `only`: just these nodes (and what they need); null runs the whole graph. */
-  run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, on: (m: PipelineMessage) => void): Promise<() => void>;
+  run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, settings: Settings, on: (m: PipelineMessage) => void): Promise<() => void>;
   /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. */
   cancel(run: string | null): Promise<void>;
   pickFolder(): Promise<string | null>;
@@ -87,47 +96,132 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
   return v;
 }
 
-export interface Consent { downloads: boolean; uploads: boolean }
+/** What a run lets happen: `uploads` is node id -> the kinds of data it may send off this machine, and where to (its
+ *  service, or null). (Models download as part of running: the app always lets them.) */
+export interface Consent { uploads: Record<string, { kinds: string[]; service: string | null }> }
 
-/** Why a run cannot start, one line per problem; empty when it can. The CLI's own rule (plan.ok): every node needs a
- *  place to run here (cached ones too: the CLI checks the whole graph), its secrets, and any download allowed. And the
- *  app's: data leaving this machine is allowed explicitly, like a download, and a plan that does not say what leaves
- *  (a CLI from before plans carried `uploads`) is not run. */
-export function blockers(plan: Plan, allow: Consent): string[] {
+/** The steps the user turned on themselves, each with what it sent, and where to, on the plan on screen when they did:
+ *  that is what they chose to send, and all they chose. */
+export type Ticked = Record<string, { kinds: string[]; service: string | null }>;
+
+/** What ticking `n` agrees to: what the plan on screen shows it sends, and where. */
+export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: n.service ?? null });
+
+/** Whether what `n` sends now is within what the user agreed to when they ticked it (no new kind, no other place). */
+function covered(n: PlanNode, ticked: Ticked): boolean {
+  const t = ticked[n.id];
+  return !n.uploads?.length || (!!t && n.uploads.every((k) => t.kinds.includes(k)) && (n.service ?? null) === t.service);
+}
+
+/** What a run of these steps lets happen: its models download as part of running, and turning on a feature that sends
+ *  data to a cloud API is the choice to send what the plan then showed it sends (such features start off, see
+ *  defaultFeatures). Only what the user ticked counts: a default, a step that came along for another feature, or a
+ *  step that now sends more than when it was ticked agreed to nothing. The app holds a fresh plan to exactly this
+ *  before it starts. */
+export const consentFor = (plan: Plan, ticked: Ticked): Consent => ({
+  uploads: Object.fromEntries(plan.nodes.filter((n) => n.uploads?.length && covered(n, ticked))
+    .map((n) => [n.id, { kinds: [...n.uploads!], service: n.service ?? null }])),
+});
+
+/** Steps that would run and send data off beyond what the user agreed to: the run waits until they tick them. */
+export const unagreed = (plan: Plan, ticked: Ticked) => plan.nodes.filter((n) => !covered(n, ticked)).map((n) => n.id);
+
+/** The features still on when a new plan arrives, and the ticks that still stand: a step that now sends data off (a new
+ *  place, a new setting) stays on only if it sends nothing beyond what the user agreed to when they ticked it; else it
+ *  goes off, and its tick with it (ticking it again agrees to what it sends now). A plan whose steps cannot be chosen
+ *  runs whole (blockers refuses it if a step sends data off). */
+export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Ticked): { wanted: Set<string>; ticked: Ticked } {
+  if (!canPick(plan)) return { wanted: defaultFeatures(plan), ticked };
+  // a feature stays on only if nothing it would run (itself, and what it needs) sends beyond what was agreed: a step
+  // held on for another feature cannot be turned on by itself, so the feature that brings it goes off instead
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const keep = new Set([...wanted].filter((id) => picked(plan, new Set([id])).chosen.every((c) => covered(byId.get(c)!, ticked))));
+  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(id))) };
+}
+
+/** The steps that send data off which turning on `id` would bring along although the user has not turned them on:
+ *  `id` waits until they do (sending is chosen by turning on the step that sends, never by bringing it along). */
+export function mustTurnOnFirst(plan: Plan, wanted: Set<string>, id: string): string[] {
+  const { chosen } = picked(plan, new Set([...wanted, id]));
+  return chosen.filter((c) => c !== id && !wanted.has(c) && plan.nodes.find((n) => n.id === c)?.uploads?.length);
+}
+
+/** Why a run cannot start, one line per problem; empty when it can: every node needs a place to run here (cached ones
+ *  too: the CLI checks the whole graph) and its secrets, and a plan that does not say what leaves the machine (a CLI
+ *  from before plans carried `uploads`) is not run. Nor is a plan whose steps cannot be chosen (no `needs`: it runs
+ *  whole) while one of them sends data off: nobody turned that step on. */
+export function blockers(plan: Plan): string[] {
+  const whole = !canPick(plan);
   return plan.nodes.flatMap((n) => [
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
-    ...(n.downloads.length && !allow.downloads ? [`${n.id} needs a model download (tick the box below the plan)`] : []),
     ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]
-      : n.uploads.length && !allow.uploads ? [`${n.id} sends ${n.uploads.join(', ')} off this machine (tick the box below the plan)`] : []),
+      : whole && n.uploads.length ? [`${n.id} sends ${n.uploads.join(', ')} off this machine and this pipeline cannot leave it out (update hyperstudy-perception)`]
+      // a CLI from before plans carried settings (perception #14) does not know --allow-uploads: the run would fail
+      : n.uploads.length && !('settings' in n) ? [`${n.id} sends data off this machine and this pipeline cannot be told it may (update hyperstudy-perception)`] : []),
   ]);
 }
 
-export const runnable = (plan: Plan, allow: Consent) => !blockers(plan, allow).length;
+export const runnable = (plan: Plan) => !blockers(plan).length;
 
-/** The steps that run when the user unticked `skipped`: a step is dropped when it is unticked or needs a dropped one
- *  (transitively). `only` is what to pass the CLI (null: the whole graph). */
-export function picked(plan: Plan, skipped: Set<string>): { chosen: string[]; dropped: string[]; only: string[] | null } {
-  const dropped = new Set(plan.nodes.filter((n) => skipped.has(n.id)).map((n) => n.id));
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const n of plan.nodes) {
-      if (!dropped.has(n.id) && (n.needs ?? []).some((u) => dropped.has(u))) { dropped.add(n.id); grew = true; }
-    }
-  }
-  const chosen = plan.nodes.filter((n) => !dropped.has(n.id)).map((n) => n.id);
-  return { chosen, dropped: plan.nodes.filter((n) => dropped.has(n.id)).map((n) => n.id), only: dropped.size ? chosen : null };
+/** The graph that holds every node: the app picks features from it (an older pipeline folder has none). */
+export const FULL_GRAPH = 'full.yaml';
+
+/** What runs when the user turned on `wanted`: those features and everything they need (transitively). `neededBy` says,
+ *  for each running step that other running steps need, which ones: it cannot be turned off while they run (turned
+ *  off, it would come straight back). `only` is what to pass the CLI (null: the whole graph). */
+export function picked(plan: Plan, wanted: Set<string>): { chosen: string[]; neededBy: Record<string, string[]>; only: string[] | null } {
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const on = new Set<string>();
+  const add = (id: string) => { if (on.has(id) || !byId.has(id)) return; on.add(id); (byId.get(id)!.needs ?? []).forEach(add); };
+  wanted.forEach(add);
+  const chosen = plan.nodes.filter((n) => on.has(n.id)).map((n) => n.id);
+  const neededBy = Object.fromEntries(chosen.map((id) => [id, chosen.filter((c) => (byId.get(c)!.needs ?? []).includes(id))]).filter(([, by]) => by.length));
+  return { chosen, neededBy, only: chosen.length === plan.nodes.length ? null : chosen };
+}
+
+/** The features on when a plan first shows: those that, with everything they need, keep all on this machine and cost
+ *  nothing (a step that sends data off or costs money is the user's choice, and so is a feature that would bring one
+ *  along). A plan that does not say what steps need runs whole. */
+export function defaultFeatures(plan: Plan): Set<string> {
+  if (!canPick(plan)) return new Set(plan.nodes.map((n) => n.id));
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const free = (n: PlanNode, seen = new Set<string>()): boolean => {
+    if (seen.has(n.id)) return true;
+    seen.add(n.id);
+    return !n.uploads?.length && !n.cost_usd && !n.cost_note && (n.needs ?? []).every((u) => !byId.has(u) || free(byId.get(u)!, seen));
+  };
+  return new Set(plan.nodes.filter((n) => free(n)).map((n) => n.id));
+}
+
+/** A setting's choice as its menu shows it: with its price, when the cost depends on it. */
+export function choiceLabel(s: Setting, choice: string): string {
+  const usd = s.prices?.[choice];
+  return usd == null ? choice : `${choice}, $${usd < 0.01 ? usd.toFixed(3) : usd.toFixed(2)} per ${s.per}`;
+}
+
+/** The settings to send: only for steps that run (a setting for a node --only leaves out is a CLI error). */
+export function settingsFor(settings: Settings, chosen: string[]): Settings {
+  return Object.fromEntries(Object.entries(settings).filter(([node]) => chosen.includes(node)));
 }
 
 /** Can the user choose steps? Only when the plan says what each step needs (a CLI from before plans carried `needs`
  *  would otherwise let a step be left out while what needs it still runs). */
 export const canPick = (plan: Plan) => plan.nodes.every((n) => Array.isArray(n.needs));
 
+const ACCELERATORS: Record<string, string> = { mps: 'Apple GPU', cuda: 'NVIDIA GPU', cpu: 'CPU' };
+/** A place (backend:accelerator) as people say it: "Apple GPU" here, "NVIDIA GPU on ssh" elsewhere. */
+export function placeName(place: string): string {
+  const [backend, accelerator = ''] = place.split(':');
+  const what = ACCELERATORS[accelerator] ?? accelerator;
+  return backend === 'native' || backend === 'self' ? what : `${what} on ${backend}`;
+}
+
 /** A place as the menu shows it: with how long the step would take there, when the plan says. */
 export function placeLabel(n: PlanNode, place: string): string {
   const e = n.estimates?.[place];
-  if (!e) return place;
-  return `${place} · ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}`;
+  if (!e) return placeName(place);
+  return `${placeName(place)}, ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}`;
 }
 
 /** The places to send: only for steps that run (a place for a node --only leaves out is a CLI error). */
@@ -144,12 +238,41 @@ export function duration(seconds: number): string {
   return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
 }
 
+/** When each step that will run starts and how long it takes, in estimated seconds from the run's start: after the
+ *  steps it needs (cached ones take no time), as the coordinator runs independent steps side by side. A step with no
+ *  estimate has `seconds` null and holds up nothing (what needs it starts when its other inputs are ready). A plan that
+ *  does not say what steps need (an older CLI) is drawn one step after another: nothing says which could overlap. */
+export function schedule(plan: Plan): Record<string, { start: number; seconds: number | null }> {
+  const out: Record<string, { start: number; seconds: number | null }> = {};
+  if (!canPick(plan)) {
+    let start = 0;
+    for (const n of plan.nodes.filter((x) => !x.cached)) { out[n.id] = { start, seconds: n.estimate_s ?? null }; start += n.estimate_s ?? 0; }
+    return out;
+  }
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const end = (id: string): number => {
+    const n = byId.get(id);
+    if (!n || n.cached) return 0;
+    if (!(id in out)) {
+      const start = Math.max(0, ...(n.needs ?? []).map(end));
+      out[id] = { start, seconds: n.estimate_s ?? null };
+    }
+    return out[id].start + (out[id].seconds ?? 0);
+  };
+  plan.nodes.forEach((n) => end(n.id));
+  return out;
+}
+
 /** The plan's estimated time: what will run (cached nodes do not), and the nodes with no estimate yet; null when the
- *  pipeline gives no estimates at all (a CLI from before plans carried them). */
-export function totalEstimate(plan: Plan): { seconds: number; unknown: string[] } | null {
+ *  pipeline gives no estimates at all (a CLI from before plans carried them). `seconds` is every step one after
+ *  another; `fastest`, steps side by side where nothing they need is in the way. A run takes between the two: the
+ *  coordinator runs independent steps together only within the machine's CPU, memory and GPU. */
+export function totalEstimate(plan: Plan): { seconds: number; fastest: number; unknown: string[] } | null {
   if (!plan.nodes.some((n) => 'estimate_s' in n)) return null;
   const running = plan.nodes.filter((n) => !n.cached);
-  return { seconds: running.reduce((a, n) => a + (n.estimate_s ?? 0), 0), unknown: running.filter((n) => n.estimate_s == null).map((n) => n.id) };
+  const times = Object.values(schedule(plan));
+  return { seconds: running.reduce((a, n) => a + (n.estimate_s ?? 0), 0), fastest: Math.max(0, ...times.map((t) => t.start + (t.seconds ?? 0))),
+           unknown: running.filter((n) => n.estimate_s == null).map((n) => n.id) };
 }
 
 export async function tauriPipeline(): Promise<PipelineApi> {
@@ -161,10 +284,10 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     setFolder: (path) => invoke<Doctor>('set_pipeline_folder', { path }),
     doctor: () => invoke<Doctor>('pipeline_doctor'),
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
-    plan: (graph, video, places) => invoke<Plan>('pipeline_plan', { graph, video, places }),
-    async run(graph, video, allow, places, only, on) {
+    plan: (graph, video, places, settings) => invoke<Plan>('pipeline_plan', { graph, video, places, settings }),
+    async run(graph, video, allow, places, only, settings, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
-      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, allowUploads: allow.uploads, places, only }); }
+      try { await invoke('pipeline_run', { graph, video, uploads: allow.uploads, places, only, settings }); }
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },

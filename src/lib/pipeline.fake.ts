@@ -12,24 +12,49 @@ const doctor: Doctor = {
   ],
 };
 const graphs: GraphPreset[] = [
+  { file: 'full.yaml', pipeline: 'perception-full', description: 'Everything the pipeline can do.' },
   { file: 'faces.yaml', pipeline: 'perception-faces', description: 'Decode and face tracks.' },
   { file: 'mvp-captions.yaml', pipeline: 'perception-mvp-captions', description: 'Decode, speech, faces and shot captions (Claude Haiku).' },
 ];
+// mirrors the nodes in hyperstudy-perception (titles, models, outputs and settings from their manifests), on a Mac
 const plan: Plan = {
   ok: false, estimated_usd: 0.156, nodes: [
-    { id: 'decode', needs: [], uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
-      place: 'native:cpu', options: ['native:cpu'], estimate_s: null, estimate_basis: '' },
-    { id: 'asr', needs: ['decode'], uses: 'audio.asr@1.0.0', where: 'native (mps)', why_not: '', cached: false,
-      downloads: [{ id: 'parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', size_gb: 2.4, gated: false, licence_mode: 'commercial-ok' }],
-      missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:mps', options: ['native:mps'], estimate_s: 1.8, estimate_basis: 'median of 4 runs of audio.asr@1.0.0 on native:mps here' },
-    { id: 'faces', needs: ['decode'], uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
-      place: 'native:mps', options: ['native:mps', 'native:cpu'], estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here',
-      estimates: { 'native:mps': { estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' },
-        'native:cpu': { estimate_s: null, estimate_basis: 'no runs of vision.face-track@1.0.0 on native:cpu here yet' } } },
-    { id: 'captions', needs: ['decode', 'asr', 'faces'], uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
+    { id: 'decode', needs: [], title: 'Shots and audio', description: 'Video identity and timing, shots, keyframes and 16 kHz mono audio',
+      outputs: { media: 'media.v1', shots: 'bundle.shots@0.1', keyframes: 'assets.v1', audio: 'audio.wav.v1' }, settings: [],
+      models: [{ id: 'PySceneDetect AdaptiveDetector', source: null, licence_mode: 'commercial-ok', size_gb: null }],
+      uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
+      service: null, place: 'native:cpu', options: ['native:cpu'], estimate_s: null, estimate_basis: '' },
+    { id: 'asr', needs: ['decode'], title: 'Speech transcript', description: 'Word-timed transcript and utterances (Parakeet TDT v3); voices come from diarization',
+      outputs: { transcript: 'bundle.transcript@0.1' }, settings: [],
+      models: [{ id: 'mlx-community/parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', licence_mode: 'commercial-ok', size_gb: 2.3 }],
+      uses: 'audio.asr@1.0.0', where: 'native (mps)', why_not: '', cached: false,
+      downloads: [{ id: 'mlx-community/parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', size_gb: 2.3, gated: false, licence_mode: 'commercial-ok' }],
+      missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], service: null, place: 'native:mps', options: ['native:mps'],
+      estimate_s: 1.8, estimate_basis: 'median of 4 runs of audio.asr@1.0.0 on native:mps here' },
+    { id: 'faces', needs: ['decode'], title: 'Face tracks', description: 'Face tracks within shots, identity clusters across the video (py-feat + ArcFace), crops',
+      outputs: { faces: 'bundle.faces@0.1', crops: 'assets.v1' }, settings: [],
+      models: [{ id: 'py-feat Detectorv2 (RetinaFace + multitask)', source: 'py-feat==2.1.5 (weights from hf://py-feat)', licence_mode: 'academic-only', size_gb: null },
+        { id: 'ArcFace (InsightFace, via py-feat)', source: 'py-feat==2.1.5', licence_mode: 'academic-only', size_gb: null }],
+      uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
+      service: null, place: 'native:mps', options: ['native:mps'], estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here',
+      estimates: { 'native:mps': { estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' } } },
+    { id: 'captions', needs: ['decode', 'asr', 'faces'], title: 'Shot captions', service: 'Anthropic API',
+      description: 'Per-shot descriptions from keyframes (faces boxed and labelled), speech and the face roster; on-screen text',
+      outputs: { shots: 'bundle.shots@0.1', text: 'bundle.text@0.1' },
+      models: [{ id: 'claude-haiku-5-5', source: null, licence_mode: 'api-terms', size_gb: null }, { id: 'claude-opus-5-5', source: null, licence_mode: 'api-terms', size_gb: null }],
+      settings: [{ key: 'model', description: 'bake-off choice: Haiku 5.5 with the face roster', value: 'claude-haiku-5-5', choices: ['claude-haiku-5-5', 'claude-opus-5-5'],
+        prices: { 'claude-haiku-5-5': 0.003, 'claude-opus-5-5': 0.12 }, per: 'shot' },
+        { key: 'effort', description: '', value: 'medium', choices: ['low', 'medium', 'high'], prices: null, per: null }],
+      uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
       uploads: ['frames', 'faces', 'transcript'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 176.1, estimate_basis: 'median of 2 runs of vlm.shot-captions@1.0.0 on native:cpu here' },
   ],
 };
+/** For `twoPlaces`: faces on a machine where it has two places to choose from (an NVIDIA GPU, measured, or the CPU, not yet). */
+const twoPlaces = (faces: Plan['nodes'][number], cpu: boolean) => ({ ...faces, options: ['native:cuda', 'native:cpu'], place: cpu ? 'native:cpu' : 'native:cuda',
+  where: cpu ? 'native (cpu)' : 'native (cuda)', estimate_s: cpu ? null : 96,
+  estimate_basis: cpu ? 'no runs of vision.face-track@1.0.0 on native:cpu here yet' : 'median of 3 runs of vision.face-track@1.0.0 on native:cuda here',
+  estimates: { 'native:cuda': { estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:cuda here' },
+    'native:cpu': { estimate_s: null, estimate_basis: 'no runs of vision.face-track@1.0.0 on native:cpu here yet' } } });
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'demo-run', node, kind, message, at: null });
 const script: PipelineMessage[] = [
   { v: 1, type: 'run.created', run: 'demo-run', store: '~/.hyperstudy-perception' },
@@ -50,8 +75,10 @@ const script: PipelineMessage[] = [
 
 /** `rejectRun`: the app refuses to start the run (as when another run is in progress). `slowStart`: the first message
  *  takes a long time (a first environment sync), so the run can be canceled before it has an id. `noNeeds`: a CLI
- *  from before plans said what each node needs. */
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false } = {}): PipelineApi {
+ *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
+ *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
+ *  needs captions (which sends data off): turning it on brings captions along. */
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false } = {}): PipelineApi {
   let folder: string | null = null;
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
@@ -59,18 +86,23 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     folder: async () => folder,
     setFolder: async (path) => { folder = path; return doctor; },
     doctor: async () => doctor,
-    graphs: async () => graphs,
-    async plan(_graph, _video, places) {   // faces can run on the Apple GPU (measured before) or the CPU (never yet)
-      const cpu = places.faces === 'native:cpu';
-      const nodes = noNeeds ? plan.nodes.map(({ needs: _, ...n }) => n) : plan.nodes;
-      return { ...plan, nodes: nodes.map((n) => n.id !== 'faces' ? n : { ...n, place: cpu ? 'native:cpu' : 'native:mps', where: cpu ? 'native (cpu)' : 'native (mps)',
-        estimate_s: cpu ? null : 96, estimate_basis: cpu ? 'no runs of vision.face-track@1.0.0 on native:cpu here yet' : 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' }) };
+    graphs: async () => oldCli ? graphs.filter((g) => g.file !== 'full.yaml') : graphs,   // an older pipeline has no full graph
+    async plan(_graph, _video, places, settings) {
+      if (oldCli) return { ...plan, nodes: plan.nodes.map(({ needs, place, options, estimates, estimate_s, estimate_basis, title, service, description, outputs, models, settings, ...n }) => n) };
+      const opus = settings.captions?.model === 'claude-opus-5-5';   // 52 shots: $0.003 or $0.12 each
+      const nodes = plan.nodes.map((n) => n.id === 'captions' ? { ...n, cost_usd: opus ? 6.24 : 0.156,
+        settings: n.settings!.map((x) => x.key === 'model' ? { ...x, value: opus ? 'claude-opus-5-5' : 'claude-haiku-5-5' } : x) }
+        : n.id === 'faces' && twoPlaces_ ? twoPlaces(n, places.faces === 'native:cpu') : n);
+      const all = summary ? [...nodes, { id: 'summary', needs: ['captions'], title: 'Summary', uses: 'test.summary@1.0.0', where: 'native (cpu)', why_not: '', cached: false,
+        downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:cpu', options: ['native:cpu'], estimate_s: 3, estimate_basis: '' }] : nodes;
+      return { ...plan, nodes: noNeeds ? all.map(({ needs: _, ...n }) => n) : all };
     },
-    async run(_graph, _video, _allow, _places, _only, on) {
+    async run(_graph, _video, _allow, _places, only, _settings, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       listener = on;
       const first = slowStart ? 60_000 : 0;
-      timers = script.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
+      const ran = script.filter((m) => m.type !== 'event' || !m.node || !only || only.includes(m.node));   // as --only does
+      timers = ran.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
       return () => timers.forEach(clearTimeout);
     },
     async cancel(run) {

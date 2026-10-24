@@ -128,7 +128,8 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
 dialog (`PipelineDialog.svelte`) that goes in order:
 - **Pipeline folder.** The hyperstudy-perception folder (a setting, migration 3), checked with `perception doctor`.
 - **Video and graph.** A video, and one of the pipeline's `graphs/*.yaml`.
-- **Plan.** Placement, cache hits, model downloads (allowed explicitly), missing secrets and cost per node.
+- **Plan.** Placement, cache hits, model downloads, missing secrets and cost per node. (Downloads were first allowed
+  explicitly, as uploads were; both are now part of running the features chosen, see Features below.)
 - **Run.** Node by node as it happens. On success the bundle is exported, imported into the library, its video's
   sha256 checked and its location recorded, and the dialog offers to open it.
 
@@ -163,6 +164,18 @@ Checked:
 - Each place in the menu shows its own estimate (perception #13's per-option `estimates`), so places can be compared
   before moving a node. Step checkboxes appear only when the plan says what every step needs (an older CLI's plan
   would let a step run without its inputs); without them the whole graph runs.
+
+- **Features** (perception #14): the app runs the pipeline's `graphs/full.yaml` and offers each node as a feature by its
+  title. Turning one on brings what it needs, held on while something needs it ("Needed by …"); a feature that sends
+  data off the machine or costs money starts off. Each step opens to its details (what it makes, the models it uses
+  and their licences, what leaves the machine, where it can run and how long each place takes) and its fixed-choice
+  settings (a model, with its price), sent as `--set`. Nothing asks for approval: a step's models download as part
+  of running, and turning on a feature that sends data to a cloud API (it starts off) is the choice to send it; a
+  feature that would bring such a step along waits until the user turns that step on ("Turn on Shot captions first"),
+  so sending is never chosen by bringing a step along. The app passes `--allow-uploads` then, after holding a fresh
+  plan to exactly what the steps the user turned on send (`upload_gate`, per node and kind). A step that runs on a hosted
+  API shows it ("Anthropic API (cloud)"). Progress is one colour: a running step fills against its estimate, a
+  finished one is full. A pipeline folder with no full graph offers its graphs instead.
 
 Not yet:
 - each choice's price, not only its duration: every place is local and free today, so this comes with the cloud

@@ -74,19 +74,40 @@ pub fn stop_process(pid: u32) -> Result<()> {
     if status.success() { Ok(()) } else { Err(Error::Bundle(format!("could not stop the pipeline process {pid}"))) }
 }
 
-/// The app's own check, against a fresh plan, that nothing leaves this machine without the user's consent. Every node
-/// counts, cached ones too (a cache can be gone by the time the run starts), and a plan that does not say what a node
-/// sends (a CLI from before plans carried `uploads`) is refused.
-pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
+/// What the user agreed may leave this machine: node id -> the kinds of data it sends and where to (what the plan on
+/// screen showed for the features they turned on).
+pub type Uploads = std::collections::BTreeMap<String, Agreed>;
+
+#[derive(Debug, Default, Clone, serde::Deserialize, PartialEq)]
+pub struct Agreed {
+    pub kinds: Vec<String>,
+    /// the hosted API it sends them to (the plan's `service`), or none
+    pub service: Option<String>,
+}
+
+/// The app's own check, against a fresh plan of what is about to run, that nothing leaves this machine beyond what the
+/// user agreed to: a node that sends a kind of data not agreed for it is refused. Every node counts, cached ones too (a
+/// cache can be gone by the time the run starts), and a plan that does not say what a node sends (a CLI from before
+/// plans carried `uploads`) is refused.
+pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
     let nodes = plan["nodes"].as_array().ok_or_else(|| Error::Bundle("the pipeline's plan lists no nodes; nothing could be checked".into()))?;
     for n in nodes {
         let id = n["id"].as_str().unwrap_or("?");
         let Some(uploads) = n["uploads"].as_array() else {
             return Err(Error::Bundle(format!("the pipeline does not say what {id} sends off this machine; update hyperstudy-perception")));
         };
-        if !uploads.is_empty() && !allowed {
-            let kinds: Vec<&str> = uploads.iter().filter_map(|u| u.as_str()).collect();
-            return Err(Error::Bundle(format!("{id} sends {} off this machine, which was not allowed", kinds.join(", "))));
+        let agreed = allowed.get(id).map(|a| a.kinds.as_slice()).unwrap_or_default();
+        // an entry that is not a kind's name is not something that was agreed to: the plan is refused, not read around
+        let kinds = uploads.iter().map(|u| u.as_str()).collect::<Option<Vec<&str>>>()
+            .ok_or_else(|| Error::Bundle(format!("the pipeline's plan does not say plainly what {id} sends off this machine")))?;
+        let beyond: Vec<&str> = kinds.into_iter().filter(|k| !agreed.iter().any(|a| a == k)).collect();
+        if !beyond.is_empty() {
+            return Err(Error::Bundle(format!("{id} would send {} off this machine, which was not agreed to", beyond.join(", "))));
+        }
+        // the same data sent somewhere else is not what was agreed to either
+        let service = n["service"].as_str();
+        if !uploads.is_empty() && allowed.get(id).and_then(|a| a.service.as_deref()) != service {
+            return Err(Error::Bundle(format!("{id} would send its data to {}, which was not agreed to", service.unwrap_or("another place"))));
         }
     }
     Ok(())
@@ -187,6 +208,25 @@ pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result
             return Err(Error::Bundle(format!("not a node and a place: {node:?} = {place:?}")));
         }
         out.extend(["--place".to_string(), format!("{node}={place}")]);
+    }
+    Ok(out)
+}
+
+/// `--set node.key=value` for the settings the user chose (node -> key -> value). Only the fixed choices a plan offers
+/// are chosen in the app (a model name, an effort), so a value is a plain word: letters, digits and `.`, `_`, `-`.
+pub fn set_args(settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>) -> Result<Vec<String>> {
+    let starts = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric());
+    let id_ok = |s: &str| starts(s) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let key_ok = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_lowercase()) && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    let value_ok = |s: &str| starts(s) && s.len() <= 100 && s.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c));
+    let mut out = vec![];
+    for (node, keys) in settings {
+        for (key, value) in keys {
+            if !(id_ok(node) && key_ok(key) && value_ok(value)) {
+                return Err(Error::Bundle(format!("not a node's setting: {node:?}.{key:?} = {value:?}")));
+            }
+            out.extend(["--set".to_string(), format!("{node}.{key}={value}")]);
+        }
     }
     Ok(out)
 }
@@ -459,18 +499,36 @@ mod tests {
     }
 
     #[test]
-    fn a_run_is_refused_when_data_would_leave_without_consent_or_the_plan_does_not_say() {
+    fn a_run_is_refused_when_data_would_leave_beyond_what_was_agreed_or_the_plan_does_not_say() {
         let plan = |uploads: Value| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
             {"id": "decode", "cached": false, "uploads": []},
             {"id": "captions", "cached": true, "uploads": uploads}]});
-        assert!(upload_gate(&plan(serde_json::json!(["frames"])), true).is_ok());
-        // a cached node can still run (its cache can be gone by then): consent covers it too
-        assert!(upload_gate(&plan(serde_json::json!(["frames"])), false).unwrap_err().to_string().contains("captions sends frames"));
-        assert!(upload_gate(&plan(serde_json::json!([])), false).is_ok());
+        let agreed = |pairs: &[(&str, &[&str])]| -> Uploads {
+            pairs.iter().map(|(n, ks)| (n.to_string(), Agreed { kinds: ks.iter().map(|k| k.to_string()).collect(), service: None })).collect()
+        };
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[("captions", &["frames"])])).is_ok());
+        // a cached node can still run (its cache can be gone by then): it needs the agreement too
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[])).unwrap_err().to_string().contains("captions would send frames"));
+        // agreeing to frames is not agreeing to the transcript, nor is agreeing for another node
+        assert!(upload_gate(&plan(serde_json::json!(["frames", "transcript"])), &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("send transcript"));
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[("decode", &["frames"])])).is_err());
+        assert!(upload_gate(&plan(serde_json::json!([])), &agreed(&[])).is_ok());
+        // the same kinds sent to another service than agreed are refused
+        let to = |service: Option<&str>| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
+            {"id": "captions", "cached": false, "uploads": ["frames"], "service": service}]});
+        let agreed_to = |service: Option<&str>| -> Uploads {
+            [("captions".to_string(), Agreed { kinds: vec!["frames".into()], service: service.map(String::from) })].into_iter().collect()
+        };
+        assert!(upload_gate(&to(Some("Anthropic API")), &agreed_to(Some("Anthropic API"))).is_ok());
+        assert!(upload_gate(&to(Some("Other API")), &agreed_to(Some("Anthropic API"))).unwrap_err().to_string().contains("to Other API"));
+        assert!(upload_gate(&to(None), &agreed_to(Some("Anthropic API"))).is_err());
+        // an entry that is not a kind's name is refused, not skipped (fail closed)
+        assert!(upload_gate(&plan(serde_json::json!(["frames", 1])), &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("plainly"));
+        assert!(upload_gate(&plan(serde_json::json!([{"kind": "video"}])), &agreed(&[])).is_err());
         let older = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [{"id": "captions", "cached": false}]});
-        assert!(upload_gate(&older, true).unwrap_err().to_string().contains("does not say what captions sends"));
+        assert!(upload_gate(&older, &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("does not say what captions sends"));
         let empty = serde_json::json!({"v": 1, "type": "plan", "ok": true});   // no node list: nothing was checked
-        assert!(upload_gate(&empty, true).unwrap_err().to_string().contains("no nodes"));
+        assert!(upload_gate(&empty, &agreed(&[])).unwrap_err().to_string().contains("no nodes"));
     }
 
     #[test]
@@ -547,6 +605,20 @@ mod tests {
             let mut bad = std::collections::BTreeMap::new();
             bad.insert(node.to_string(), place.to_string());
             assert!(place_args(&bad).is_err(), "{node}={place}");
+        }
+    }
+
+    #[test]
+    fn settings_become_set_arguments_only_as_plain_words() {
+        let one = |node: &str, key: &str, value: &str| {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(node.to_string(), std::collections::BTreeMap::from([(key.to_string(), value.to_string())]));
+            m
+        };
+        assert_eq!(set_args(&one("captions", "model", "claude-opus-5-5")).unwrap(), vec!["--set".to_string(), "captions.model=claude-opus-5-5".to_string()]);
+        for (node, key, value) in [("captions", "model", "x --allow-uploads"), ("captions", "model", "-x"), ("captions", "model", ""),
+                                   ("captions", "Model", "a"), ("captions", "model.x", "a"), ("../x", "model", "a"), ("captions", "model", "{a: b}")] {
+            assert!(set_args(&one(node, key, value)).is_err(), "{node}.{key}={value}");
         }
     }
 

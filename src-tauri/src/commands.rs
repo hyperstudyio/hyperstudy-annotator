@@ -214,28 +214,33 @@ pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
     pipeline(&state)?.graphs()
 }
 
+/// The settings the user chose: node -> key -> value (`--set`).
+type Settings = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
+
 /// What a run of `graph` on `video` would do: placement, cache, downloads, missing secrets and cost per node.
 #[tauri::command]
 pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: String,
-                           places: Option<std::collections::BTreeMap<String, String>>) -> Result<Value> {
+                           places: Option<std::collections::BTreeMap<String, String>>, settings: Option<Settings>) -> Result<Value> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
     let mut args = vec!["plan".to_string(), g.to_string_lossy().into_owned(), "--input".into(), format!("video={video}")];
     args.extend(pipeline::place_args(&places.unwrap_or_default())?);
+    args.extend(pipeline::set_args(&settings.unwrap_or_default())?);
     blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "plan")).await
 }
 
 /// Start a run. Its objects arrive as `pipeline` events; when it succeeds, the bundle is exported, imported into the
 /// library and its video recorded, then an `imported` event carries the bundle's summary.
 #[tauri::command]
-pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool,
-                    allow_uploads: bool, places: Option<std::collections::BTreeMap<String, String>>,
-                    only: Option<Vec<String>>) -> Result<()> {
+pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String,
+                    uploads: Option<pipeline::Uploads>, places: Option<std::collections::BTreeMap<String, String>>,
+                    only: Option<Vec<String>>, settings: Option<Settings>) -> Result<()> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
-    // where nodes run and which run: both reach the consent re-check and the run itself
+    // where nodes run, which run and their settings: all reach the consent re-check and the run itself
     let mut places = pipeline::place_args(&places.unwrap_or_default())?;
     places.extend(pipeline::only_args(&only.unwrap_or_default())?);
+    places.extend(pipeline::set_args(&settings.unwrap_or_default())?);
     {
         let mut running = state.running.lock().unwrap();
         if running.is_some() {
@@ -246,7 +251,7 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     }
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };   // a panic clears it too
-        let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads, &places) {
+        let last = match run_and_import(&app, &p, &g, &video, &uploads.unwrap_or_default(), &places) {
             Ok(last) => last,
             Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
         };
@@ -271,19 +276,20 @@ pub fn check_cancel(running: Option<&str>, run: &str) -> Result<()> {
 }
 
 /// The run, then its import; the final `imported` event, for the caller to send once the run is no longer in progress.
-fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool,
-                  allow_uploads: bool, places: &[String]) -> Result<Option<Value>> {
+fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str,
+                  uploads: &pipeline::Uploads, places: &[String]) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
     let input = format!("video={video}");
     let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
     // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
     let places: Vec<&str> = places.iter().map(String::as_str).collect();
     let plan_args = [&["plan", graph, "--input", &input][..], &places].concat();
-    pipeline::upload_gate(&p.one(&plan_args, "plan")?, allow_uploads)?;
+    pipeline::upload_gate(&p.one(&plan_args, "plan")?, uploads)?;
     state.control.before_start()?;   // canceled while that plan ran: nothing starts
-    let mut args = [&["run", graph, "--input", &input][..], &places].concat();
-    if allow_downloads {
-        args.push("--allow-downloads");
+    // models download as part of running the features chosen (their details list them)
+    let mut args = [&["run", graph, "--input", &input, "--allow-downloads"][..], &places].concat();
+    if uploads.values().any(|a| !a.kinds.is_empty()) {   // the upload gate above held the fresh plan to exactly these
+        args.push("--allow-uploads");
     }
     let outcome = p.run_to_end_with(&args, |pid| {
         if state.control.spawned(pid) {   // canceled between the consent check and now: stop what just started

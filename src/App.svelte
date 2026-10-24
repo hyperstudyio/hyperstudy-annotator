@@ -18,7 +18,7 @@
   if (!desktop) {
     const q = new URLSearchParams(location.search);
     const bundle = q.get('bundle');
-    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (demo = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs' })));
+    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (demo = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary' })));
     if (bundle) httpSource(bundle, q.get('video'), q.get('previous')).then((s) => (source = s)).catch((e) => (error = String(e)));
   }
 
