@@ -72,6 +72,9 @@ test('a node that can run in several places can be moved, and the plan says how 
   await expect(faces).toContainText('about 1 min 36 s');
   const menu = faces.getByRole('combobox', { name: 'Where faces runs' });
   await expect(menu.getByRole('option')).toHaveText(['native:mps · about 1 min 36 s', 'native:cpu · no estimate yet']);   // compare before moving
+  // a menu is as wide as its longest option: it stays inside its column, not over the estimate beside it
+  const [box, cell] = await Promise.all([menu.boundingBox(), menu.locator('xpath=ancestor::td').boundingBox()]);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(cell!.x + cell!.width);
   await faces.getByRole('combobox', { name: 'Where faces runs' }).selectOption('native:cpu');
   await expect(dialog.getByRole('row', { name: /^Run faces/ })).toContainText('no estimate yet');
   await expect(dialog.getByText(/^Estimated time: about/)).toBeVisible();

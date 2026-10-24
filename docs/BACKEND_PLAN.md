@@ -160,8 +160,13 @@ Checked:
   is pruned rather than a graph built from manifests: wiring nodes by artifact type is ambiguous (captions consumes and
   refines shots).
 
+- Each place in the menu shows its own estimate (perception #13's per-option `estimates`), so places can be compared
+  before moving a node. Step checkboxes appear only when the plan says what every step needs (an older CLI's plan
+  would let a step run without its inputs); without them the whole graph runs.
+
 Not yet:
-- estimates for every option, not only the chosen place (the plan asks for each choice's duration and price);
+- each choice's price, not only its duration: every place is local and free today, so this comes with the cloud
+  backends, whose places cost money;
 - the cloud and SSH backends (their places will join the same menus);
 - the native window checked by hand.
 
