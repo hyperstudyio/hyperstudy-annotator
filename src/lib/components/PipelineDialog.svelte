@@ -144,7 +144,8 @@
         </tbody>
       </table>
       {#if total && !started}
-        <div class="meta">Estimated time: about {duration(total.seconds)}{total.unknown.length ? `, not counting ${total.unknown.join(', ')} (no estimate yet: never run here in that place)` : ''}</div>
+        <!-- each node's own reason for having no estimate is on its row (hover) -->
+        <div class="meta">Estimated time: about {duration(total.seconds)}{total.unknown.length ? `, not counting ${total.unknown.join(', ')} (no estimate)` : ''}</div>
       {/if}
       {#if uploading.length && !started}
         <label class="row"><input type="checkbox" bind:checked={allowUploads} /> Send {[...new Set(uploading.flatMap((n) => n.uploads ?? []))].join(', ')} off this machine ({uploading.map((n) => n.id).join(', ')})</label>

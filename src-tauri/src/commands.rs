@@ -239,6 +239,7 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
             return Err(Error::Bundle("a pipeline run is already in progress".into()));
         }
         *running = Some(String::new());
+        state.control.start();
     }
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };   // a panic clears it too
@@ -327,8 +328,7 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
             let p = pipeline(&state)?;
             return blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await;
         }
-        let in_progress = state.running.lock().unwrap().is_some();
-        return match state.control.cancel(in_progress) {
+        return match state.control.cancel() {
             pipeline::Cancel::Stop(pid) => pipeline::stop_process(pid),
             pipeline::Cancel::WillNotStart => Ok(()),
             pipeline::Cancel::Nothing => Err(Error::Bundle("no pipeline run is in progress".into())),
