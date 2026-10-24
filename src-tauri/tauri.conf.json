@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "io.hyperstudy.annotator",
   "build": {
-    "beforeDevCommand": "sh scripts/fetch-uv.sh && npm run dev",
+    "beforeDevCommand": "bash scripts/fetch-uv.sh && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "sh scripts/fetch-uv.sh && npm run build",
+    "beforeBuildCommand": "bash scripts/fetch-uv.sh && npm run build",
     "frontendDist": "../dist"
   },
   "app": {

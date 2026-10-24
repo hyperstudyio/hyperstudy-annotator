@@ -233,15 +233,26 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
         *running = Some(String::new());
     }
     std::thread::spawn(move || {
-        if let Err(e) = run_and_import(&app, &p, &g, &video, allow_downloads) {
-            let _ = app.emit("pipeline", serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]}));
-        }
+        let last = match run_and_import(&app, &p, &g, &video, allow_downloads) {
+            Ok(last) => last,
+            Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
+        };
+        // cleared before the last event: once the dialog hears it, a new run may start
         *app.state::<AppState>().running.lock().unwrap() = None;
+        if let Some(last) = last {
+            let _ = app.emit("pipeline", last);
+        }
     });
     Ok(())
 }
 
-fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool) -> Result<()> {
+/// Cancel only the run in progress (a stale dialog must not cancel another).
+pub fn check_cancel(running: Option<&str>, run: &str) -> Result<()> {
+    if !run.is_empty() && running == Some(run) { Ok(()) } else { Err(Error::Bundle(format!("run {run:?} is not the one in progress"))) }
+}
+
+/// The run, then its import; the final `imported` event, for the caller to send once the run is no longer in progress.
+fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
     let input = format!("video={video}");
     let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
@@ -255,10 +266,10 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
         }
         let _ = app.emit("pipeline", o);
     })?;
-    let Some((run, status)) = outcome else { return Ok(()) };   // refused: its objects said why
+    let Some((run, status)) = outcome else { return Ok(None) };   // refused: its objects said why
     let run = pipeline::run_id(&run)?.to_string();   // it names a folder this function deletes
     if status != "succeeded" {
-        return Ok(());   // its events said what failed
+        return Ok(None);   // its events said what failed
     }
 
     let out = state.data_dir.join("exports").join(&run);
@@ -275,15 +286,25 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     let conn = state.db.lock().unwrap();
     library::record_video(&conn, &summary.video_sha256, video)?;
     let summary = library::get(&conn, &summary.id)?;
-    let _ = app.emit("pipeline", serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary}));
-    Ok(())
+    Ok(Some(serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary})))
 }
 
 #[tauri::command]
 pub async fn pipeline_cancel(state: State<'_, AppState>, run: String) -> Result<()> {
-    if state.running.lock().unwrap().as_deref() != Some(run.as_str()) {
-        return Err(Error::Bundle(format!("run {run} is not the one in progress")));
-    }
+    check_cancel(state.running.lock().unwrap().as_deref(), &run)?;
     let p = pipeline(&state)?;
     blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_run_in_progress_can_be_canceled() {
+        assert!(check_cancel(Some("20261024-095828-1ad462"), "20261024-095828-1ad462").is_ok());
+        assert!(check_cancel(Some("20261024-095828-1ad462"), "20261024-090000-000000").is_err());
+        assert!(check_cancel(None, "20261024-095828-1ad462").is_err());
+        assert!(check_cancel(Some(""), "").is_err());   // starting: the CLI has not named the run yet
+    }
 }

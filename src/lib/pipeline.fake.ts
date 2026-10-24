@@ -43,7 +43,8 @@ const script: PipelineMessage[] = [
     imported_at: '', layers: {}, video_path: '/videos/clip.mp4', corrections: 0, manifest_sha256: 'e'.repeat(64) } },
 ];
 
-export function fakePipeline(stepMs = 400): PipelineApi {
+/** `rejectRun`: the app refuses to start the run (as when another run is in progress). */
+export function fakePipeline(stepMs = 400, { rejectRun = false } = {}): PipelineApi {
   let folder: string | null = null;
   return {
     folder: async () => folder,
@@ -52,6 +53,7 @@ export function fakePipeline(stepMs = 400): PipelineApi {
     graphs: async () => graphs,
     plan: async () => plan,
     async run(_graph, _video, _allow, on) {
+      if (rejectRun) throw new Error('a pipeline run is already in progress');
       const timers = script.map((m, i) => setTimeout(() => on(m), stepMs * (i + 1)));   // the demo's pacing
       return () => timers.forEach(clearTimeout);
     },

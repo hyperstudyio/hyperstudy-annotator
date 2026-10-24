@@ -4,13 +4,14 @@
 # pinned, so a replaced asset is caught, not only a corrupted download), unpacked to src-tauri/binaries/uv-<target triple>
 # (git-ignored). Runs before `tauri dev` and `tauri build`; does nothing when the right version is already there.
 # To move to a newer uv: change UV_VERSION and the four sha256 values (each release publishes uv-<triple>.tar.gz.sha256).
+# A fresh checkout needs it before anything builds the Rust side (`cargo test` too: tauri-build checks externalBin).
 # uv is MIT OR Apache-2.0 (https://github.com/astral-sh/uv), so the app may redistribute it.
 set -euo pipefail
 UV_VERSION=0.13.5
 triple=${TAURI_ENV_TARGET_TRIPLE:-$(rustc -vV | sed -n 's/^host: //p')}
 dir=$(cd "$(dirname "$0")/.." && pwd)/src-tauri/binaries
 out=$dir/uv-$triple
-if [ -x "$out" ] && "$out" --version | grep -q "^uv $UV_VERSION\b"; then exit 0; fi
+if [ -x "$out" ] && "$out" --version | grep -q "^uv $UV_VERSION "; then exit 0; fi
 case "$triple" in   # sha256 of uv-<triple>.tar.gz for UV_VERSION
   aarch64-apple-darwin)      expected=743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9cd73 ;;
   x86_64-apple-darwin)       expected=b0f52b0e3945b4107d89024ea38e625683011fbfc05a0d98f9fa2d6dcee28c66 ;;

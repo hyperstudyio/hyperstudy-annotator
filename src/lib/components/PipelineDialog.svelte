@@ -2,6 +2,7 @@
   // Run the perception pipeline on a video and import the bundle it makes: the pipeline folder (checked by
   // `perception doctor`), a video, one of the pipeline's graphs, the plan (where each node runs, what is cached, what
   // must be downloaded, what it costs), then the run, node by node.
+  import { latestOnly } from '../latest';
   import { blockers, foldRun, runnable, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
@@ -49,13 +50,19 @@
   });
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };
   const chooseGraph = async (file: string) => { graph = file; await makePlan(); };
-  const makePlan = () => step('Planning…', async () => {
-    plan = null;
-    if (graph && video) plan = await api.plan(graph, video);
-  });
+  // A permission to download is for the plan on screen: a new plan takes it back. Only the newest plan request may set
+  // the plan, so a slow one cannot show one graph while another would run.
+  const newestPlan = latestOnly();
+  const makePlan = async () => {
+    plan = null; allowDownloads = false; error = null;
+    if (!graph || !video) return;
+    busy = 'Planning…';
+    newestPlan(api.plan(graph, video), (p) => { plan = p; busy = null; }, (e) => { error = String(e); busy = null; });
+  };
   const run = () => step('Starting…', async () => {
     started = true; msgs = [];
-    stop = await api.run(graph!, video!, allowDownloads, (m) => { msgs = [...msgs, m]; });
+    try { stop = await api.run(graph!, video!, allowDownloads, (m) => { msgs = [...msgs, m]; }); }
+    catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { if (view.run) await api.cancel(view.run); });
 

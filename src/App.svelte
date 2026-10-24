@@ -18,7 +18,7 @@
   if (!desktop) {
     const q = new URLSearchParams(location.search);
     const bundle = q.get('bundle');
-    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (demo = m.fakePipeline()));
+    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (demo = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run' })));
     if (bundle) httpSource(bundle, q.get('video'), q.get('previous')).then((s) => (source = s)).catch((e) => (error = String(e)));
   }
 
