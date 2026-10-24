@@ -106,11 +106,11 @@ describe('the op log', () => {
     expect(b.ops.map((o) => (o as { name: string }).name)).toEqual(['from a', 'from b']);
   });
 
-  test('an import naming ids this bundle lacks is refused as a whole', () => {
+  test('an import naming ids this bundle lacks is refused as a whole', async () => {
     const { s } = session();
     const file = (ops: unknown[]) => JSON.stringify({ format: 'perception-corrections/1', sha256: SHA, ops });
-    expect(s.parseCorrections(file([{ op: 'track.assign', track: 3, person: 'Person A', at: 't' }]))).toHaveLength(1);
-    expect(() => s.parseCorrections(file([{ op: 'track.assign', track: 99, person: 'Person A', at: 't' }]))).toThrow(/face:99/);
+    expect(await s.parseCorrections(file([{ op: 'track.assign', track: 3, person: 'Person A', at: 't' }]))).toHaveLength(1);
+    await expect(s.parseCorrections(file([{ op: 'track.assign', track: 99, person: 'Person A', at: 't' }]))).rejects.toThrow(/face:99/);
   });
 });
 
@@ -132,12 +132,12 @@ describe('segments', () => {
 
 // The user's cleaned identity file from the prototype, against the bundle converted from the same run.
 const RUN = '/Users/lukechang/Github/hyperstudy/.claude/worktrees/video-perception-bakeoff/tools/perception-bakeoff/runs/ooo-genz-clip1';
-test.skipIf(!existsSync(`${RUN}/perception_corrections.json`))('the prototype\'s real corrections file imports with no unknown ids', () => {
+test.skipIf(!existsSync(`${RUN}/perception_corrections.json`))('the prototype\'s real corrections file imports with no unknown ids', async () => {
   const manifest = JSON.parse(readFileSync(`${RUN}/bundle/manifest.json`, 'utf8'));
   const layers = Object.fromEntries(['shots', 'transcript', 'speakers', 'faces', 'bodies', 'hands', 'gestures', 'facing', 'gaze', 'objects', 'sounds', 'text', 'prosody', 'waveform']
     .map((n) => [n, manifest.layers[n] && n !== 'bodies' && n !== 'hands' ? JSON.parse(readFileSync(`${RUN}/bundle/${manifest.layers[n].file}`, 'utf8')) : null])) as unknown as Layers;
   const s = new Session(new Bundle(manifest, layers), new LocalCorrectionStore(manifest.video.sha256, new MemoryStorage()), new View('x', null));
-  const ops = s.parseCorrections(readFileSync(`${RUN}/perception_corrections.json`, 'utf8'));
+  const ops = await s.parseCorrections(readFileSync(`${RUN}/perception_corrections.json`, 'utf8'));
   expect(ops).toHaveLength(88);
 });
 
@@ -153,7 +153,7 @@ describe('carry-over', () => {
   const record = (carried: number) => ({ from_bundle_id: 'v1', status: 'carried' as const, carried, unmatched, created_at: '' });
   const lineage = (rec: ReturnType<typeof record> | null) => ({
     record: async () => rec, previous: async () => ({ id: 'v1', label: 'v1', corrections: 2, open: async () => { throw new Error('unused'); } }),
-    carry: async () => 0, decline: async () => {}, dismiss: async () => rec!,
+    carry: async () => 0, decline: async () => {}, dismiss: async () => rec!, others: async () => 1, find: async () => null,
   });
 
   test('a version opened with carried ops in its log shows what was not carried, and offers nothing', async () => {
@@ -174,5 +174,50 @@ describe('carry-over', () => {
     expect(await s.checkCarry(lineage(record(1)))).toMatchObject({ id: 'v1' });
     expect(s.notCarried).toEqual([]);
     expect(await s.checkCarry(lineage(null))).toMatchObject({ id: 'v1' });   // never carried: offered
+  });
+});
+
+describe('which run a corrections file was made on', () => {
+  const file = (ops: unknown[], bundle?: string) => JSON.stringify({ format: 'perception-corrections/2', sha256: SHA, ...(bundle ? { bundle } : {}), ops });
+  const caption = { op: 'shot.caption', shot: 'shot:0', caption: 'a' };
+  const lineage = (versions: Record<string, ReturnType<typeof makeBundle>>) => ({
+    record: async () => null, previous: async () => null, carry: async () => 0, decline: async () => {}, dismiss: async () => { throw new Error(); },
+    others: async () => Object.keys(versions).length,
+    find: async (key: string) => versions[key] ? { id: key, label: key, corrections: 0, open: async () => ({ bundle: versions[key] }) } as never : null,
+  });
+  const load = async (v: { open(): Promise<unknown> }) => ((await v.open()) as { bundle: ReturnType<typeof makeBundle> }).bundle;
+
+  test('an export records the bundle it was made on', () => {
+    const { s } = session(makeBundle({}, 'this-run'));
+    expect(JSON.parse(s.exportCorrections()).bundle).toBe('this-run');
+  });
+
+  test('a file made on this run imports as it is', async () => {
+    const { s } = session(makeBundle({}, 'this-run'));
+    expect(await s.parseCorrections(file([caption], 'this-run'), lineage({ other: makeBundle({}, 'other') }), load)).toEqual([caption]);
+  });
+
+  test('a file from another run in the library is re-anchored when everything matches', async () => {
+    const { s } = session(makeBundle({}, 'this-run'));
+    const ops = await s.parseCorrections(file([caption], 'other'), lineage({ other: makeBundle({}, 'other') }), load);
+    expect(ops).toMatchObject([{ ...caption, carried_from: { bundle: 'other', index: 0 } }]);
+  });
+
+  test('a file from another run is refused when some of it does not match, pointing to carry-over', async () => {
+    const other = makeBundle({}, 'other');
+    const { s } = session(makeBundle({ faces: { ...other.layers.faces!, tracks: other.faces.filter((t) => t.id !== 'face:3') } }, 'this-run'));
+    await expect(s.parseCorrections(file([caption, { op: 'entity.include', id: 'face:3', included: false }], 'other'), lineage({ other }), load))
+      .rejects.toThrow(/1 of its 2 corrections could not be matched.*carry/);
+  });
+
+  test('a file from a run the library does not have is refused', async () => {
+    const { s } = session(makeBundle({}, 'this-run'));
+    await expect(s.parseCorrections(file([caption], 'gone'), lineage({}), load)).rejects.toThrow(/another run of this video that is not in the library/);
+  });
+
+  test('an old file that does not say its run is refused when the video has several runs, and imports when it has one', async () => {
+    const { s } = session(makeBundle({}, 'this-run'));
+    await expect(s.parseCorrections(file([caption]), lineage({ other: makeBundle({}, 'other') }), load)).rejects.toThrow(/does not say which run/);
+    expect(await s.parseCorrections(file([caption]), lineage({}), load)).toEqual([caption]);
   });
 });

@@ -32,6 +32,8 @@ export class Bundle {
   readonly width: number;
   readonly height: number;
   readonly sha256: string;
+  /** This bundle's identity, its manifest's sha256 (a re-run of the same video is another bundle); null when unknown. */
+  readonly key: string | null;
 
   readonly shots: Shot[];
   readonly utterances: Utterance[];
@@ -65,8 +67,9 @@ export class Bundle {
   /** py-feat per sample, loaded on demand (a large side file): see loadDetail(). */
   detail: FacesDetail | null = null;
 
-  constructor(manifest: Manifest, layers: Layers) {
+  constructor(manifest: Manifest, layers: Layers, key: string | null = null) {
     this.manifest = manifest;
+    this.key = key;
     this.layers = layers;
     this.duration = manifest.video.duration;
     this.width = manifest.video.width;
@@ -108,7 +111,7 @@ export class Bundle {
   /** Load every layer the manifest lists. */
   static async load(source: BundleSource): Promise<Bundle> {
     const loaded = await Promise.all(NAMES.map((n) => source.layer<unknown>(n)));
-    return new Bundle(source.manifest, Object.fromEntries(NAMES.map((n, i) => [n, loaded[i]])) as unknown as Layers);
+    return new Bundle(source.manifest, Object.fromEntries(NAMES.map((n, i) => [n, loaded[i]])) as unknown as Layers, source.bundleSha256);
   }
 
   async loadDetail(source: BundleSource): Promise<FacesDetail | null> {

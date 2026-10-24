@@ -16,11 +16,13 @@
   // Checked on opening (which also loads what was not carried) and whenever the log becomes empty or stops being
   // empty: an undo that takes a carry-over back offers it again.
   const empty = $derived(s.ops.length === 0);
+  let check = 0;   // only the newest check sets the offer: an older one finishing later would show a stale offer
   $effect(() => {
     const lineage = source.lineage;
     void empty;
     if (!lineage) return;
-    untrack(() => { s.checkCarry(lineage).then((o) => (offer = o)).catch((e) => (error = String(e))); });
+    const n = ++check;
+    untrack(() => { s.checkCarry(lineage).then((o) => { if (n === check) offer = o; }).catch((e) => (error = String(e))); });
   });
 
   async function carry() {
@@ -60,7 +62,8 @@
 {/if}
 
 <style>
-  .offer { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100vw - 32px)); z-index: 45;
+  /* over the video, below the header's banners (a corrections file found next to the bundle shows one there) */
+  .offer { position: fixed; top: 140px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100vw - 32px)); z-index: 45;
            background: var(--color-bg-card); border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 12px 14px;
            box-shadow: 0 8px 24px rgba(0, 0, 0, .4); }
   .title { font-weight: 600; margin-bottom: 4px; }

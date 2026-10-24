@@ -27,6 +27,7 @@ export interface BundleSummary {
   layers: Record<string, LicenceMode>;
   video_path: string | null;
   corrections: number;
+  manifest_sha256: string;
 }
 
 export interface Span { start: number; end: number }

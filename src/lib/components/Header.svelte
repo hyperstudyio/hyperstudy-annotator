@@ -16,9 +16,9 @@
   let dismissed = $state(false);
 
   $effect(() => {
-    source.findPrototypeCorrections().then((f) => {
+    source.findPrototypeCorrections().then(async (f) => {
       if (!f) return;
-      try { found = { ...f, ops: s.parseCorrections(f.text) }; }
+      try { found = { ...f, ops: await s.parseCorrections(f.text, source.lineage) }; }
       catch (e) { foundError = `${f.path}: ${e instanceof ImportError ? e.message : String(e)}`; }
     }).catch((e) => { foundError = String(e); });
   });
@@ -34,7 +34,7 @@
     try {
       const text = await source.pickCorrectionsFile();
       if (text === null) return;
-      await apply(s.parseCorrections(text), 'the file');
+      await apply(await s.parseCorrections(text, source.lineage), 'the file');
     } catch (e) { s.toast(e instanceof ImportError ? `Not imported: ${e.message}` : `Could not read that file: ${e}`); }
   }
   async function exportFile() {

@@ -25,7 +25,7 @@ export function face(id: number, person: string | null, shot: number, start: num
 export const utt = (id: number, start: number, end: number, shot: number, voice: string | null = 'voice:SPEAKER_00'): Utterance =>
   ({ id: `utt:${id}`, start, end, text: `utterance ${id}`, shot: `shot:${shot}`, voice });
 
-export function makeBundle(over: Partial<Layers> = {}): Bundle {
+export function makeBundle(over: Partial<Layers> = {}, key: string | null = null): Bundle {
   const manifest: Manifest = {
     format: 'hyperstudy-perception-bundle', schema_version: '0.1.0', created_at: '', pipeline: { name: 't', version: '0' }, layers: {},
     video: { sha256: SHA, duration: 20, fps: 25, width: 1920, height: 1080, filename: 'clip.mp4' },
@@ -64,5 +64,5 @@ export function makeBundle(over: Partial<Layers> = {}): Bundle {
     text: null, prosody: null, waveform: null,
     ...over,
   };
-  return new Bundle(manifest, layers);
+  return new Bundle(manifest, layers, key);
 }

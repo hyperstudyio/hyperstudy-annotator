@@ -106,7 +106,9 @@ export function lastBatch(ops: Op[]): number {
 
 // --- the prototype's v1 files ------------------------------------------------------------------------------------
 
-export interface CorrectionsFile { format: string; sha256: string; exported_at?: string; ops: unknown[] }
+/** `bundle`: the manifest sha256 of the bundle the ops were made on (exports from 2026-10-24 on; older files say only
+ *  which video). */
+export interface CorrectionsFile { format: string; sha256: string; bundle?: string; exported_at?: string; ops: unknown[] }
 
 /** Thrown when a v1 op refers to something this bundle has no id for; the import is refused as a whole. */
 export class ImportError extends Error {}
