@@ -140,6 +140,13 @@ export function picked(plan: Plan, wanted: Set<string>): { chosen: string[]; nee
   return { chosen, neededBy, only: chosen.length === plan.nodes.length ? null : chosen };
 }
 
+/** Steps that send data off this machine and run only because a feature the user turned on needs them: the user did
+ *  not turn these on, so the plan says on their rows what they send (a step the user turned on is their choice). */
+export function broughtAlong(plan: Plan, wanted: Set<string>): string[] {
+  const { chosen, neededBy } = picked(plan, wanted);
+  return chosen.filter((id) => !wanted.has(id) && neededBy[id] && plan.nodes.find((n) => n.id === id)?.uploads?.length);
+}
+
 /** The features on when a plan first shows: those that, with everything they need, keep all on this machine and cost
  *  nothing (a step that sends data off or costs money is the user's choice, and so is a feature that would bring one
  *  along). A plan that does not say what steps need runs whole. */

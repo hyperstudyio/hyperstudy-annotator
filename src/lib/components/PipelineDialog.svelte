@@ -5,7 +5,7 @@
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
-  import { blockers, canPick, choiceLabel, consentFor, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor, runnable,
+  import { blockers, broughtAlong, canPick, choiceLabel, consentFor, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor, runnable,
     settingsFor, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
@@ -29,6 +29,7 @@
   let stop: (() => void) | null = null;
 
   const pick = $derived(plan ? picked(plan, wanted ?? defaultFeatures(plan)) : { chosen: [], neededBy: {}, only: null });
+  const along = $derived(plan ? broughtAlong(plan, wanted ?? defaultFeatures(plan)) : []);   // uploads nobody turned on themselves
   // the plan of what will run: the features on and what they need (time, cost, consent and blockers count only these)
   const active = $derived(plan ? { ...plan, nodes: plan.nodes.filter((n) => pick.chosen.includes(n.id)) } : null);
   function toggle(id: string, on: boolean) {
@@ -233,6 +234,7 @@
               {#if started}{#if s.message}<span class="muted">{s.message}</span>{/if}
               {:else if on}
                 {#if needers}<span class="muted" id={`needed-${n.id}`}>Needed by {list(needers.map(titleOf))}</span>{/if}
+                {#if along.includes(n.id)}<span class="caution">Sends {list(n.uploads ?? [])} {n.service ? `to the ${n.service}` : 'off this machine'}, for {list((needers ?? []).map(titleOf))}</span>{/if}
                 {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
                 {#each n.missing_secrets as k (k)}<span class="error">Needs {k}</span>{/each}
@@ -351,6 +353,7 @@
   .time { text-align: right; font-variant-numeric: tabular-nums; color: var(--color-text-secondary); white-space: nowrap; }
   .notes { grid-column: 3 / -1; display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
   .notes:empty { display: none; }
+  .caution { color: var(--color-caution); }
 
   .track { position: relative; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .06); overflow: hidden; }
   /* progress, one colour: how far along a step is (full once done); a step running with no estimate slides */

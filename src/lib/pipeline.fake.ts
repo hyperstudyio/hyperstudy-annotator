@@ -76,8 +76,9 @@ const script: PipelineMessage[] = [
 /** `rejectRun`: the app refuses to start the run (as when another run is in progress). `slowStart`: the first message
  *  takes a long time (a first environment sync), so the run can be canceled before it has an id. `noNeeds`: a CLI
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
- *  `twoPlaces`: a machine where faces can run in two places (the place menu). */
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false } = {}): PipelineApi {
+ *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
+ *  needs captions (which sends data off): turning it on brings captions along. */
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false } = {}): PipelineApi {
   let folder: string | null = null;
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
@@ -92,7 +93,9 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       const nodes = plan.nodes.map((n) => n.id === 'captions' ? { ...n, cost_usd: opus ? 6.24 : 0.156,
         settings: n.settings!.map((x) => x.key === 'model' ? { ...x, value: opus ? 'claude-opus-5-5' : 'claude-haiku-5-5' } : x) }
         : n.id === 'faces' && twoPlaces_ ? twoPlaces(n, places.faces === 'native:cpu') : n);
-      return { ...plan, nodes: noNeeds ? nodes.map(({ needs: _, ...n }) => n) : nodes };
+      const all = summary ? [...nodes, { id: 'summary', needs: ['captions'], title: 'Summary', uses: 'test.summary@1.0.0', where: 'native (cpu)', why_not: '', cached: false,
+        downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:cpu', options: ['native:cpu'], estimate_s: 3, estimate_basis: '' }] : nodes;
+      return { ...plan, nodes: noNeeds ? all.map(({ needs: _, ...n }) => n) : all };
     },
     async run(_graph, _video, _allow, _places, only, _settings, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');

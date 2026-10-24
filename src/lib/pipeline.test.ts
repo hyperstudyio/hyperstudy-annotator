@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting } from './pipeline';
+import { blockers, broughtAlong, canPick, choiceLabel, consentFor, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -87,6 +87,10 @@ test('turning a feature on runs what it needs too, and says which features need 
   // a free feature that needs one that sends data off is not on by default either: it would bring the other along
   const summary = node('summary', ['captions']);
   expect([...defaultFeatures({ ...plan, nodes: [...plan.nodes, summary] })]).toEqual(['decode', 'asr', 'faces']);
+  // ...and turned on, it says on the captions row what captions sends: the user turned on summary, not captions
+  const withSummary = { ...plan, nodes: [...plan.nodes, summary] };
+  expect(broughtAlong(withSummary, new Set(['summary']))).toEqual(['captions']);
+  expect(broughtAlong(withSummary, new Set(['summary', 'captions']))).toEqual([]);   // turned on by the user: their choice
 });
 
 test('a setting\'s choices show their price when the cost depends on them, and settings go only for steps that run', () => {
