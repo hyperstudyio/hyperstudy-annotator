@@ -317,10 +317,12 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
     let Some(run) = run else {
         let named = state.running.lock().unwrap().as_deref().is_some_and(|r| !r.is_empty());
         let pid = *state.child.lock().unwrap();
+        let named = if named { state.running.lock().unwrap().clone() } else { None };
         return match (named, pid) {
-            (false, Some(pid)) => pipeline::stop_process(pid),
-            (true, _) => Err(Error::Bundle("the run has an id now; cancel it by its id".into())),
-            (false, None) => Err(Error::Bundle("no pipeline run is in progress".into())),
+            (None, Some(pid)) => pipeline::stop_process(pid),
+            // the CLI named the run before the window heard it: cancel that run
+            (Some(run), _) => { let p = pipeline(&state)?; blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await }
+            (None, None) => Err(Error::Bundle("no pipeline run is in progress".into())),
         };
     };
     check_cancel(state.running.lock().unwrap().as_deref(), &run)?;

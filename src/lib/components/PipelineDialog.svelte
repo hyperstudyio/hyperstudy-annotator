@@ -27,7 +27,7 @@
   const downloadGb = $derived(downloads.reduce((a, d) => a + (d.size_gb ?? 0), 0));
   const uploading = $derived(plan?.nodes.filter((n) => n.uploads?.length) ?? []);   // cached ones too: a cache can go
   const consent = $derived({ downloads: allowDownloads, uploads: allowUploads });
-  const canRun = $derived(!!plan && runnable(plan, consent) && !started);
+  const canRun = $derived(!!plan && !!graph && !!video && runnable(plan, consent) && !started);
   const why = $derived(plan && !started ? blockers(plan, consent) : []);
   let first = $state<HTMLButtonElement>();
   $effect(() => { first?.focus(); });   // the dialog takes the keyboard (the library behind it is inert)
@@ -49,8 +49,10 @@
     if (!path) return;
     doctor = await api.setFolder(path);
     folder = path;
-    // another pipeline: its graphs are not the old ones, and no plan or permission carries over
+    // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
+    // flight from the old one is superseded too)
     graph = null; plan = null; allowDownloads = false; allowUploads = false;
+    newestPlan(Promise.resolve(null), (p) => (plan = p), () => {});
     graphs = await api.graphs();
   });
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };

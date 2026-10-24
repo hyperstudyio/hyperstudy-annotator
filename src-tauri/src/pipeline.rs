@@ -183,6 +183,9 @@ impl Pipeline {
             }
             on(&o);
         });
+        if read.is_err() {
+            let _ = child.kill();   // no longer read: stopped, not left running unobserved (or dying at its next write)
+        }
         let status = child.wait()?;
         let last_words = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
         read?;
