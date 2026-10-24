@@ -180,7 +180,7 @@ test('a plan that does not say what each step needs is drawn one step after anot
 
 // --- other machines (perception #15/#16): a lab server over SSH, a cloud GPU ---------------------------------------
 
-const PLACES = { 'native:mps': { title: 'This machine', remote: false, accelerator: 'mps' }, 'ssh-lab:cuda': { title: 'lab (SSH)', remote: true, accelerator: 'cuda' },
+const PLACES = { 'native:mps': { title: 'This machine', remote: false, accelerator: 'mps' }, 'native:cpu': { title: 'This machine', remote: false, accelerator: 'cpu' }, 'ssh-lab:cuda': { title: 'lab (SSH)', remote: true, accelerator: 'cuda' },
   'cloud:cuda': { title: 'Cloud GPU (AWS L4)', remote: true, accelerator: 'cuda' } };
 const remoteNode = (place: string, over: Partial<PlanNode> = {}): PlanNode => {
   const estimates = {
@@ -238,6 +238,13 @@ test('the agreement a chosen place gave stands while the place does, for a step 
   expect(mustTurnOnFirst(plan, new Set(), 'faces', {})).toEqual(['decode']);
 });
 
+test('a plan that puts a step on another machine without saying where its inputs go is not run', () => {
+  const { upload_to: _, ...unsaid } = remoteNode('ssh-lab:cuda');
+  expect(blockers(planOf(decodeNode(), unsaid))).toEqual(['the pipeline does not say where faces sends its inputs on ssh-lab:cuda (update hyperstudy-perception)']);
+  expect(blockers(planOf(decodeNode(), remoteNode('ssh-lab:cuda')))).toEqual([]);
+  expect(blockers(planOf(decodeNode(), remoteNode('native:mps')))).toEqual([]);
+});
+
 test('places read as the plan names them, with what each would take and cost', () => {
   const n = remoteNode('native:mps');
   expect(placeName('ssh-lab:cuda', PLACES)).toBe('NVIDIA GPU on lab (SSH)');
@@ -260,5 +267,5 @@ test('a run\'s spending cap covers the graph\'s APIs and each cloud machine a st
   expect(placeLabel(captions, 'native:cpu', PLACES)).toBe('CPU, no estimate yet');
   // nor does a price for a place on this machine
   const here = decodeNode({ estimates: { 'native:cpu': { estimate_s: null, estimate_basis: '', cost_usd: 2, uploads: [], upload_to: null } } });
-  expect(spendingCap({ ...planOf(here), places: { ...PLACES, 'native:cpu': { title: 'This machine', remote: false, accelerator: 'cpu' } } }, ['decode'])).toBe(0.5);
+  expect(spendingCap(planOf(here), ['decode'])).toBe(0.5);
 });

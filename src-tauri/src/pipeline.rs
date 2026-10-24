@@ -115,6 +115,14 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
             None if !kinds.is_empty() => n["service"].as_str(),
             None => None,
         };
+        // a node on another machine (as the plan's `places` say, perception #15) sends its inputs there: the plan must
+        // say where, plainly. A place the plan's `places` do not list is not taken to be this machine.
+        if let Some(places) = plan.get("places").filter(|p| !p.is_null()) {
+            let here = n["place"].as_str().map(|p| places[p]["remote"] == Value::Bool(false)).unwrap_or(n["place"].is_null());
+            if !here && to.is_none() {
+                return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data")));
+            }
+        }
         // the same data sent somewhere else is not what was agreed to either
         if (to.is_some() || !kinds.is_empty()) && allowed.get(id).map(|a| a.service.as_deref()) != Some(to) {
             return Err(Error::Bundle(format!("{id} would send its data to {}, which was not agreed to", to.unwrap_or("another place"))));
@@ -495,10 +503,7 @@ mod tests {
     #[test]
     fn a_run_can_be_stopped_by_its_process_before_it_has_an_id() {
         let dir = repo();
-        let script = dir.path().join("slow-uv");
-        fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();   // a first environment sync that does not end
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let script = executable(dir.path(), "slow-uv", "#!/bin/sh\nsleep 30\n");   // a first environment sync that does not end
         let p = Pipeline::new(dir.path(), script).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let started = std::time::Instant::now();
@@ -571,6 +576,21 @@ mod tests {
             {"id": "captions", "cached": false, "uploads": ["frames"], "upload_to": null, "service": "Anthropic API"}]});
         let none: Uploads = [("captions".to_string(), Agreed { kinds: vec!["frames".into()], service: None })].into_iter().collect();
         assert!(upload_gate(&api, &none).unwrap_err().to_string().contains("plainly"));
+        // a plan that puts a node on another machine but does not say where its inputs go is refused, whatever else was
+        // agreed (the run would get --allow-uploads for the agreed step)
+        let placed = |place: &str, to: Option<Value>| {
+            let mut node = serde_json::json!({"id": "faces", "cached": false, "uploads": [], "place": place});
+            if let Some(to) = to { node["upload_to"] = to; }
+            serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [node],
+                "places": {"native:mps": {"title": "This machine", "remote": false, "accelerator": "mps"},
+                           "ssh-lab:cuda": {"title": "lab (SSH)", "remote": true, "accelerator": "cuda"}}})
+        };
+        let other: Uploads = [("captions".to_string(), Agreed { kinds: vec!["frames".into()], service: Some("Anthropic API".into()) })].into_iter().collect();
+        assert!(upload_gate(&placed("ssh-lab:cuda", None), &other).unwrap_err().to_string().contains("plainly"));
+        assert!(upload_gate(&placed("ssh-lab:cuda", Some(Value::Null)), &other).unwrap_err().to_string().contains("plainly"));
+        assert!(upload_gate(&placed("gpu9:cuda", None), &other).unwrap_err().to_string().contains("plainly"));   // not listed
+        assert!(upload_gate(&placed("native:mps", None), &other).is_ok());
+        assert!(upload_gate(&placed("ssh-lab:cuda", Some(serde_json::json!("lab (SSH)"))), &agreed_to("lab (SSH)", &[])).is_ok());   // said, and agreed
         assert!(upload_gate(&on(serde_json::json!({"host": "lab"}), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).unwrap_err().to_string().contains("plainly"));
     }
 
@@ -586,10 +606,7 @@ mod tests {
     #[test]
     fn a_cli_that_prints_something_else_is_stopped_not_left_running_unobserved() {
         let dir = repo();
-        let script = dir.path().join("chatty-uv");
-        fs::write(&script, "#!/bin/sh\necho 'Resolved 12 packages in 3ms'\nsleep 30\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let script = executable(dir.path(), "chatty-uv", "#!/bin/sh\necho 'Resolved 12 packages in 3ms'\nsleep 30\n");
         let p = Pipeline::new(dir.path(), script).unwrap();
         let started = std::time::Instant::now();
         let mut pid = 0;
@@ -684,12 +701,19 @@ mod tests {
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).
-    fn fake_uv(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
-        let path = dir.join("fake-uv");
-        fs::write(&path, format!("#!/bin/sh\ncat <<'EOF'\n{stdout}\nEOF\necho '{stderr}' >&2\nexit {code}\n")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    /// A script tests run. A child process (`install`) writes the executable: had this process written it, another test
+    /// thread forking at that moment would hold its write handle in the child until exec, and running the script would
+    /// fail with "Text file busy" (ETXTBSY, seen in CI). The source it copies is never executed.
+    fn executable(dir: &Path, name: &str, text: &str) -> PathBuf {
+        let (path, src) = (dir.join(name), dir.join(format!("{name}.txt")));
+        fs::write(&src, text).unwrap();
+        let status = std::process::Command::new("install").args(["-m", "755"]).arg(&src).arg(&path).status().unwrap();
+        assert!(status.success(), "install could not write {}", path.display());
         path
+    }
+
+    fn fake_uv(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
+        executable(dir, "fake-uv", &format!("#!/bin/sh\ncat <<'EOF'\n{stdout}\nEOF\necho '{stderr}' >&2\nexit {code}\n"))
     }
 
     #[test]

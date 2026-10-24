@@ -177,7 +177,10 @@ export function mustTurnOnFirst(plan: Plan, wanted: Set<string>, id: string, tic
  *  whole) while one of them sends data off: nobody turned that step on. */
 export function blockers(plan: Plan): string[] {
   const whole = !canPick(plan);
+  // on another machine (as the plan's places say) without saying where its inputs go: the gate would refuse it too
+  const unsaid = (n: PlanNode) => !!plan.places && !!n.place && plan.places[n.place]?.remote !== false && typeof n.upload_to !== 'string';
   return plan.nodes.flatMap((n) => [
+    ...(unsaid(n) ? [`the pipeline does not say where ${n.id} sends its inputs on ${n.place} (update hyperstudy-perception)`] : []),
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
     ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]
