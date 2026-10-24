@@ -229,10 +229,13 @@ pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: Str
 /// library and its video recorded, then an `imported` event carries the bundle's summary.
 #[tauri::command]
 pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool,
-                    allow_uploads: bool, places: Option<std::collections::BTreeMap<String, String>>) -> Result<()> {
+                    allow_uploads: bool, places: Option<std::collections::BTreeMap<String, String>>,
+                    only: Option<Vec<String>>) -> Result<()> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
-    let places = pipeline::place_args(&places.unwrap_or_default())?;
+    // where nodes run and which run: both reach the consent re-check and the run itself
+    let mut places = pipeline::place_args(&places.unwrap_or_default())?;
+    places.extend(pipeline::only_args(&only.unwrap_or_default())?);
     {
         let mut running = state.running.lock().unwrap();
         if running.is_some() {

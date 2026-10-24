@@ -154,8 +154,13 @@ Checked:
 - From review: a cancel is never lost between the consent check and the CLI starting, nor kept past its run
   (`RunControl`, one lock); upload consent is re-checked with the same places.
 
+- **Stage picker** (perception #12): each step of the chosen graph has a checkbox; unticking one leaves out every step
+  that needs it, and ticking one ticks back what it needs. The time, cost, consent and blockers count only the steps
+  that run; the run gets `--only` with them (`only_args` checks their form) and places only for them. A preset graph
+  is pruned rather than a graph built from manifests: wiring nodes by artifact type is ambiguous (captions consumes and
+  refines shots).
+
 Not yet:
-- the stage picker (choosing which nodes run, not only a preset graph);
 - estimates for every option, not only the chosen place (the plan asks for each choice's duration and price);
 - the cloud and SSH backends (their places will join the same menus);
 - the native window checked by hand.

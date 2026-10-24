@@ -13,6 +13,8 @@ export interface PlanNode {
   place?: string | null; options?: string[];
   /** Seconds, from its measured runs on this machine; null with the reason in estimate_basis. */
   estimate_s?: number | null; estimate_basis?: string;
+  /** The nodes whose outputs it takes (a stage picker's edges); absent from older CLIs. */
+  needs?: string[];
 }
 
 /** Where the user moved nodes: node id -> place. */
@@ -42,7 +44,8 @@ export interface PipelineApi {
   plan(graph: string, video: string, places: Places): Promise<Plan>;
   /** Start a run; `on` receives its messages until `imported` or `error`. Resolves to a function that stops listening.
    *  The app checks the consent again against a fresh plan before it starts. */
-  run(graph: string, video: string, allow: Consent, places: Places, on: (m: PipelineMessage) => void): Promise<() => void>;
+  /** `only`: just these nodes (and what they need); null runs the whole graph. */
+  run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, on: (m: PipelineMessage) => void): Promise<() => void>;
   /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. */
   cancel(run: string | null): Promise<void>;
   pickFolder(): Promise<string | null>;
@@ -100,6 +103,25 @@ export function blockers(plan: Plan, allow: Consent): string[] {
 
 export const runnable = (plan: Plan, allow: Consent) => !blockers(plan, allow).length;
 
+/** The steps that run when the user unticked `skipped`: a step is dropped when it is unticked or needs a dropped one
+ *  (transitively). `only` is what to pass the CLI (null: the whole graph). */
+export function picked(plan: Plan, skipped: Set<string>): { chosen: string[]; dropped: string[]; only: string[] | null } {
+  const dropped = new Set(plan.nodes.filter((n) => skipped.has(n.id)).map((n) => n.id));
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const n of plan.nodes) {
+      if (!dropped.has(n.id) && (n.needs ?? []).some((u) => dropped.has(u))) { dropped.add(n.id); grew = true; }
+    }
+  }
+  const chosen = plan.nodes.filter((n) => !dropped.has(n.id)).map((n) => n.id);
+  return { chosen, dropped: plan.nodes.filter((n) => dropped.has(n.id)).map((n) => n.id), only: dropped.size ? chosen : null };
+}
+
+/** The places to send: only for steps that run (a place for a node --only leaves out is a CLI error). */
+export function placesFor(places: Places, chosen: string[]): Places {
+  return Object.fromEntries(Object.entries(places).filter(([node]) => chosen.includes(node)));
+}
+
 /** A duration as people say it: "2 s", "1 min 36 s", "1 h 2 min". */
 export function duration(seconds: number): string {
   const s = Math.round(seconds);
@@ -127,9 +149,9 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     doctor: () => invoke<Doctor>('pipeline_doctor'),
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
     plan: (graph, video, places) => invoke<Plan>('pipeline_plan', { graph, video, places }),
-    async run(graph, video, allow, places, on) {
+    async run(graph, video, allow, places, only, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
-      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, allowUploads: allow.uploads, places }); }
+      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, allowUploads: allow.uploads, places, only }); }
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },

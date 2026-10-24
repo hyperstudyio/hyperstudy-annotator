@@ -191,6 +191,16 @@ pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result
     Ok(out)
 }
 
+/// `--only` for the steps the user picked (empty: the whole graph). Node ids only, in the CLI's own form.
+pub fn only_args(nodes: &[String]) -> Result<Vec<String>> {
+    let ok = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if let Some(bad) = nodes.iter().find(|n| !ok(n)) {
+        return Err(Error::Bundle(format!("not a node id: {bad:?}")));
+    }
+    Ok(if nodes.is_empty() { vec![] } else { vec!["--only".to_string(), nodes.join(",")] })
+}
+
 /// The problems of an `error` object, as one message.
 pub fn problems(v: &Value) -> String {
     v["problems"].as_array().map(|p| p.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; ")).unwrap_or_default()
@@ -537,6 +547,15 @@ mod tests {
             let mut bad = std::collections::BTreeMap::new();
             bad.insert(node.to_string(), place.to_string());
             assert!(place_args(&bad).is_err(), "{node}={place}");
+        }
+    }
+
+    #[test]
+    fn only_arguments_name_nodes_and_nothing_else() {
+        assert_eq!(only_args(&["decode".into(), "asr".into()]).unwrap(), vec!["--only".to_string(), "decode,asr".to_string()]);
+        assert!(only_args(&[]).unwrap().is_empty());
+        for bad in ["--allow-downloads", "a,b", "../x", ""] {
+            assert!(only_args(&[bad.to_string()]).is_err(), "{bad}");
         }
     }
 

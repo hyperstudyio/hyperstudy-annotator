@@ -41,7 +41,7 @@ test('the dialog takes the keyboard, and Escape closes it when no run is going',
 
 test('the plan says what each node sends off this machine', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await expect(dialog.getByRole('row', { name: /^captions/ })).toContainText('sends frames, faces, transcript off this machine');
+  await expect(dialog.getByRole('row', { name: /^Run captions/ })).toContainText('sends frames, faces, transcript off this machine');
   await expect(dialog.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();   // until it is allowed
   await dialog.getByRole('checkbox', { name: /^Send frames/ }).check();
   await dialog.getByRole('checkbox', { name: /^Download/ }).check();
@@ -68,9 +68,18 @@ test('choosing another pipeline folder takes back the graph, the plan and every 
 
 test('a node that can run in several places can be moved, and the plan says how long each step takes', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  const faces = dialog.getByRole('row', { name: /^faces/ });
+  const faces = dialog.getByRole('row', { name: /^Run faces/ });
   await expect(faces).toContainText('about 1 min 36 s');
   await faces.getByRole('combobox', { name: 'Where faces runs' }).selectOption('native:cpu');
-  await expect(dialog.getByRole('row', { name: /^faces/ })).toContainText('no estimate yet');
+  await expect(dialog.getByRole('row', { name: /^Run faces/ })).toContainText('no estimate yet');
   await expect(dialog.getByText(/^Estimated time: about/)).toBeVisible();
+});
+
+test('unticking a step leaves out what needs it, and the time, cost and consent follow', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  await expect(dialog.getByRole('checkbox', { name: /^Send frames/ })).toBeVisible();
+  await dialog.getByRole('checkbox', { name: 'Run faces' }).uncheck();
+  await expect(dialog.getByRole('checkbox', { name: 'Run captions' })).not.toBeChecked();   // captions needs faces
+  await expect(dialog.getByRole('checkbox', { name: /^Send frames/ })).toHaveCount(0);       // nothing uploads now
+  await expect(dialog.getByText(/^Estimated time: about 2 s$/)).toBeVisible();              // asr only (decode is cached)
 });

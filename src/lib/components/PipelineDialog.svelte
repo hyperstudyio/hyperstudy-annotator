@@ -3,7 +3,7 @@
   // `perception doctor`), a video, one of the pipeline's graphs, the plan (where each node runs, what is cached, what
   // must be downloaded, what it costs), then the run, node by node.
   import { latestOnly } from '../latest';
-  import { blockers, duration, foldRun, runnable, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
+  import { blockers, duration, foldRun, picked, placesFor, runnable, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -16,20 +16,33 @@
   let allowDownloads = $state(false);
   let allowUploads = $state(false);
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
+  let skipped = $state(new Set<string>());   // steps the user unticked (what needs them is left out too)
   let msgs = $state.raw<PipelineMessage[]>([]);
   let started = $state(false);
   let error = $state<string | null>(null);
   let busy = $state<string | null>(null);
   let stop: (() => void) | null = null;
 
-  const view = $derived(foldRun(plan?.nodes.map((n) => n.id) ?? [], msgs));
+  const pick = $derived(plan ? picked(plan, skipped) : { chosen: [], dropped: [], only: null });
+  // the plan of what will run: the steps picked (time, cost, consent and blockers count only these)
+  const active = $derived(plan ? { ...plan, nodes: plan.nodes.filter((n) => pick.chosen.includes(n.id)) } : null);
+  function toggle(id: string, on: boolean) {
+    const next = new Set(skipped);
+    if (!on) next.add(id);
+    else {   // ticking a step ticks back what it needs
+      const need = (n: string) => { next.delete(n); for (const u of plan?.nodes.find((x) => x.id === n)?.needs ?? []) need(u); };
+      need(id);
+    }
+    skipped = next;
+  }
+  const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
-  const downloads = $derived(plan?.nodes.flatMap((n) => n.downloads) ?? []);
+  const downloads = $derived(active?.nodes.flatMap((n) => n.downloads) ?? []);
   const downloadGb = $derived(downloads.reduce((a, d) => a + (d.size_gb ?? 0), 0));
-  const uploading = $derived(plan?.nodes.filter((n) => n.uploads?.length) ?? []);   // cached ones too: a cache can go
+  const uploading = $derived(active?.nodes.filter((n) => n.uploads?.length) ?? []);   // cached ones too: a cache can go
   const consent = $derived({ downloads: allowDownloads, uploads: allowUploads });
-  const canRun = $derived(!!plan && !!graph && !!video && runnable(plan, consent) && !started);
-  const why = $derived(plan && !started ? blockers(plan, consent) : []);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && runnable(active, consent) && !started);
+  const why = $derived(active && !started ? blockers(active, consent) : []);
   let first = $state<HTMLButtonElement>();
   $effect(() => { first?.focus(); });   // the dialog takes the keyboard (the library behind it is inert)
   function onkeydown(e: KeyboardEvent) { if (e.key === 'Escape' && !(started && !done)) onclose(); }
@@ -52,14 +65,15 @@
     folder = path;
     // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
     // flight from the old one is superseded too)
-    graph = null; plan = null; allowDownloads = false; allowUploads = false; places = {};
+    graph = null; plan = null; allowDownloads = false; allowUploads = false; places = {}; skipped = new Set();
     newestPlan(Promise.resolve(null), (p) => (plan = p), () => {});
     graphs = await api.graphs();
   });
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };
-  const chooseGraph = async (file: string) => { graph = file; places = {}; await makePlan(); };
+  const chooseGraph = async (file: string) => { graph = file; places = {}; skipped = new Set(); await makePlan(); };
   const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(); };
-  const total = $derived(plan ? totalEstimate(plan) : null);
+  const total = $derived(active ? totalEstimate(active) : null);
+  const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
   // A permission to download is for the plan on screen: a new plan takes it back. Only the newest plan request may set
   // the plan, so a slow one cannot show one graph while another would run.
   const newestPlan = latestOnly();
@@ -71,7 +85,7 @@
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = [];
-    try { stop = await api.run(graph!, video!, consent, places, (m) => { msgs = [...msgs, m]; }); }
+    try { stop = await api.run(graph!, video!, consent, placesFor(places, pick.chosen), pick.only, (m) => { msgs = [...msgs, m]; }); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
@@ -113,13 +127,17 @@
 
   {#if plan}
     <section>
-      <h3>{started ? 'Run' : `Plan · estimated $${plan.estimated_usd.toFixed(2)}`}</h3>
+      <h3>{started ? 'Run' : `Plan · estimated $${cost.toFixed(2)}`}</h3>
       <table>
         <tbody>
-          {#each plan.nodes as n (n.id)}
+          {#each started ? active?.nodes ?? [] : plan.nodes as n (n.id)}
             {@const s = view.nodes[n.id]}
-            <tr>
-              <td class="node">{n.id}</td>
+            {@const off = pick.dropped.includes(n.id)}
+            <tr class:off>
+              <td class="node">
+                {#if !started}<input type="checkbox" aria-label={`Run ${n.id}`} checked={!off} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}
+                {n.id}
+              </td>
               <td class="where">
                 {#if n.cached}cached
                 {:else if !started && (n.options?.length ?? 0) > 1}
@@ -129,7 +147,8 @@
                 {:else}{n.place ?? n.where ?? 'cannot run here'}{/if}
               </td>
               <td>
-                {#if started}<span class="state {s.state}">{STATE_LABEL[s.state]}</span> <span class="meta">{s.message}</span>
+                {#if off}<span class="meta">left out{skipped.has(n.id) ? '' : ` (needs ${(n.needs ?? []).filter((u) => pick.dropped.includes(u)).join(', ')})`}</span>
+                {:else if started}<span class="state {s.state}">{STATE_LABEL[s.state]}</span> <span class="meta">{s.message}</span>
                 {:else}
                   {#if !n.cached && 'estimate_s' in n}<span class="meta" title={n.estimate_basis}>{n.estimate_s != null ? `about ${duration(n.estimate_s)}` : 'no estimate yet'}</span>{/if}
                   {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
@@ -192,6 +211,7 @@
   td { padding: 4px 6px; border-top: 1px solid var(--color-border-default); vertical-align: top; }
   td span + span { margin-left: 8px; }
   .uploads { color: var(--color-caution); font-size: 12px; }
+  tr.off td { opacity: .5; }
   .node { font-weight: 600; white-space: nowrap; width: 18%; }
   .where { white-space: nowrap; color: var(--color-text-secondary); width: 22%; }
   .state { font-size: 11px; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--color-border-strong); }
