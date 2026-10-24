@@ -79,6 +79,24 @@ describe('carryOver', () => {
     expect(unmatched.map((u) => u.reason)).toEqual(['Person A is split between Person X and Person Y in the new version']);
   });
 
+  test('an earlier correction is not carried when a later one of the same thing cannot be', () => {
+    const split = rerun([
+      face(10, 'person:Person X', 0, 0, 4), face(11, 'person:Person A', 0, 0, 4, 500), face(12, 'person:Person Y', 1, 10, 14),
+      face(14, 'person:Person D', 1, 15, 18),
+    ]);
+    const ops: Op[] = [
+      { op: 'track.assign', track: 'face:4', person: 'person:Person B' },   // carryable on its own
+      { op: 'track.assign', track: 'face:4', person: 'person:Person A' },   // what the user settled on; A is split
+      { op: 'shot.caption', shot: 'shot:0', caption: 'kept' },
+    ];
+    const { ops: carried, unmatched } = carryOver(ops, old, split, 'v1');
+    expect(carried.map((o) => o.carried_from!.index)).toEqual([2]);
+    expect(unmatched.map((u) => [u.index, u.reason])).toEqual([
+      [0, 'a later correction of the same thing (#2) could not be carried, so this earlier one is not either'],
+      [1, 'Person A is split between Person X and Person Y in the new version'],
+    ]);
+  });
+
   test('two people the re-run puts together: the one with less screen time is listed, and “different people” cannot be carried', () => {
     const together = rerun([
       face(10, 'person:Person A', 0, 0, 4), face(11, 'person:Person B', 0, 0, 4, 500), face(12, 'person:Person A', 1, 10, 14),

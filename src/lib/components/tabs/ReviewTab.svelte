@@ -26,11 +26,11 @@
 {:else}
   <div class="callout info">Pick an utterance below, or press <kbd>j</kbd> to start. Its faces are numbered on the video.</div>
 {/if}
-{#if s.carry?.unmatched.length}
-  <h3>Not carried over from the earlier run · {s.carry.unmatched.length}</h3>
+{#if s.notCarried.length}
+  <h3>Not carried over from the earlier run · {s.notCarried.length}</h3>
   <div class="meta" style="margin-bottom:6px">Corrections made on an earlier run of this video that could not be matched to this one. Redo the ones still needed, then dismiss them.</div>
   <div class="list">
-    {#each s.carry.unmatched as u (u.index)}
+    {#each s.notCarried as u (u.index)}
       <div class="item">
         {#if u.span}<button class="link meta" title="Go to this moment" onclick={() => s.playback.seek(u.span!.start)}>{fmt(u.span.start)}</button>{/if}
         <span class="grow"><span class="what">{describe(u.op)}</span><span class="meta why">{u.reason}</span></span>

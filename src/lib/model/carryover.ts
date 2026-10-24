@@ -190,7 +190,37 @@ export function carryOver(ops: Op[], from: Bundle, to: Bundle, fromId: string, a
       unmatched.push({ index, op, reason: e.message, span: first ? spanIn(from, first) : null });
     }
   });
-  return { ops: out, unmatched };
+  // An op replaced later by one that could not be carried would otherwise become the current state again: list it too.
+  const failedLater = new Map<string, number>();
+  for (const u of unmatched) { const k = target(u.op); if (k) failedLater.set(k, Math.max(u.index, failedLater.get(k) ?? -1)); }
+  const kept = out.filter((c) => {
+    const index = c.carried_from!.index, op = ops[index], k = target(op), later = k ? failedLater.get(k) : undefined;
+    if (later === undefined || later < index) return true;
+    const first = refsOf(op)[0];
+    unmatched.push({ index, op, span: first ? spanIn(from, first) : null,
+      reason: `a later correction of the same thing (#${later + 1}) could not be carried, so this earlier one is not either` });
+    return false;
+  });
+  unmatched.sort((a, b) => a.index - b.index);
+  return { ops: kept, unmatched };
+}
+
+/** What an op sets, for ops where a later one replaces an earlier one (fold is last-write-wins for these). Merges,
+ *  "different people", new people and annotations compose instead. */
+function target(op: Op): string | null {
+  switch (op.op) {
+    case 'person.rename': return `name ${op.person}`;
+    case 'voice.rename': return `voice ${op.voice}`;
+    case 'object.rename': return `object name ${op.identity}`;
+    case 'object.assign': return `object track ${op.track}`;
+    case 'track.assign': return `track ${op.track}`;
+    case 'utterance.speaker': return `speaker ${op.utt}`;
+    case 'utterance.text': return `text ${op.utt}`;
+    case 'shot.caption': return `caption ${op.shot}`;
+    case 'entity.include': return `include ${op.id}`;
+    case 'category.include': return `category ${op.kind}:${op.label}`;
+    default: return null;
+  }
 }
 
 /** The op with every bundle id it refers to mapped by `m` (which throws when one cannot be). */

@@ -1,7 +1,7 @@
 <script lang="ts">
   // A re-run of a video opens with an empty log: offer the newest earlier version's corrections, re-anchored to this
   // version's ids (model/carryover.ts). What cannot be carried waits in the Review tab; the earlier log is only read.
-  import { onMount } from 'svelte';
+  import { untrack } from 'svelte';
   import { Bundle } from '../model/bundle';
   import { carryOver } from '../model/carryover';
   import { useSession, useSource } from '../model/context';
@@ -13,15 +13,18 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
 
-  onMount(() => {
-    const lineage = source.lineage;
+  // Offered whenever the log is empty, unless the user chose to start fresh: on opening, and again straight after an
+  // undo takes a carry-over back.
+  $effect(() => {
+    const lineage = source.lineage, empty = s.ops.length === 0;
     if (!lineage) return;
-    (async () => {
-      // offered until this version has corrections of its own, unless the user chose to start fresh (an undone
-      // carry-over is offered again)
-      s.carry = await lineage.record();
-      if (!s.ops.length && s.carry?.status !== 'declined') offer = await lineage.previous();
-    })().catch((e) => (error = String(e)));
+    if (!empty) { offer = null; return; }
+    untrack(() => {
+      (async () => {
+        s.carry = await lineage.record();
+        offer = s.carry?.status !== 'declined' ? await lineage.previous() : null;
+      })().catch((e) => (error = String(e)));
+    });
   });
 
   async function carry() {

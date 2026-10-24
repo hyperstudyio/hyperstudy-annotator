@@ -381,8 +381,10 @@ export class Session {
     const sounds = this.bundle.sounds.filter((s) => s.agreement === false);
     return { speakers, pairs, sounds };
   });
+  /** Ops of an earlier version left for review: only while its carry-over is in the log (an undo takes it back). */
+  readonly notCarried = $derived(this.carry?.status === 'carried' && this.ops.some((o) => o.carried_from) ? this.carry.unmatched : []);
   readonly openInQueue = $derived(this.queue.speakers.filter((u) => !this.reviewed(u)).length + this.queue.pairs.length
-    + (this.carry?.unmatched.length ?? 0));
+    + this.notCarried.length);
 
   nextInQueue(dir: 1 | -1 = 1) {
     const q = this.queue.speakers;
