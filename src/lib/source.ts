@@ -37,6 +37,10 @@ export interface Lineage {
   decline(from: string): Promise<void>;
   /** Take one op (by its index in the earlier log) off the review list. */
   dismiss(index: number): Promise<CarryRecord>;
+  /** How many other runs of this video the library holds. */
+  others(): Promise<number>;
+  /** Another run of this video, by its manifest sha256 (where an imported corrections file was made). */
+  find(bundleSha256: string): Promise<EarlierVersion | null>;
 }
 
 /** A corrections file found next to the bundle (the prototype's `perception_corrections.json`). */
@@ -45,6 +49,8 @@ export interface FoundFile { path: string; text: string }
 export interface BundleSource {
   title: string;
   manifest: Manifest;
+  /** The bundle's identity: its manifest's sha256. */
+  bundleSha256: string;
   videoUrl: string | null;
   corrections: CorrectionStore;
   /** Earlier versions of this video, when the source knows about them. */
@@ -84,6 +90,8 @@ export const api = {
   carryOver: (id: string, from: string, ops: Op[], unmatched: Unmatched[]) => invoke<number>('carry_over', { id, from, ops, unmatched }),
   declineCarryover: (id: string, from: string) => invoke<void>('decline_carryover', { id, from }),
   dismissUnmatched: (id: string, index: number) => invoke<CarryRecord>('dismiss_unmatched', { id, index }),
+  findVersion: (id: string, manifestSha256: string) => invoke<BundleSummary | null>('find_version', { id, manifestSha256 }),
+  countVersions: (id: string) => invoke<number>('count_versions', { id }),
 };
 
 const versionLabel = (b: { created_at?: string | null; imported_at?: string }) =>
@@ -99,6 +107,7 @@ export async function tauriSource(id: string): Promise<BundleSource> {
   return {
     title: summary.title,
     manifest,
+    bundleSha256: summary.manifest_sha256,
     videoUrl: summary.video_path ? convertFileSrc(summary.video_path) : null,
     corrections: {
       load: () => api.loadCorrections(id),
@@ -115,6 +124,11 @@ export async function tauriSource(id: string): Promise<BundleSource> {
       carry: (from, ops, unmatched) => api.carryOver(id, from, ops, unmatched),
       decline: (from) => api.declineCarryover(id, from),
       dismiss: (index) => api.dismissUnmatched(id, index),
+      others: () => api.countVersions(id),
+      async find(sha) {
+        const b = await api.findVersion(id, sha);
+        return b && { id: b.id, label: versionLabel(b), corrections: b.corrections, open: () => tauriSource(b.id) };
+      },
     },
     async layer<T>(name: string) {
       return name in manifest.layers ? (JSON.parse(await api.readLayer(id, name)) as T) : null;
@@ -181,14 +195,25 @@ function localLineage(base: string, previousUrl: string, videoUrl: string | null
     },
     async decline(from) { write({ from_bundle_id: from, status: 'declined', carried: 0, unmatched: [], created_at: new Date().toISOString() }); },
     async dismiss(index) { const r = read()!; return write({ ...r, unmatched: r.unmatched.filter((u) => u.index !== index) }); },
+    async others() { return 1; },
+    async find(sha) {
+      const prev = await httpSource(previousUrl, videoUrl);
+      return prev.bundleSha256 === sha ? { id: previousUrl, label: `The bundle at ${previousUrl}`, corrections: 0, open: async () => prev } : null;
+    },
   };
+}
+
+async function sha256Hex(text: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export async function httpSource(bundleUrl: string, videoUrl: string | null, previousUrl: string | null = null): Promise<BundleSource> {
   const base = bundleUrl.replace(/\/$/, '');
   const res = await fetch(`${base}/manifest.json`);
   if (!res.ok) throw new Error(`no manifest at ${base} (${res.status})`);
-  const manifest = (await res.json()) as Manifest;
+  const manifestText = await res.text();
+  const manifest = JSON.parse(manifestText) as Manifest;
   const store = new LocalCorrectionStore(manifest.video.sha256, localStorage, previousUrl ? base : undefined);
   const getJson = async <T>(path: string) => {
     const r = await fetch(`${base}/${path}`);
@@ -198,6 +223,7 @@ export async function httpSource(bundleUrl: string, videoUrl: string | null, pre
   return {
     title: manifest.video.filename?.replace(/\.[^.]+$/, '') ?? base.split('/').pop() ?? 'bundle',
     manifest,
+    bundleSha256: await sha256Hex(manifestText),
     videoUrl,
     corrections: store,
     lineage: previousUrl ? localLineage(base, previousUrl, videoUrl, store) : undefined,

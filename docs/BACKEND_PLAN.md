@@ -41,11 +41,17 @@ dialogs by hand, is still open).
      has corrections of its own, it is no longer offered), as one batch re-stamped with the carry time (one undo
      takes it all back), so `fold`'s last-write-wins cannot put an old correction over a newer one. An op replaced
      later by one that cannot be carried is not carried either.
+   - **Provenance.** A carried op names the op it copies (`carried_from`) and an imported, re-anchored op its place
+     in the file (`reanchored_from`), each with the earlier run's manifest sha256 as `bundle`. Ops carried before
+     that was settled (2026-10-24, browser testing only) named the library's id instead; a 64-hex-digit value is a
+     manifest sha256.
    - **Importing a corrections file into a re-run.** Exports so far record only the video's sha256, not the bundle
      they were made on, so on a video with several versions their ids may name other faces. From now on an export
      records its bundle (manifest sha256). A file for another version is re-anchored like a carry-over when that
-     version is in the library, and otherwise lists its bundle ops for review. For a file without the field (every
-     `/1` and `/2` file so far) on a video with several versions, the user says which version it was made on.
+     version is in the library and every op matches (each op then names its place in the file, `reanchored_from`);
+     otherwise it is refused, pointing to the carry-over, which lists what does not match. A file without the field
+     (every `/1` and `/2` file so far), on a video with several versions, is imported only after the user says it was
+     made on the run they are importing it into.
    - **Older ops keep loading.** Ops in SQLite and in `perception-corrections/2` files (and `/1`, through
      `opFromV1`) have no author or base version. They load with base version = the bundle whose log holds them and
      author = unknown, never as unmatched or rejected. If the fields change the file format, it becomes `/3`, and
@@ -115,8 +121,8 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
   carried. Of the other two, one person's only face is unassigned in the L4 run, and one face track has no counterpart.
   The Mac log was unchanged.
 - Not yet: the library listing versions under one video; checking the native app's offer by hand (as for port step 9);
-  each op's author (needs a user identity in Settings) and base version (implicit in which log holds it, today);
-  importing a corrections file into a re-run (the rule above).
+  each op's author (needs a user identity in Settings) and base version (implicit in which log holds it, today).
+  Importing a file into a re-run follows the rule above (2026-10-24).
 
 ## Also to sort out
 

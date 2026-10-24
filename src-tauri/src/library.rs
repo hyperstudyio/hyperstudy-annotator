@@ -26,10 +26,13 @@ pub struct BundleSummary {
     pub video_path: Option<String>,
     /// how many ops the bundle's corrections log holds
     pub corrections: usize,
+    /// the bundle's identity: its manifest's sha256 (exported corrections files name it)
+    pub manifest_sha256: String,
 }
 
 struct Row {
     id: String,
+    manifest_sha256: String,
     title: String,
     video_sha256: String,
     schema_version: String,
@@ -37,11 +40,11 @@ struct Row {
     imported_at: String,
 }
 
-const SELECT: &str = "SELECT id, title, video_sha256, schema_version, bundle_dir, imported_at FROM bundles";
+const SELECT: &str = "SELECT id, title, video_sha256, schema_version, bundle_dir, imported_at, manifest_sha256 FROM bundles";
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
     Ok(Row { id: r.get(0)?, title: r.get(1)?, video_sha256: r.get(2)?, schema_version: r.get(3)?,
-             bundle_dir: r.get(4)?, imported_at: r.get(5)? })
+             bundle_dir: r.get(4)?, imported_at: r.get(5)?, manifest_sha256: r.get(6)? })
 }
 
 fn get_row(conn: &Connection, id: &str) -> Result<Row> {
@@ -65,6 +68,7 @@ fn summary(conn: &Connection, r: Row) -> Result<BundleSummary> {
     Ok(BundleSummary {
         video_path: video_path(conn, &r.video_sha256)?,
         corrections: count_corrections(conn, &r.id)?,
+        manifest_sha256: r.manifest_sha256,
         created_at: manifest["created_at"].as_str().map(String::from),
         id: r.id, title: r.title, video_sha256: r.video_sha256, schema_version: r.schema_version,
         imported_at: r.imported_at, layers,
@@ -255,6 +259,23 @@ pub fn previous_version(conn: &Connection, id: &str) -> Result<Option<BundleSumm
     earlier.retain(|b| b.corrections > 0 && made_at(b) < made_at(&this));
     earlier.sort_by_key(|b| std::cmp::Reverse(made_at(b)));
     Ok(earlier.into_iter().next())
+}
+
+/// How many other bundles of this bundle's video the library holds.
+pub fn count_versions(conn: &Connection, id: &str) -> Result<usize> {
+    let this = get_row(conn, id)?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM bundles WHERE video_sha256 = ?1 AND id != ?2",
+                                params![this.video_sha256, id], |r| r.get(0))?;
+    Ok(n as usize)
+}
+
+/// Another bundle of this bundle's video, by its manifest sha256 (the run an imported corrections file was made on).
+pub fn find_version(conn: &Connection, id: &str, manifest_sha256: &str) -> Result<Option<BundleSummary>> {
+    let this = get_row(conn, id)?;
+    let other: Option<String> = conn.query_row(
+        "SELECT id FROM bundles WHERE video_sha256 = ?1 AND manifest_sha256 = ?2 AND id != ?3",
+        params![this.video_sha256, manifest_sha256, id], |r| r.get(0)).optional()?;
+    other.map(|o| get(conn, &o)).transpose()
 }
 
 #[derive(Debug, Serialize)]
@@ -561,5 +582,21 @@ mod tests {
         truncate_corrections(&conn, &v2, 0).unwrap();
         decline_carryover(&conn, &v2, &v1).unwrap();
         assert!(carry_over(&conn, &v2, &v1, &carried, &json!([])).unwrap_err().to_string().contains("declined"));
+    }
+
+    #[test]
+    fn other_runs_of_a_video_are_counted_and_found_by_manifest() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let (v1, _a) = import_version(&conn, data.path(), b"video", "2026-10-01T00:00:00Z");
+        let (v2, _b) = import_version(&conn, data.path(), b"video", "2026-10-10T00:00:00Z");
+        let (other, _c) = import_version(&conn, data.path(), b"another video", "2026-10-15T00:00:00Z");
+        assert_eq!(count_versions(&conn, &v2).unwrap(), 1);
+        assert_eq!(count_versions(&conn, &other).unwrap(), 0);
+        let v1_sha = get(&conn, &v1).unwrap().manifest_sha256;
+        assert_eq!(find_version(&conn, &v2, &v1_sha).unwrap().map(|b| b.id), Some(v1.clone()));
+        assert!(find_version(&conn, &other, &v1_sha).unwrap().is_none());       // another video's bundle is not a run of it
+        assert!(find_version(&conn, &v1, &v1_sha).unwrap().is_none());          // nor is the bundle itself
     }
 }

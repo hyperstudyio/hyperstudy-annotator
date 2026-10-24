@@ -32,6 +32,8 @@ pub fn run() {
             commands::read_corrections_file,
             commands::write_corrections_file,
             commands::previous_version,
+            commands::count_versions,
+            commands::find_version,
             commands::get_carryover,
             commands::carry_over,
             commands::decline_carryover,

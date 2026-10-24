@@ -2,7 +2,7 @@
   // The bundle's name and contents, the correction count, Undo, Import and Export. Offers to import the annotator
   // prototype's corrections file when one sits next to the bundle.
   import { useSession, useSource } from '../model/context';
-  import { ImportError, type Op } from '../model/corrections';
+  import { ImportError, RunUnknownError, type Op } from '../model/corrections';
   import { plural } from '../model/session.svelte';
   import type { FoundFile } from '../source';
   import type { LicenceMode } from '../types';
@@ -14,12 +14,17 @@
   let foundError = $state<string | null>(null);
   let pending = $state<{ ops: Op[]; from: string } | null>(null);   // an import waiting for "replace" (the log is not empty)
   let dismissed = $state(false);
+  // a file that does not say which run it was made on, on a video with several runs: asked before importing
+  let ask = $state<{ text: string; from: string; runs: number } | null>(null);
 
   $effect(() => {
-    source.findPrototypeCorrections().then((f) => {
+    source.findPrototypeCorrections().then(async (f) => {
       if (!f) return;
-      try { found = { ...f, ops: s.parseCorrections(f.text) }; }
-      catch (e) { foundError = `${f.path}: ${e instanceof ImportError ? e.message : String(e)}`; }
+      try { found = { ...f, ops: await s.parseCorrections(f.text, source.lineage) }; }
+      catch (e) {
+        if (e instanceof RunUnknownError) ask = { text: f.text, from: 'the prototype', runs: e.runs };
+        else foundError = `${f.path}: ${e instanceof ImportError ? e.message : String(e)}`;
+      }
     }).catch((e) => { foundError = String(e); });
   });
 
@@ -34,8 +39,15 @@
     try {
       const text = await source.pickCorrectionsFile();
       if (text === null) return;
-      await apply(s.parseCorrections(text), 'the file');
+      try { await apply(await s.parseCorrections(text, source.lineage), 'the file'); }
+      catch (e) { if (e instanceof RunUnknownError) ask = { text, from: 'the file', runs: e.runs }; else throw e; }
     } catch (e) { s.toast(e instanceof ImportError ? `Not imported: ${e.message}` : `Could not read that file: ${e}`); }
+  }
+  async function importAsThisRun() {
+    const a = ask!;
+    ask = null;
+    try { await apply(await s.parseCorrections(a.text, source.lineage, undefined, { thisRun: true }), a.from); }
+    catch (e) { s.toast(e instanceof ImportError ? `Not imported: ${e.message}` : `Could not read that file: ${e}`); }
   }
   async function exportFile() {
     try { if (await source.saveCorrectionsFile('perception_corrections.json', s.exportCorrections())) s.toast(`Exported ${plural(s.ops.length, 'correction')}`); }
@@ -62,6 +74,15 @@
     Importing replaces your {plural(s.ops.length, 'correction')} with {plural(pending.ops.length, 'correction')} from {pending.from}.
     <button class="primary" onclick={() => pending && apply(pending.ops, pending.from)}>Replace</button>
     <button onclick={() => (pending = null)}>Cancel</button>
+  </div>
+{:else if ask && (ask.from !== 'the prototype' || (!s.ops.length && !dismissed))}
+  <!-- a file the user picked is asked about at once; one found next to the bundle, like its import offer, only while
+       the log is empty -->
+  <div class="banner">
+    Corrections from {ask.from} do not say which run of this video they were made on, and the library has {ask.runs} runs of it.
+    Were they made on this one? Their ids name this run's faces only if they were.
+    <button class="primary" onclick={importAsThisRun}>Yes, import them here</button>
+    <button onclick={() => { if (ask?.from === 'the prototype') dismissed = true; ask = null; }}>Cancel</button>
   </div>
 {:else if found && !dismissed && !s.ops.length}
   <div class="banner">

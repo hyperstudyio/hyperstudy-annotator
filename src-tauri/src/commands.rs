@@ -135,6 +135,16 @@ pub fn write_corrections_file(path: String, text: String) -> Result<()> {
 }
 
 #[tauri::command]
+pub fn count_versions(state: State<'_, AppState>, id: String) -> Result<usize> {
+    library::count_versions(&state.db.lock().unwrap(), &id)
+}
+
+#[tauri::command]
+pub fn find_version(state: State<'_, AppState>, id: String, manifest_sha256: String) -> Result<Option<BundleSummary>> {
+    library::find_version(&state.db.lock().unwrap(), &id, &manifest_sha256)
+}
+
+#[tauri::command]
 pub fn previous_version(state: State<'_, AppState>, id: String) -> Result<Option<BundleSummary>> {
     library::previous_version(&state.db.lock().unwrap(), &id)
 }

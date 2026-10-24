@@ -34,7 +34,7 @@
       <div class="item">
         {#if u.span}<button class="link meta" title="Go to this moment" onclick={() => s.playback.seek(u.span!.start)}>{fmt(u.span.start)}</button>{/if}
         <span class="grow"><span class="what">{describe(u.op)}</span><span class="meta why">{u.reason}</span></span>
-        <button onclick={() => dismiss(u.index)}>Dismiss</button>
+        <button onclick={() => dismiss(u.index)} aria-label={`Dismiss: ${describe(u.op)}`} title="Take it off this list for good (the earlier run keeps it)">Dismiss</button>
       </div>
     {/each}
   </div>

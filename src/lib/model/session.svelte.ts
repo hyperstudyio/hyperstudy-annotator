@@ -4,12 +4,13 @@
 import { Bundle, extent } from './bundle';
 import { iou } from '../geometry';
 import {
-  FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
+  FORMAT, ImportError, NOT_PERSON, RunUnknownError, UNKNOWN, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
   type AnnotationType, type CorrectionsFile, type Note, type Op,
 } from './corrections';
 import { View, type Tab } from './view.svelte';
 import { Playback } from '../playback.svelte';
 import type { CarryRecord, CorrectionStore, EarlierVersion, Lineage } from '../source';
+import { carryOver } from './carryover';
 import type {
   FaceTrack, FacesDetail, FacingEvent, GazeEvent, GestureEvent, ObjectTrack, Shot, SoundEvent, Span, Speaker, TextItem, Utterance,
 } from '../types';
@@ -77,6 +78,8 @@ export class Session {
   marking = $state<number | null>(null);
   message = $state<{ text: string; n: number } | null>(null);
   lightbox = $state<Lightbox | null>(null);
+  /** A dialog is open that needs an answer first: the workspace's keys do nothing meanwhile. */
+  modal = $state(false);
   /** What this version carried over from an earlier one (the ops it could not match wait for review). */
   carry = $state<CarryRecord | null>(null);
   /** The name being edited, as "<id>@<area>" (a rename link opens the editor of the name in that area). */
@@ -129,11 +132,28 @@ export class Session {
     this.toast('Undone');
   }
 
-  /** Read a corrections file (the prototype's v1 or this app's v2) and check it against this bundle. */
-  parseCorrections(text: string): Op[] {
+  /** Read a corrections file (the prototype's v1 or this app's v2) and check it against this bundle. Ids are only
+   *  meaningful on the run they were made on: a file from another run is re-anchored when that run is in the library
+   *  and all of it matches, and refused otherwise; a file that does not say its run is refused when the video has
+   *  several runs. Never imported onto ids that may name other faces. */
+  async parseCorrections(text: string, lineage?: Lineage,
+    load: (v: EarlierVersion) => Promise<Bundle> = async (v) => Bundle.load(await v.open()),
+    { thisRun = false }: { thisRun?: boolean } = {}): Promise<Op[]> {
     let doc: CorrectionsFile;
     try { doc = JSON.parse(text); } catch { throw new ImportError('that file is not JSON'); }
     const ops = readCorrectionsFile(doc, this.bundle.sha256);
+    if (doc.bundle && this.bundle.key && doc.bundle !== this.bundle.key) {
+      const v = lineage ? await lineage.find(doc.bundle) : null;
+      if (!v) throw new ImportError('the file was made on another run of this video that is not in the library. Import it into that run, then open this run to carry its corrections over');
+      const r = carryOver(ops, await load(v), this.bundle, doc.bundle);   // provenance by manifest sha256: portable
+      if (r.unmatched.length) throw new ImportError(`the file was made on another run of this video. ${v.label}: ${r.unmatched.length} of its ${plural(ops.length, 'correction')} could not be matched to this run. Import it into that run, then open this run to carry it over: the ones that do not match are then listed for review`);
+      // not a carry-over (no record, and the index is the op's place in the file, not in a log)
+      return r.ops.map(({ carried_from, ...op }) => ({ ...op, reanchored_from: carried_from }) as Op);
+    }
+    if (!doc.bundle && lineage && !thisRun) {   // thisRun: the user said it was made on this run
+      const others = await lineage.others();
+      if (others) throw new RunUnknownError(others + 1);
+    }
     const missing = unknownRefs(ops, (id) => this.bundle.has(id));
     if (missing.length) throw new ImportError(`the file refers to ${plural(missing.length, 'id')} this bundle does not have (${missing.slice(0, 5).join(', ')})`);
     return ops;
@@ -146,7 +166,7 @@ export class Session {
   }
 
   exportCorrections(): string {
-    const doc = { format: FORMAT, clip: this.bundle.manifest.video.filename ?? null, sha256: this.bundle.sha256,
+    const doc = { format: FORMAT, clip: this.bundle.manifest.video.filename ?? null, sha256: this.bundle.sha256, bundle: this.bundle.key ?? undefined,
       exported_at: new Date().toISOString(), ops: this.ops };
     return JSON.stringify(doc, null, 2);
   }

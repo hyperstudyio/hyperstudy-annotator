@@ -12,8 +12,9 @@ export type ValueKind = 'binary' | 'category' | 'number' | 'text';
 export interface AnnotationType { id: string; name: string; kind: ValueKind; target: 'person' | 'scene'; options: string[]; min?: number; max?: number }
 export interface Note { id: string; type: string; start: number; end: number; value: boolean | string | number | null; person: string | null }
 
-/** `carried_from`: an op carried over from an earlier version of the bundle (a re-run), naming the op it copies. */
-export type Op = { at?: string; carried_from?: { bundle: string; index: number } } & (
+/** `carried_from`: an op carried over from an earlier version's log (a re-run), naming the op it copies there.
+ *  `reanchored_from`: an op imported from a file made on another run, naming that run and the op's place in the file. */
+export type Op = { at?: string; carried_from?: { bundle: string; index: number }; reanchored_from?: { bundle: string; index: number } } & (
   | { op: 'person.create'; person: string; name: string }
   | { op: 'person.rename'; person: string; name: string }
   | { op: 'person.merge'; from: string; into: string }
@@ -106,10 +107,20 @@ export function lastBatch(ops: Op[]): number {
 
 // --- the prototype's v1 files ------------------------------------------------------------------------------------
 
-export interface CorrectionsFile { format: string; sha256: string; exported_at?: string; ops: unknown[] }
+/** `bundle`: the manifest sha256 of the bundle the ops were made on (exports from 2026-10-24 on; older files say only
+ *  which video). */
+export interface CorrectionsFile { format: string; sha256: string; bundle?: string; exported_at?: string; ops: unknown[] }
 
 /** Thrown when a v1 op refers to something this bundle has no id for; the import is refused as a whole. */
 export class ImportError extends Error {}
+
+/** A file that does not say which run it was made on, for a video the library has several runs of: the user says
+ *  whether it was made on this one (then parseCorrections with `thisRun`). */
+export class RunUnknownError extends ImportError {
+  constructor(readonly runs: number) {
+    super(`the file does not say which run of this video it was made on, and the library has ${runs} runs of it`);
+  }
+}
 
 const v1Person = (p: unknown): string => {
   if (p === 'Unknown') return UNKNOWN;
