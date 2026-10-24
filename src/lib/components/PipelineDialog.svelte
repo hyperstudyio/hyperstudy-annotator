@@ -180,10 +180,11 @@
                   {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o)}</option>{/each}
                 </select>
               {:else if n.place}<span title={n.place}>{placeName(n.place)}</span>
+              {:else if n.where}{n.where}   <!-- a CLI from before plans named places -->
               {:else}<span class="error">Cannot run here</span>{/if}
             </span>
             <span class="track" aria-hidden="true">
-              {#if n.cached}<span class="tick"></span>
+              {#if n.cached}<span class="bar done"></span>
               {:else if t && !off}
                 <span class="bar" class:unknown={t.seconds == null}
                       style:left="{(t.start / span) * 100}%" style:width={t.seconds == null ? null : `${Math.max((t.seconds / span) * 100, 1.5)}%`}></span>
@@ -279,7 +280,7 @@
   h3 { font-size: 15px; font-weight: 600; margin: 0; font-variant-numeric: tabular-nums; }
   .plan > .muted { font-size: 12px; margin-top: 2px; }
   .steps { list-style: none; margin: 14px 0 0; padding: 0; }
-  .step { display: grid; grid-template-columns: 20px minmax(72px, .8fr) minmax(180px, 1.6fr) 1.6fr 84px; column-gap: 10px; align-items: center;
+  .step { display: grid; grid-template-columns: 20px minmax(72px, .8fr) minmax(180px, 1.6fr) minmax(0, 1.6fr) 84px; column-gap: 10px; align-items: center;
           padding: 7px 0; border-top: 1px solid var(--color-border-default); }
   .step:first-child { border-top: 0; }
   .step.off > :not(.notes) { opacity: .45; }
@@ -288,14 +289,14 @@
   .where { color: var(--color-text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .where select { max-width: 100%; }   /* a menu is as wide as its longest option (with its estimate): keep it in its column */
   .time { text-align: right; font-variant-numeric: tabular-nums; color: var(--color-text-secondary); white-space: nowrap; }
-  .notes { grid-column: 3 / -1; display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12px; }
+  .notes { grid-column: 3 / -1; display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
   .notes:empty { display: none; }
   .caution { color: var(--color-caution); }
 
   .track { position: relative; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .04); }
   .bar { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: #5a5a5a; }
   .bar.unknown { width: 28px; background: repeating-linear-gradient(135deg, #555 0 3px, transparent 3px 6px); }   /* no estimate: no length to draw */
-  .tick { position: absolute; left: 0; top: -2px; bottom: -2px; width: 3px; border-radius: 2px; background: var(--color-primary); opacity: .7; }
+  .bar.done { left: 0; right: 0; background: var(--color-primary); }   /* already done: nothing left to run */
   /* during the run the same bars show each step's state */
   .step.running .bar, .step.retrying .bar { background: var(--color-info); animation: pulse 1.6s ease-in-out infinite; }
   .step.retrying .bar { background: var(--color-caution); }

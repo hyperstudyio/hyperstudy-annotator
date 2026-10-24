@@ -66,7 +66,7 @@ test('times read as people say them, and a plan totals what will run (not what i
   expect(duration(3725)).toBe('1 h 2 min');
   const node = (id: string, estimate_s: number | null, cached = false): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached,
     downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], estimate_s, estimate_basis: '' });
-  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] })).toEqual({ seconds: 98, fastest: 96, unknown: [] });
+  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] })).toEqual({ seconds: 98, fastest: 98, unknown: [] });
   expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('asr', 2), node('faces', null)] })).toEqual({ seconds: 2, fastest: 2, unknown: ['faces'] });
 });
 
@@ -121,4 +121,12 @@ test('steps start after what they need, side by side otherwise, and the time is 
   const unknown = { ...plan, nodes: plan.nodes.map((n) => n.id === 'faces' ? { ...n, estimate_s: null } : n) };
   expect(schedule(unknown).captions).toEqual({ start: 2, seconds: 176 });   // a step with no estimate holds nothing up
   expect(totalEstimate(unknown)).toEqual({ seconds: 178, fastest: 178, unknown: ['faces'] });
+});
+
+test('a plan that does not say what each step needs is drawn one step after another, not all at once', () => {
+  const node = (id: string, estimate_s: number, cached = false): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached,
+    downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], estimate_s, estimate_basis: '' });
+  const plan: Plan = { ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] };
+  expect(schedule(plan)).toEqual({ asr: { start: 0, seconds: 2 }, faces: { start: 2, seconds: 96 } });
+  expect(totalEstimate(plan)).toEqual({ seconds: 98, fastest: 98, unknown: [] });   // no range the app cannot vouch for
 });

@@ -154,10 +154,16 @@ export function duration(seconds: number): string {
 
 /** When each step that will run starts and how long it takes, in estimated seconds from the run's start: after the
  *  steps it needs (cached ones take no time), as the coordinator runs independent steps side by side. A step with no
- *  estimate has `seconds` null and holds up nothing (what needs it starts when its other inputs are ready). */
+ *  estimate has `seconds` null and holds up nothing (what needs it starts when its other inputs are ready). A plan that
+ *  does not say what steps need (an older CLI) is drawn one step after another: nothing says which could overlap. */
 export function schedule(plan: Plan): Record<string, { start: number; seconds: number | null }> {
-  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
   const out: Record<string, { start: number; seconds: number | null }> = {};
+  if (!canPick(plan)) {
+    let start = 0;
+    for (const n of plan.nodes.filter((x) => !x.cached)) { out[n.id] = { start, seconds: n.estimate_s ?? null }; start += n.estimate_s ?? 0; }
+    return out;
+  }
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
   const end = (id: string): number => {
     const n = byId.get(id);
     if (!n || n.cached) return 0;

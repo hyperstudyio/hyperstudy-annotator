@@ -50,8 +50,8 @@ const script: PipelineMessage[] = [
 
 /** `rejectRun`: the app refuses to start the run (as when another run is in progress). `slowStart`: the first message
  *  takes a long time (a first environment sync), so the run can be canceled before it has an id. `noNeeds`: a CLI
- *  from before plans said what each node needs. */
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false } = {}): PipelineApi {
+ *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs. */
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false } = {}): PipelineApi {
   let folder: string | null = null;
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
@@ -62,6 +62,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     graphs: async () => graphs,
     async plan(_graph, _video, places) {   // faces can run on the Apple GPU (measured before) or the CPU (never yet)
       const cpu = places.faces === 'native:cpu';
+      if (oldCli) return { ...plan, nodes: plan.nodes.map(({ needs, place, options, estimates, estimate_s, estimate_basis, ...n }) => n) };
       const nodes = noNeeds ? plan.nodes.map(({ needs: _, ...n }) => n) : plan.nodes;
       return { ...plan, nodes: nodes.map((n) => n.id !== 'faces' ? n : { ...n, place: cpu ? 'native:cpu' : 'native:mps', where: cpu ? 'native (cpu)' : 'native (mps)',
         estimate_s: cpu ? null : 96, estimate_basis: cpu ? 'no runs of vision.face-track@1.0.0 on native:cpu here yet' : 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' }) };

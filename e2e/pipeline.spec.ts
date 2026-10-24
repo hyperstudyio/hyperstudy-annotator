@@ -104,3 +104,18 @@ test('in a narrow window the plan fits without scrolling sideways', async ({ pag
   await expect(dialog.getByRole('combobox', { name: 'Where faces runs' })).toBeVisible();
   await page.screenshot({ path: 'test-results/pipeline-narrow.png' });
 });
+
+test('a plan from a CLI that does not name places shows where each step runs, and can start', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=old-cli');
+  await expect(dialog.getByText('Cannot run here')).toHaveCount(0);
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('native (mps)');
+  for (const box of await dialog.getByRole('checkbox').all()) await box.check();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+test('a step already done fills its whole bar', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  const decode = dialog.getByRole('listitem', { name: 'decode' });
+  const [bar, track] = await Promise.all([decode.locator('.bar').boundingBox(), decode.locator('.track').boundingBox()]);
+  expect(bar!.width).toBeCloseTo(track!.width, 0);
+});
