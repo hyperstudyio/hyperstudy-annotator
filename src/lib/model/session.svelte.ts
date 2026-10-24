@@ -9,7 +9,7 @@ import {
 } from './corrections';
 import { View, type Tab } from './view.svelte';
 import { Playback } from '../playback.svelte';
-import type { CarryRecord, CorrectionStore } from '../source';
+import type { CarryRecord, CorrectionStore, EarlierVersion, Lineage } from '../source';
 import type {
   FaceTrack, FacesDetail, FacingEvent, GazeEvent, GestureEvent, ObjectTrack, Shot, SoundEvent, Span, Speaker, TextItem, Utterance,
 } from '../types';
@@ -381,8 +381,19 @@ export class Session {
     const sounds = this.bundle.sounds.filter((s) => s.agreement === false);
     return { speakers, pairs, sounds };
   });
-  /** Ops of an earlier version left for review: only while its carry-over is in the log (an undo takes it back). */
-  readonly notCarried = $derived(this.carry?.status === 'carried' && this.ops.some((o) => o.carried_from) ? this.carry.unmatched : []);
+  /** A carry-over that put ops in the log, none of which are there now: an undo took it back. */
+  readonly carryUndone = $derived(this.carry?.status === 'carried' && this.carry.carried > 0 && !this.ops.some((o) => o.carried_from));
+  /** Ops of an earlier version left for review, unless the carry-over was undone. A carry-over that matched nothing
+   *  still lists them. */
+  readonly notCarried = $derived(this.carry?.status === 'carried' && !this.carryUndone ? this.carry.unmatched : []);
+
+  /** Load this version's carry-over record; the earlier version to offer, if any: when the log is empty and nothing was
+   *  carried (or the carry-over was undone), unless the user chose to start fresh. */
+  async checkCarry(lineage: Lineage): Promise<EarlierVersion | null> {
+    this.carry = await lineage.record();
+    const open = !this.carry || this.carryUndone;
+    return !this.ops.length && open ? lineage.previous() : null;
+  }
   readonly openInQueue = $derived(this.queue.speakers.filter((u) => !this.reviewed(u)).length + this.queue.pairs.length
     + this.notCarried.length);
 

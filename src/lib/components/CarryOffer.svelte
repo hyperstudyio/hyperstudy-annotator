@@ -13,18 +13,14 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
 
-  // Offered whenever the log is empty, unless the user chose to start fresh: on opening, and again straight after an
-  // undo takes a carry-over back.
+  // Checked on opening (which also loads what was not carried) and whenever the log becomes empty or stops being
+  // empty: an undo that takes a carry-over back offers it again.
+  const empty = $derived(s.ops.length === 0);
   $effect(() => {
-    const lineage = source.lineage, empty = s.ops.length === 0;
+    const lineage = source.lineage;
+    void empty;
     if (!lineage) return;
-    if (!empty) { offer = null; return; }
-    untrack(() => {
-      (async () => {
-        s.carry = await lineage.record();
-        offer = s.carry?.status !== 'declined' ? await lineage.previous() : null;
-      })().catch((e) => (error = String(e)));
-    });
+    untrack(() => { s.checkCarry(lineage).then((o) => (offer = o)).catch((e) => (error = String(e))); });
   });
 
   async function carry() {

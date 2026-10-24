@@ -147,3 +147,32 @@ test('two commits in the same millisecond get different timestamps', () => {
   expect(stampAfter('2026-10-23T09:00:00.000Z', now)).toBe('2026-10-23T10:00:00.000Z');
   expect(stampAfter(undefined, now)).toBe('2026-10-23T10:00:00.000Z');
 });
+
+describe('carry-over', () => {
+  const unmatched = [{ index: 1, op: { op: 'entity.include', id: 'face:9', included: false } as const, reason: 'no counterpart', span: null }];
+  const record = (carried: number) => ({ from_bundle_id: 'v1', status: 'carried' as const, carried, unmatched, created_at: '' });
+  const lineage = (rec: ReturnType<typeof record> | null) => ({
+    record: async () => rec, previous: async () => ({ id: 'v1', label: 'v1', corrections: 2, open: async () => { throw new Error('unused'); } }),
+    carry: async () => 0, decline: async () => {}, dismiss: async () => rec!,
+  });
+
+  test('a version opened with carried ops in its log shows what was not carried, and offers nothing', async () => {
+    const { s } = session();
+    await s.commit({ op: 'shot.caption', shot: 'shot:0', caption: 'a', carried_from: { bundle: 'v1', index: 0 } });
+    expect(await s.checkCarry(lineage(record(1)))).toBeNull();
+    expect(s.notCarried).toEqual(unmatched);
+  });
+
+  test('a carry-over that matched nothing still lists what it could not carry, and is not offered again', async () => {
+    const { s } = session();
+    expect(await s.checkCarry(lineage(record(0)))).toBeNull();
+    expect(s.notCarried).toEqual(unmatched);
+  });
+
+  test('an undone carry-over is offered again and its list is hidden', async () => {
+    const { s } = session();
+    expect(await s.checkCarry(lineage(record(1)))).toMatchObject({ id: 'v1' });
+    expect(s.notCarried).toEqual([]);
+    expect(await s.checkCarry(lineage(null))).toMatchObject({ id: 'v1' });   // never carried: offered
+  });
+});
