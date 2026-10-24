@@ -117,6 +117,18 @@ pub fn record_import(conn: &Connection, src: &Path, id: &str, manifest: &Value, 
     get(conn, id)
 }
 
+/// Import a bundle folder, or give the copy already in the library (bundles are matched by their manifest's checksum).
+/// The slow part (hashing and copying) runs without holding the database; a copy that cannot be recorded is removed.
+pub fn import_dir(db: &std::sync::Mutex<Connection>, src: &Path, data_dir: &Path) -> Result<BundleSummary> {
+    let existing = find_imported(&db.lock().unwrap(), src)?;   // the lock is released here: an `if let` would hold it
+    if let Some(id) = existing {                                 // through the block, and the next lock would deadlock
+        return get(&db.lock().unwrap(), &id);
+    }
+    let (id, manifest, dst) = prepare_import(src, data_dir)?;
+    let conn = db.lock().unwrap();
+    record_import(&conn, src, &id, &manifest, &dst).inspect_err(|_| { let _ = fs::remove_dir_all(&dst); })
+}
+
 pub fn expected_video(conn: &Connection, id: &str) -> Result<String> {
     Ok(get_row(conn, id)?.video_sha256)
 }
@@ -620,5 +632,15 @@ mod tests {
         set_setting(&conn, "pipeline_folder", "/a").unwrap();
         set_setting(&conn, "pipeline_folder", "/b").unwrap();
         assert_eq!(get_setting(&conn, "pipeline_folder").unwrap().as_deref(), Some("/b"));
+    }
+
+    #[test]
+    fn importing_a_bundle_already_in_the_library_gives_the_existing_one_and_leaves_no_copy() {
+        let (conn, data, src) = setup();
+        let db = std::sync::Mutex::new(conn);
+        let first = import_dir(&db, src.path(), data.path()).unwrap();
+        let again = import_dir(&db, src.path(), data.path()).unwrap();
+        assert_eq!(again.id, first.id);
+        assert_eq!(fs::read_dir(data.path().join("bundles")).unwrap().count(), 1);
     }
 }

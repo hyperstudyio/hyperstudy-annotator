@@ -134,7 +134,7 @@ dialog (`PipelineDialog.svelte`) that goes in order:
 
 How it is built:
 - `src-tauri/src/pipeline.rs` runs `perception --json` (protocol 1, `docs/cli-json.md` there) with **the uv the app
-  bundles**. `scripts/fetch-uv.sh` fetches a pinned uv release (0.12.15), checks it against the published sha256, and
+  bundles**. `scripts/fetch-uv.sh` fetches a pinned uv release (0.13.5, the latest on 2026-10-24), checks it against the sha256 pinned for each target, and
   puts it in `src-tauri/binaries/` before `tauri dev` and `tauri build` (`bundle.externalBin`). The app never uses a
   uv found on the machine. uv is MIT OR Apache-2.0.
 - One run at a time, since GPU nodes are exclusive.

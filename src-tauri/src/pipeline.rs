@@ -99,9 +99,36 @@ impl Pipeline {
             .ok_or_else(|| Error::Bundle(format!("the pipeline printed no {kind}")))
     }
 
-    /// Start a long command (run), its stdout piped for `lines`.
-    pub fn spawn(&self, args: &[&str]) -> Result<Child> {
-        Ok(self.command(args).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?)
+    /// Run `run` (or `resume`, `rerun`) to its end, calling `on` for each object as it arrives. Returns the run's id
+    /// and status, or None when the CLI refused it in its own objects (a plan that cannot run, an error object: `on`
+    /// has seen them). A CLI that ends any other way (uv could not sync, a crash) is an error with its last words.
+    pub fn run_to_end(&self, args: &[&str], mut on: impl FnMut(&Value)) -> Result<Option<(String, String)>> {
+        let mut child = self.command(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        let stderr = child.stderr.take().map(|e| std::thread::spawn(move || {   // read apart: a full pipe would block
+            let mut tail: Vec<String> = BufReader::new(e).lines().map_while(|l| l.ok()).collect();
+            tail.drain(..tail.len().saturating_sub(5));
+            tail.join(" | ")
+        }));
+        let (mut run, mut finished, mut refused) = (None::<String>, None::<String>, false);
+        let read = lines(&mut child, |o| {
+            match o["type"].as_str() {
+                Some("run.created") => run = o["run"].as_str().map(String::from),
+                Some("run.finished") => finished = o["status"].as_str().map(String::from),
+                Some("error") => refused = true,
+                Some("plan") if o["ok"] == false => refused = true,
+                _ => {}
+            }
+            on(&o);
+        });
+        let status = child.wait()?;
+        let last_words = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
+        read?;
+        match (run, finished) {
+            (Some(run), Some(finished)) => Ok(Some((run, finished))),
+            _ if refused => Ok(None),
+            _ => Err(Error::Bundle(format!("the pipeline ended without finishing the run ({status}){}",
+                                           if last_words.is_empty() { String::new() } else { format!(": {last_words}") }))),
+        }
     }
 
     /// A graph of the pipeline's graphs/ folder, by file name only: nothing outside that folder can be named.
@@ -201,6 +228,37 @@ mod tests {
         assert!(Pipeline::new(dir.path(), PathBuf::from("/bin/uv")).unwrap_err().to_string().contains("not a hyperstudy-perception folder"));
     }
 
+    /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).
+    fn fake_uv(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
+        let path = dir.join("fake-uv");
+        fs::write(&path, format!("#!/bin/sh\ncat <<'EOF'\n{stdout}\nEOF\necho '{stderr}' >&2\nexit {code}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_run_that_ends_without_finishing_is_an_error_that_says_why() {
+        let dir = repo();
+        let created = r#"{"v": 1, "type": "run.created", "run": "r1", "store": "/s"}"#;
+        let p = Pipeline::new(dir.path(), fake_uv(dir.path(), created, "error: uv could not sync the environment", 1)).unwrap();
+        let mut seen = 0;
+        let err = p.run_to_end(&["run", "g.yaml"], |_| seen += 1).unwrap_err().to_string();
+        assert!(err.contains("ended without finishing the run") && err.contains("uv could not sync"), "{err}");
+        assert_eq!(seen, 1);
+    }
+
+    #[test]
+    fn a_run_reports_its_id_and_status_and_one_the_cli_refused_says_so_in_its_own_objects() {
+        let dir = repo();
+        let finished = "{\"v\": 1, \"type\": \"run.created\", \"run\": \"r1\", \"store\": \"/s\"}\n{\"v\": 1, \"type\": \"run.finished\", \"run\": \"r1\", \"status\": \"succeeded\"}";
+        let p = Pipeline::new(dir.path(), fake_uv(dir.path(), finished, "", 0)).unwrap();
+        assert_eq!(p.run_to_end(&["run"], |_| {}).unwrap(), Some(("r1".into(), "succeeded".into())));
+        let refused = r#"{"v": 1, "type": "plan", "ok": false, "nodes": [], "estimated_usd": 0}"#;   // printed, then exit 1
+        let p = Pipeline::new(dir.path(), fake_uv(dir.path(), refused, "", 1)).unwrap();
+        assert_eq!(p.run_to_end(&["run"], |_| {}).unwrap(), None);
+    }
+
     /// The real CLI end to end, through the uv the app bundles: a synthetic clip decoded, exported and imported into a
     /// library. Needs the pipeline folder (PERCEPTION_REPO), the fetched uv and ffmpeg; skipped without them.
     #[test]
@@ -225,16 +283,13 @@ mod tests {
         let plan = p.one(&["plan", graph.to_str().unwrap(), "--input", &input], "plan").unwrap();
         assert_eq!(plan["ok"], true);
 
-        let mut child = p.spawn(&["run", graph.to_str().unwrap(), "--input", &input]).unwrap();
         let mut seen = vec![];
-        lines(&mut child, |o| seen.push(o)).unwrap();
-        child.wait().unwrap();
+        let (run, status) = p.run_to_end(&["run", graph.to_str().unwrap(), "--input", &input], |o| seen.push(o.clone())).unwrap().unwrap();
         assert_eq!(seen[0]["type"], "run.created");
-        let last = seen.last().unwrap();
-        assert_eq!((last["type"].as_str(), last["status"].as_str()), (Some("run.finished"), Some("succeeded")));
-
-        let run = seen[0]["run"].as_str().unwrap();
-        eprintln!("run {run}: {} objects, ended {}", seen.len(), last);
+        assert_eq!(status, "succeeded");
+        assert_eq!(seen.last().unwrap()["type"], "run.finished");
+        let run = run.as_str();
+        eprintln!("run {run}: {} objects, ended {status}", seen.len());
         let out = work.path().join("export");
         let exported = p.one(&["export", run, "--output", out.to_str().unwrap()], "exported").unwrap();
         let bundle_dir = PathBuf::from(exported["path"].as_str().unwrap());

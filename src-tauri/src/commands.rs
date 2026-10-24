@@ -248,36 +248,30 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     if allow_downloads {
         args.push("--allow-downloads");
     }
-    let mut child = p.spawn(&args)?;
-    let (mut run, mut status) = (None::<String>, None::<String>);
-    let read = pipeline::lines(&mut child, |o| {
-        match o["type"].as_str() {
-            Some("run.created") => {
-                run = o["run"].as_str().map(String::from);
-                *state.running.lock().unwrap() = run.clone();
-            }
-            Some("run.finished") => status = o["status"].as_str().map(String::from),
-            _ => {}
+    let outcome = p.run_to_end(&args, |o| {
+        if o["type"] == "run.created" {
+            *state.running.lock().unwrap() = o["run"].as_str().map(String::from);
         }
-        let _ = app.emit("pipeline", &o);
-    });
-    child.wait()?;
-    read?;
-    let (Some(run), Some("succeeded")) = (run, status.as_deref()) else { return Ok(()) };   // the events said why
+        let _ = app.emit("pipeline", o);
+    })?;
+    let Some((run, status)) = outcome else { return Ok(()) };   // refused: its objects said why
+    if status != "succeeded" {
+        return Ok(());   // its events said what failed
+    }
 
     let out = state.data_dir.join("exports").join(&run);
-    let exported = p.one(&["export", &run, "--output", &out.to_string_lossy()], "exported")?;
-    let bundle_dir = PathBuf::from(exported["path"].as_str().unwrap_or_default());
-    let (id, manifest, dst) = library::prepare_import(&bundle_dir, &state.data_dir)?;
-    let summary = {
-        let conn = state.db.lock().unwrap();
-        library::record_import(&conn, &bundle_dir, &id, &manifest, &dst)?
-    };
-    std::fs::remove_dir_all(&out)?;   // the library holds its own copy
+    let imported = (|| {
+        let exported = p.one(&["export", &run, "--output", &out.to_string_lossy()], "exported")?;
+        library::import_dir(&state.db, std::path::Path::new(exported["path"].as_str().unwrap_or_default()), &state.data_dir)
+    })();
+    if out.exists() {
+        std::fs::remove_dir_all(&out)?;   // the library holds its own copy (or the import failed): frames and crops go
+    }
+    let summary = imported?;
     library::check_video(&summary.video_sha256, std::path::Path::new(video))?;   // the bundle names the video it was made from
     let conn = state.db.lock().unwrap();
     library::record_video(&conn, &summary.video_sha256, video)?;
-    let summary = library::get(&conn, &id)?;
+    let summary = library::get(&conn, &summary.id)?;
     let _ = app.emit("pipeline", serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary}));
     Ok(())
 }
