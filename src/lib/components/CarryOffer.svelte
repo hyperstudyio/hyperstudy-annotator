@@ -5,7 +5,7 @@
   import { Bundle } from '../model/bundle';
   import { carryOver } from '../model/carryover';
   import { useSession, useSource } from '../model/context';
-  import { plural } from '../model/session.svelte';
+  import { plural, stampAfter } from '../model/session.svelte';
   import type { EarlierVersion } from '../source';
 
   const s = useSession(), source = useSource();
@@ -17,8 +17,10 @@
     const lineage = source.lineage;
     if (!lineage) return;
     (async () => {
+      // offered until this version has corrections of its own, unless the user chose to start fresh (an undone
+      // carry-over is offered again)
       s.carry = await lineage.record();
-      if (!s.carry && !s.ops.length) offer = await lineage.previous();
+      if (!s.ops.length && s.carry?.status !== 'declined') offer = await lineage.previous();
     })().catch((e) => (error = String(e)));
   });
 
@@ -28,7 +30,7 @@
     try {
       const prev = await from.open();
       const [bundle, ops] = await Promise.all([Bundle.load(prev), prev.corrections.load()]);
-      const r = carryOver(ops, bundle, s.bundle, from.id);
+      const r = carryOver(ops, bundle, s.bundle, from.id, stampAfter(undefined));
       await lineage.carry(from.id, r.ops, r.unmatched);
       await s.load();
       s.carry = await lineage.record();

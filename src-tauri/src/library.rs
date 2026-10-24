@@ -239,9 +239,11 @@ fn count_corrections(conn: &Connection, bundle_id: &str) -> Result<usize> {
 
 // --- versions of one video, and carrying corrections over to a re-run ---
 
-/// When a bundle was made: its manifest's created_at, or when it was imported if the manifest has none.
-fn made_at(s: &BundleSummary) -> &str {
-    s.created_at.as_deref().filter(|t| !t.is_empty()).unwrap_or(&s.imported_at)
+/// When a bundle was made, as an instant: its manifest's created_at, or when it was imported if the manifest has
+/// none (or one that does not parse). Compared as instants: a Mac run and a cloud run write different UTC offsets.
+fn made_at(s: &BundleSummary) -> chrono::DateTime<chrono::FixedOffset> {
+    let parse = |t: &str| chrono::DateTime::parse_from_rfc3339(t).ok();
+    s.created_at.as_deref().and_then(parse).or_else(|| parse(&s.imported_at)).unwrap_or_default()
 }
 
 /// The newest version of this bundle's video made before it that holds corrections: what a re-run would start from.
@@ -251,7 +253,7 @@ pub fn previous_version(conn: &Connection, id: &str) -> Result<Option<BundleSumm
         .query_map(params![this.video_sha256, id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     let mut earlier: Vec<BundleSummary> = ids.iter().map(|i| get(conn, i)).collect::<Result<_>>()?;
     earlier.retain(|b| b.corrections > 0 && made_at(b) < made_at(&this));
-    earlier.sort_by(|a, b| made_at(b).cmp(made_at(a)));
+    earlier.sort_by_key(|b| std::cmp::Reverse(made_at(b)));
     Ok(earlier.into_iter().next())
 }
 
@@ -275,14 +277,15 @@ pub fn get_carryover(conn: &Connection, id: &str) -> Result<Option<Carryover>> {
     })).transpose()
 }
 
-/// Checks before a carry-over is recorded: another version of the same video, and this bundle not started yet.
+/// Checks before a carry-over is recorded: another version of the same video, this bundle without corrections of its
+/// own, and not started fresh. An undone carry-over (record 'carried', log empty) can be carried again or declined.
 fn check_carry(conn: &Connection, id: &str, from_id: &str) -> Result<()> {
     let (this, from) = (get_row(conn, id)?, get_row(conn, from_id)?);
     if id == from_id || this.video_sha256 != from.video_sha256 {
         return Err(Error::Bundle("corrections carry over only between versions of the same video".into()));
     }
-    if get_carryover(conn, id)?.is_some() {
-        return Err(Error::Bundle("this version already carried over (or declined) an earlier version's corrections".into()));
+    if get_carryover(conn, id)?.is_some_and(|c| c.status == "declined") {
+        return Err(Error::Bundle("this version was started without the earlier corrections (declined)".into()));
     }
     if count_corrections(conn, id)? > 0 {
         return Err(Error::Bundle("this version already has corrections of its own".into()));
@@ -291,12 +294,12 @@ fn check_carry(conn: &Connection, id: &str, from_id: &str) -> Result<()> {
 }
 
 /// Start this bundle's log with ops the app re-anchored from an earlier version's log, and record what it could not
-/// carry. Once per bundle, onto an empty log; the earlier version's log is not touched. Returns the log's length.
+/// carry. Only onto an empty log; the earlier version's log is not touched. Returns the log's length.
 pub fn carry_over(conn: &Connection, id: &str, from_id: &str, ops: &[Value], unmatched: &Value) -> Result<usize> {
     check_carry(conn, id, from_id)?;
     let tx = conn.unchecked_transaction()?;
     insert_ops(&tx, id, ops)?;
-    tx.execute("INSERT INTO carryovers (bundle_id, from_bundle_id, status, carried, unmatched, created_at) VALUES (?1, ?2, 'carried', ?3, ?4, ?5)",
+    tx.execute("INSERT OR REPLACE INTO carryovers (bundle_id, from_bundle_id, status, carried, unmatched, created_at) VALUES (?1, ?2, 'carried', ?3, ?4, ?5)",
                params![id, from_id, ops.len() as i64, unmatched.to_string(), chrono::Utc::now().to_rfc3339()])?;
     tx.commit()?;
     count_corrections(conn, id)
@@ -305,7 +308,7 @@ pub fn carry_over(conn: &Connection, id: &str, from_id: &str, ops: &[Value], unm
 /// The user chose to start this version without the earlier corrections (so the app does not offer them again).
 pub fn decline_carryover(conn: &Connection, id: &str, from_id: &str) -> Result<()> {
     check_carry(conn, id, from_id)?;
-    conn.execute("INSERT INTO carryovers (bundle_id, from_bundle_id, status, carried, unmatched, created_at) VALUES (?1, ?2, 'declined', 0, '[]', ?3)",
+    conn.execute("INSERT OR REPLACE INTO carryovers (bundle_id, from_bundle_id, status, carried, unmatched, created_at) VALUES (?1, ?2, 'declined', 0, '[]', ?3)",
                  params![id, from_id, chrono::Utc::now().to_rfc3339()])?;
     Ok(())
 }
@@ -500,7 +503,7 @@ mod tests {
         assert_eq!(carry_over(&conn, &v2, &v1, &carried, &unmatched).unwrap(), 1);
         assert_eq!(load_corrections(&conn, &v1).unwrap(), earlier);
         assert_eq!(load_corrections(&conn, &v2).unwrap(), carried);
-        assert!(carry_over(&conn, &v2, &v1, &carried, &unmatched).unwrap_err().to_string().contains("already carried"));
+        assert!(carry_over(&conn, &v2, &v1, &carried, &unmatched).unwrap_err().to_string().contains("of its own"));
         assert!(decline_carryover(&conn, &v2, &v1).is_err());
 
         let c = get_carryover(&conn, &v2).unwrap().unwrap();
@@ -527,5 +530,36 @@ mod tests {
         decline_carryover(&conn, &v3, &v1).unwrap();
         assert_eq!(get_carryover(&conn, &v3).unwrap().unwrap().status, "declined");
         assert!(carry_over(&conn, &v3, &v1, &[], &json!([])).is_err());
+    }
+
+    #[test]
+    fn versions_are_ordered_by_instant_not_by_how_their_times_are_written() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        // 13:00 UTC, then 12:00 in New York (16:00 UTC): as text the first sorts later
+        let (v1, _a) = import_version(&conn, data.path(), b"video", "2026-10-10T13:00:00+00:00");
+        let (v2, _b) = import_version(&conn, data.path(), b"video", "2026-10-10T12:00:00-04:00");
+        append_corrections(&conn, &v1, &[json!({"op": "a"})]).unwrap();
+        append_corrections(&conn, &v2, &[json!({"op": "b"})]).unwrap();
+        assert_eq!(previous_version(&conn, &v2).unwrap().map(|b| b.id), Some(v1.clone()));
+        assert!(previous_version(&conn, &v1).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_undone_carry_over_can_be_carried_again_or_declined_until_the_version_has_its_own_corrections() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let (v1, _a) = import_version(&conn, data.path(), b"video", "2026-10-01T00:00:00Z");
+        let (v2, _b) = import_version(&conn, data.path(), b"video", "2026-10-10T00:00:00Z");
+        append_corrections(&conn, &v1, &[json!({"op": "a"})]).unwrap();
+        let carried = [json!({"op": "a", "carried_from": {"bundle": v1, "index": 0}})];
+        carry_over(&conn, &v2, &v1, &carried, &json!([])).unwrap();
+        truncate_corrections(&conn, &v2, 0).unwrap();                              // undo takes the whole carry-over
+        assert_eq!(carry_over(&conn, &v2, &v1, &carried, &json!([])).unwrap(), 1);
+        truncate_corrections(&conn, &v2, 0).unwrap();
+        decline_carryover(&conn, &v2, &v1).unwrap();
+        assert!(carry_over(&conn, &v2, &v1, &carried, &json!([])).unwrap_err().to_string().contains("declined"));
     }
 }

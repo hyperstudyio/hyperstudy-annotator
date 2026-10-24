@@ -165,8 +165,9 @@ export function refsOf(op: Op): string[] {
   }
 }
 
-/** Re-anchor `ops` (the log of bundle `fromId`) onto `to`. */
-export function carryOver(ops: Op[], from: Bundle, to: Bundle, fromId: string): CarryResult {
+/** Re-anchor `ops` (the log of bundle `fromId`) onto `to`. With `at`, every carried op gets that time, so the
+ *  carry-over is one batch that one undo takes back (the original times stay in the earlier log). */
+export function carryOver(ops: Op[], from: Bundle, to: Bundle, fromId: string, at?: string): CarryResult {
   const { map, reasons } = anchor(from, to);
   const own = new Set(ops.flatMap((o) => (o.op === 'person.create' ? [o.person] : [])));
   const m = (id: string): string => {
@@ -182,7 +183,7 @@ export function carryOver(ops: Op[], from: Bundle, to: Bundle, fromId: string): 
       if (op.op === 'person.distinct' && moved.op === 'person.distinct' && moved.a === moved.b) {
         throw new Mismatch(`${label(op.a)} and ${label(op.b)} are one person in the new version`);
       }
-      out.push({ ...moved, carried_from: { bundle: fromId, index } });
+      out.push({ ...moved, ...(at ? { at } : {}), carried_from: { bundle: fromId, index } });
     } catch (e) {
       if (!(e instanceof Mismatch)) throw e;
       const first = refsOf(op)[0];
@@ -213,7 +214,9 @@ function translate(op: Op, m: (id: string) => string): Op {
     case 'entity.include': return { ...op, id: m(op.id) };
     case 'annotation.add': return op.note.person ? { ...op, note: { ...op.note, person: m(op.note.person) } } : op;
     case 'annotation.edit': return op.fields.person ? { ...op, fields: { ...op.fields, person: m(op.fields.person) } } : op;
-    default: return op;
+    case 'person.create': case 'category.include': case 'annotation.type': case 'annotation.delete': return op;
+    default:   // from a newer app: it may name ids this version cannot re-anchor
+      throw new Mismatch(`this version of the app does not know “${(op as { op: string }).op}” corrections`);
   }
 }
 
@@ -239,5 +242,6 @@ export function describe(op: Op): string {
     case 'annotation.add': return 'Annotation added';
     case 'annotation.edit': return 'Annotation edited';
     case 'annotation.delete': return 'Annotation deleted';
+    default: return `A “${(op as { op: string }).op}” correction`;
   }
 }

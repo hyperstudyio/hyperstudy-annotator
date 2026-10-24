@@ -31,7 +31,7 @@ export interface EarlierVersion { id: string; label: string; corrections: number
 /** Versions of one video. The earlier version's log is only read; carried ops go into this version's log. */
 export interface Lineage {
   record(): Promise<CarryRecord | null>;
-  /** The newest earlier version with corrections (when this one has none and nothing was carried or declined). */
+  /** The newest earlier version with corrections (asked when this one has none of its own and was not started fresh). */
   previous(): Promise<EarlierVersion | null>;
   carry(from: string, ops: Op[], unmatched: Unmatched[]): Promise<number>;
   decline(from: string): Promise<void>;
@@ -170,10 +170,10 @@ function localLineage(base: string, previousUrl: string, videoUrl: string | null
     async previous() {
       const prev = await httpSource(previousUrl, videoUrl);
       const n = (await prev.corrections.load()).length;
-      return n && !read() && !(await store.load()).length ? { id: previousUrl, label: `The bundle at ${previousUrl}`, corrections: n, open: async () => prev } : null;
+      return n && read()?.status !== 'declined' && !(await store.load()).length ? { id: previousUrl, label: `The bundle at ${previousUrl}`, corrections: n, open: async () => prev } : null;
     },
     async carry(from, ops, unmatched) {
-      if (read()) throw new Error('this version already carried over (or declined) an earlier version’s corrections');
+      if (read()?.status === 'declined') throw new Error('this version was started without the earlier corrections (declined)');
       if ((await store.load()).length) throw new Error('this version already has corrections of its own');
       const n = await store.append(ops);
       write({ from_bundle_id: from, status: 'carried', carried: ops.length, unmatched, created_at: new Date().toISOString() });

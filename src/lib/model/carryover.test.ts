@@ -127,6 +127,22 @@ describe('carryOver', () => {
     expect(ops).toEqual(before);
   });
 
+  test('an op kind this version does not know is listed, not carried with the earlier ids', () => {
+    const future = { op: 'gesture.relabel', gesture: 'gesture:3', kind: 'wave' } as unknown as Op;
+    const { ops, unmatched } = carryOver([future], old, rerun(), 'v1');
+    expect(ops).toEqual([]);
+    expect(unmatched[0].reason).toBe('this version of the app does not know “gesture.relabel” corrections');
+  });
+
+  test('a carry-over is one batch, so one undo takes all of it', () => {
+    const ops: Op[] = [
+      { op: 'shot.caption', shot: 'shot:0', caption: 'a', at: '2026-10-01T00:00:00.000Z' },
+      { op: 'shot.caption', shot: 'shot:1', caption: 'b', at: '2026-10-02T00:00:00.000Z' },
+    ];
+    const { ops: carried } = carryOver(ops, old, rerun(), 'v1', '2026-10-24T12:00:00.000Z');
+    expect(carried.map((o) => o.at)).toEqual(['2026-10-24T12:00:00.000Z', '2026-10-24T12:00:00.000Z']);
+  });
+
   test('every op kind has a line for the review list', () => {
     expect(describeOp({ op: 'person.rename', person: 'person:Person C', name: 'Carol' })).toBe('Person C named “Carol”');
     expect(describeOp({ op: 'shot.caption', shot: 'shot:4', caption: 'x' })).toBe('Caption of shot 5 edited');
