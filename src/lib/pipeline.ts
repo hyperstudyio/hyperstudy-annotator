@@ -7,16 +7,22 @@ export interface Download { id: string; source: string | null; size_gb: number |
 export interface PlanNode {
   id: string; uses: string; where: string | null; why_not: string; cached: boolean;
   downloads: Download[]; missing_secrets: string[]; cost_usd: number; cost_note: string;
-  /** Data kinds the node sends off this machine (frames, transcript...); absent from older CLIs. */
+  /** Data kinds that leave this machine where it would run (frames, transcript...); absent from older CLIs. */
   uploads?: string[];
-  /** Where it would run (backend:accelerator), and every place it can run here, best first. */
+  /** Where they go: its API's service, or the other machine it would run on ("lab (SSH)"); null when nothing leaves. A
+   *  node on another machine always has one, even with no kinds: its inputs go there. Absent from CLIs before
+   *  perception #15 (then `service` says it, when `uploads` has kinds). */
+  upload_to?: string | null;
+  /** Where it would run (backend:accelerator: native:mps, ssh-lab:cuda, cloud:cuda), and every place it can run, best
+   *  first: this machine's, then other machines'. */
   place?: string | null; options?: string[];
   /** Seconds, from its measured runs on this machine; null with the reason in estimate_basis. */
   estimate_s?: number | null; estimate_basis?: string;
   /** The nodes whose outputs it takes (a stage picker's edges); absent from older CLIs. */
   needs?: string[];
-  /** Each of `options` -> its estimate, to compare places before choosing one; absent from older CLIs. */
-  estimates?: Record<string, { estimate_s: number | null; estimate_basis: string }>;
+  /** Each of `options` -> its estimate, to compare places before choosing one; absent from older CLIs. With perception
+   *  #15, what running there costs (the most: a cloud machine for its whole deadline) and what it would send where. */
+  estimates?: Record<string, { estimate_s: number | null; estimate_basis: string; cost_usd?: number; uploads?: string[]; upload_to?: string | null }>;
   /** What it gives, in a few words ("Face tracks"), and the rest of what its details show; absent from older CLIs. */
   title?: string; service?: string | null; description?: string; outputs?: Record<string, string>;
   models?: { id: string; source: string | null; licence_mode: string; size_gb: number | null }[];
@@ -30,7 +36,10 @@ export type Settings = Record<string, Record<string, string>>;
 
 /** Where the user moved nodes: node id -> place. */
 export type Places = Record<string, string>;
-export interface Plan { ok: boolean; estimated_usd: number; nodes: PlanNode[] }
+/** A place as the plan describes it: `title` for people ("lab (SSH)"), and whether it is another machine. */
+export interface PlaceInfo { title: string; remote: boolean; accelerator: string }
+/** `places` and `max_cost_usd` (the graph's cap on a run's spend) are absent from CLIs before perception #15/#16. */
+export interface Plan { ok: boolean; estimated_usd: number; nodes: PlanNode[]; places?: Record<string, PlaceInfo>; max_cost_usd?: number }
 export interface GraphPreset { file: string; pipeline: string; description: string }
 export interface Doctor {
   platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number;
@@ -56,7 +65,8 @@ export interface PipelineApi {
   /** Start a run; `on` receives its messages until `imported` or `error`. Resolves to a function that stops listening.
    *  The app checks the consent again against a fresh plan before it starts. */
   /** `only`: just these nodes (and what they need); null runs the whole graph. */
-  run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, settings: Settings, on: (m: PipelineMessage) => void): Promise<() => void>;
+  /** `maxCostUsd`: the run's spending cap (spendingCap), or null for the graph's own. */
+  run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, settings: Settings, maxCostUsd: number | null, on: (m: PipelineMessage) => void): Promise<() => void>;
   /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. */
   cancel(run: string | null): Promise<void>;
   pickFolder(): Promise<string | null>;
@@ -104,13 +114,26 @@ export interface Consent { uploads: Record<string, { kinds: string[]; service: s
  *  that is what they chose to send, and all they chose. */
 export type Ticked = Record<string, { kinds: string[]; service: string | null }>;
 
+/** Where `n` sends data, or null when nothing leaves this machine: its API, or the other machine it runs on. */
+export const dest = (n: PlanNode): string | null =>
+  n.upload_to ?? (n.uploads?.length ? n.service ?? null : null);   // kinds always go somewhere (the gate refuses a plan saying otherwise)
+/** Does `n` send anything off this machine where it would run? (On another machine it always does: its inputs.) */
+export const sends = (n: PlanNode) => dest(n) !== null || !!n.uploads?.length;
+
 /** What ticking `n` agrees to: what the plan on screen shows it sends, and where. */
-export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: n.service ?? null });
+export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: dest(n) });
+
+/** What choosing `place` for `n` agrees to: what the plan says it would send from there, and where (choosing another
+ *  machine is the choice to send it its inputs). Null when the plan does not say (then nothing is agreed). */
+export function placeTick(n: PlanNode, place: string): { kinds: string[]; service: string | null } | null {
+  const e = n.estimates?.[place];
+  return e && 'upload_to' in e ? { kinds: [...(e.uploads ?? [])], service: e.upload_to ?? null } : null;
+}
 
 /** Whether what `n` sends now is within what the user agreed to when they ticked it (no new kind, no other place). */
 function covered(n: PlanNode, ticked: Ticked): boolean {
   const t = ticked[n.id];
-  return !n.uploads?.length || (!!t && n.uploads.every((k) => t.kinds.includes(k)) && (n.service ?? null) === t.service);
+  return !sends(n) || (!!t && (n.uploads ?? []).every((k) => t.kinds.includes(k)) && dest(n) === t.service);
 }
 
 /** What a run of these steps lets happen: its models download as part of running, and turning on a feature that sends
@@ -119,8 +142,8 @@ function covered(n: PlanNode, ticked: Ticked): boolean {
  *  step that now sends more than when it was ticked agreed to nothing. The app holds a fresh plan to exactly this
  *  before it starts. */
 export const consentFor = (plan: Plan, ticked: Ticked): Consent => ({
-  uploads: Object.fromEntries(plan.nodes.filter((n) => n.uploads?.length && covered(n, ticked))
-    .map((n) => [n.id, { kinds: [...n.uploads!], service: n.service ?? null }])),
+  uploads: Object.fromEntries(plan.nodes.filter((n) => sends(n) && covered(n, ticked))
+    .map((n) => [n.id, { kinds: [...(n.uploads ?? [])], service: dest(n) }])),
 });
 
 /** Steps that would run and send data off beyond what the user agreed to: the run waits until they tick them. */
@@ -128,22 +151,24 @@ export const unagreed = (plan: Plan, ticked: Ticked) => plan.nodes.filter((n) =>
 
 /** The features still on when a new plan arrives, and the ticks that still stand: a step that now sends data off (a new
  *  place, a new setting) stays on only if it sends nothing beyond what the user agreed to when they ticked it; else it
- *  goes off, and its tick with it (ticking it again agrees to what it sends now). A plan whose steps cannot be chosen
- *  runs whole (blockers refuses it if a step sends data off). */
-export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Ticked): { wanted: Set<string>; ticked: Ticked } {
+ *  goes off, and its tick with it (ticking it again agrees to what it sends now). The agreement a chosen place gave
+ *  (`placed`: steps the user moved, see placeTick) stands while the place does, for a step held on for another feature
+ *  too. A plan whose steps cannot be chosen runs whole (blockers refuses it if a step sends data off). */
+export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Ticked, placed: string[] = []): { wanted: Set<string>; ticked: Ticked } {
   if (!canPick(plan)) return { wanted: defaultFeatures(plan), ticked };
   // a feature stays on only if nothing it would run (itself, and what it needs) sends beyond what was agreed: a step
   // held on for another feature cannot be turned on by itself, so the feature that brings it goes off instead
   const byId = new Map(plan.nodes.map((n) => [n.id, n]));
   const keep = new Set([...wanted].filter((id) => picked(plan, new Set([id])).chosen.every((c) => covered(byId.get(c)!, ticked))));
-  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(id))) };
+  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(id) || placed.includes(id))) };
 }
 
-/** The steps that send data off which turning on `id` would bring along although the user has not turned them on:
- *  `id` waits until they do (sending is chosen by turning on the step that sends, never by bringing it along). */
-export function mustTurnOnFirst(plan: Plan, wanted: Set<string>, id: string): string[] {
+/** The steps that send data off which turning on `id` would bring along although the user has not agreed to it (by
+ *  turning them on, or by choosing the other machine they run on): `id` waits until they do (sending is chosen, never
+ *  brought along). */
+export function mustTurnOnFirst(plan: Plan, wanted: Set<string>, id: string, ticked: Ticked = {}): string[] {
   const { chosen } = picked(plan, new Set([...wanted, id]));
-  return chosen.filter((c) => c !== id && !wanted.has(c) && plan.nodes.find((n) => n.id === c)?.uploads?.length);
+  return chosen.filter((c) => { const n = plan.nodes.find((x) => x.id === c); return c !== id && !wanted.has(c) && !!n && !covered(n, ticked); });
 }
 
 /** Why a run cannot start, one line per problem; empty when it can: every node needs a place to run here (cached ones
@@ -152,13 +177,16 @@ export function mustTurnOnFirst(plan: Plan, wanted: Set<string>, id: string): st
  *  whole) while one of them sends data off: nobody turned that step on. */
 export function blockers(plan: Plan): string[] {
   const whole = !canPick(plan);
+  // on another machine (as the plan's places say) without saying where its inputs go: the gate would refuse it too
+  const unsaid = (n: PlanNode) => !!plan.places && !!n.place && plan.places[n.place]?.remote !== false && typeof n.upload_to !== 'string';
   return plan.nodes.flatMap((n) => [
+    ...(unsaid(n) ? [`the pipeline does not say where ${n.id} sends its inputs on ${n.place} (update hyperstudy-perception)`] : []),
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
     ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]
-      : whole && n.uploads.length ? [`${n.id} sends ${n.uploads.join(', ')} off this machine and this pipeline cannot leave it out (update hyperstudy-perception)`]
+      : whole && sends(n) ? [`${n.id} sends ${n.uploads.join(', ') || 'its inputs'} off this machine and this pipeline cannot leave it out (update hyperstudy-perception)`]
       // a CLI from before plans carried settings (perception #14) does not know --allow-uploads: the run would fail
-      : n.uploads.length && !('settings' in n) ? [`${n.id} sends data off this machine and this pipeline cannot be told it may (update hyperstudy-perception)`] : []),
+      : sends(n) && !('settings' in n) ? [`${n.id} sends data off this machine and this pipeline cannot be told it may (update hyperstudy-perception)`] : []),
   ]);
 }
 
@@ -189,7 +217,7 @@ export function defaultFeatures(plan: Plan): Set<string> {
   const free = (n: PlanNode, seen = new Set<string>()): boolean => {
     if (seen.has(n.id)) return true;
     seen.add(n.id);
-    return !n.uploads?.length && !n.cost_usd && !n.cost_note && (n.needs ?? []).every((u) => !byId.has(u) || free(byId.get(u)!, seen));
+    return !sends(n) && !n.cost_usd && !n.cost_note && (n.needs ?? []).every((u) => !byId.has(u) || free(byId.get(u)!, seen));
   };
   return new Set(plan.nodes.filter((n) => free(n)).map((n) => n.id));
 }
@@ -210,18 +238,39 @@ export function settingsFor(settings: Settings, chosen: string[]): Settings {
 export const canPick = (plan: Plan) => plan.nodes.every((n) => Array.isArray(n.needs));
 
 const ACCELERATORS: Record<string, string> = { mps: 'Apple GPU', cuda: 'NVIDIA GPU', cpu: 'CPU' };
-/** A place (backend:accelerator) as people say it: "Apple GPU" here, "NVIDIA GPU on ssh" elsewhere. */
-export function placeName(place: string): string {
+/** A place (backend:accelerator) as people say it: "Apple GPU" here, "NVIDIA GPU on lab (SSH)" on a lab server, the
+ *  plan's title for a cloud machine ("Cloud GPU (AWS L4)"). */
+export function placeName(place: string, places?: Record<string, PlaceInfo>): string {
   const [backend, accelerator = ''] = place.split(':');
   const what = ACCELERATORS[accelerator] ?? accelerator;
-  return backend === 'native' || backend === 'self' ? what : `${what} on ${backend}`;
+  if (backend === 'native' || backend === 'self') return what;
+  const title = places?.[place]?.title;
+  if (backend === 'cloud') return title ?? 'Cloud GPU';
+  return `${what} on ${title ?? backend.replace(/^ssh-/, '')}`;
 }
 
-/** A place as the menu shows it: with how long the step would take there, when the plan says. */
-export function placeLabel(n: PlanNode, place: string): string {
+/** A place as the menu shows it: with how long the step would take there and what it costs, when the plan says. */
+export function placeLabel(n: PlanNode, place: string, places?: Record<string, PlaceInfo>): string {
   const e = n.estimates?.[place];
-  if (!e) return placeName(place);
-  return `${placeName(place)}, ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}`;
+  if (!e) return placeName(place, places);
+  const machine = e.cost_usd && !n.service && places?.[place]?.remote ? `, up to $${e.cost_usd.toFixed(2)}` : '';   // another machine's price
+  return `${placeName(place, places)}, ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}${machine}`;
+}
+
+/** What the machine a step runs on costs at most (a cloud GPU for its whole deadline), or 0: only another machine's
+ *  price, never an API's (that is the step's own cost, which the graph's cap limits). */
+export function machineCost(plan: Plan, n: PlanNode): number {
+  return n.place && !n.service && plan.places?.[n.place]?.remote ? n.estimates?.[n.place]?.cost_usd ?? 0 : 0;
+}
+
+/** The run's spending cap: the graph's (it covers the APIs its steps call), raised by what each step that runs on a
+ *  machine that costs money (a cloud GPU) costs at most there. Null when the plan does not say the graph's cap (the
+ *  CLI keeps the graph's own). */
+export function spendingCap(plan: Plan, chosen: string[]): number | null {
+  if (plan.max_cost_usd == null) return null;
+  // cached steps too: a cache can be gone by the time the run starts (the upload gate counts them for the same reason)
+  const machines = plan.nodes.filter((n) => chosen.includes(n.id)).reduce((a, n) => a + machineCost(plan, n), 0);
+  return Math.ceil((plan.max_cost_usd + machines) * 100 - 1e-9) / 100;   // up to the cent: never below a reservation
 }
 
 /** The places to send: only for steps that run (a place for a node --only leaves out is a CLI error). */
@@ -285,9 +334,9 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     doctor: () => invoke<Doctor>('pipeline_doctor'),
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
     plan: (graph, video, places, settings) => invoke<Plan>('pipeline_plan', { graph, video, places, settings }),
-    async run(graph, video, allow, places, only, settings, on) {
+    async run(graph, video, allow, places, only, settings, maxCostUsd, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
-      try { await invoke('pipeline_run', { graph, video, uploads: allow.uploads, places, only, settings }); }
+      try { await invoke('pipeline_run', { graph, video, uploads: allow.uploads, places, only, settings, maxCostUsd }); }
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },

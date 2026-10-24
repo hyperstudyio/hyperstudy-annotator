@@ -199,3 +199,54 @@ test('progress is one colour: a running step fills against its estimate, and a f
   }
   await expect(dialog.getByRole('listitem', { name: 'captions' })).toHaveCount(0);   // only the steps chosen run
 });
+
+// --- other machines (perception #15/#16) -----------------------------------------------------------------------------
+
+const runs = (page: Page) => page.evaluate(() => (window as unknown as { __pipelineRuns: { allow: { uploads: Record<string, unknown> }; places: Record<string, string>; maxCostUsd: number | null }[] }).__pipelineRuns);
+
+test('each place says where it is, how long the step would take and what it costs, before moving it', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await expect(menu.getByRole('option')).toHaveText(['Apple GPU, about 1 min 36 s', 'NVIDIA GPU on lab (SSH), no estimate yet',
+    'Cloud GPU (AWS L4), no estimate yet, up to $0.49']);
+  const [box, cell] = await Promise.all([menu.boundingBox(), menu.locator('xpath=..').boundingBox()]);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(cell!.x + cell!.width);   // the longest option stays inside its column
+});
+
+test('moving a step to a lab server is the choice to send it its inputs: it stays on, and the run may send them there only', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const faces = dialog.getByRole('listitem', { name: 'faces' });
+  await faces.getByRole('combobox', { name: 'Where faces runs' }).selectOption('ssh-lab:cuda');
+  await expect(dialog.getByRole('checkbox', { name: 'Run Face tracks' })).toBeChecked();   // not turned off for sending
+  await dialog.getByRole('button', { name: 'Face tracks' }).click();
+  await expect(faces).toContainText('faces, transcript and video, sent to lab (SSH)');
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.allow.uploads).toEqual({ faces: { kinds: ['faces', 'transcript', 'video'], service: 'lab (SSH)' } });
+  expect(ran.places).toEqual({ faces: 'ssh-lab:cuda' });
+  expect(ran.maxCostUsd).toBe(0.5);                                             // a lab server costs nothing
+});
+
+test('a cloud GPU shows its price, and the run\'s cap is raised by it', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' }).selectOption('cloud:cuda');
+  await expect(dialog.getByRole('heading', { name: /steps to run.*\$0\.49/ })).toBeVisible();
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('Up to $0.49');   // the most the machine can cost
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.allow.uploads).toEqual({ faces: { kinds: ['faces', 'transcript', 'video'], service: 'Cloud GPU (AWS L4)' } });
+  expect(ran.maxCostUsd).toBe(0.99);                                            // the graph's $0.50, and the machine's most
+});
+
+test('moving a step back to this machine sends nothing', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await menu.selectOption('native:mps');
+  await expect(menu).toHaveValue('native:mps');
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.allow.uploads).toEqual({});
+});

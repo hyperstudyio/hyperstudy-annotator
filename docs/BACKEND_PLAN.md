@@ -177,10 +177,18 @@ Checked:
   API shows it ("Anthropic API (cloud)"). Progress is one colour: a running step fills against its estimate, a
   finished one is full. A pipeline folder with no full graph offers its graphs instead.
 
+- **Other machines** (perception #15, #16): a lab server added with `perception hosts add` and, with `perception cloud
+  on`, a cloud GPU started for the step and deleted after it, join each step's place menu after this machine's places,
+  named by the plan's `places` ("NVIDIA GPU on lab (SSH)", "Cloud GPU (AWS L4)") with each one's time and price ("up
+  to $0.49": a cloud machine is priced for its whole deadline). Choosing another machine is the choice to send that
+  step's inputs there: the app records what the plan says it would send from there (`placeTick`), the agreement stands
+  while the place does (for a step held on for another feature too), and `upload_gate` holds a fresh plan to it per
+  node, kind and destination (`upload_to`; a step on another machine always sends its inputs, even holding none of the
+  kinds, so `--allow-uploads` is passed whenever anything was agreed). The run's cap is the graph's (it covers the
+  APIs) raised by each cloud machine's price (`spendingCap`, sent as `--max-cost-usd`).
+
 Not yet:
-- each choice's price, not only its duration: every place is local and free today, so this comes with the cloud
-  backends, whose places cost money;
-- the cloud and SSH backends (their places will join the same menus);
+- adding hosts and turning cloud places on from the app (the CLI does it today);
 - the native window checked by hand.
 
 ## Also to sort out

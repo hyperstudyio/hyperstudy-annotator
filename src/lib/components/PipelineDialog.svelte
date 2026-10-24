@@ -5,8 +5,8 @@
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
-  import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    settingsFor, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
+  import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
+    settingsFor, spendingCap, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -104,7 +104,13 @@
   // not the choice to send the next one's
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
   const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; open = null; await makePlan(); };
-  const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(true); };
+  // choosing another machine is the choice to send this step's inputs there (what the plan says it would send)
+  const choosePlace = async (node: string, place: string) => {
+    const agreed = plan && placeTick(plan.nodes.find((n) => n.id === node)!, place);
+    if (agreed) ticked = { ...ticked, [node]: agreed };
+    places = { ...places, [node]: place };
+    await makePlan(true);
+  };
   const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
@@ -117,13 +123,13 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked)); busy = null; planning = false; },
+    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false; },
       (e) => { plan = null; error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = []; arrived = []; now = Date.now();
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
-    try { stop = await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, settingsFor(settings, pick.chosen), on); }
+    try { stop = await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, settingsFor(settings, pick.chosen), spendingCap(active!, pick.chosen), on); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
@@ -151,6 +157,13 @@
   const titleOf = (id: string) => { const n = plan?.nodes.find((x) => x.id === id); return n ? title(n) : id; };
   const LICENCE: Record<string, string> = { 'academic-only': 'academic use only', 'commercial-ok': 'commercial use allowed', 'needs-review': 'licence under review', 'api-terms': "the API provider's terms" };
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
+  // what leaves this machine, and where to: the API it calls, or the other machine it runs on (its inputs, whatever they hold)
+  const leaves = (n: PlanNode) => {
+    const to = dest(n);
+    if (!to && !n.uploads?.length) return 'Nothing';
+    const what = n.uploads?.length ? list(n.uploads) : 'Its inputs';
+    return to ? `${what}, sent to ${to === n.service ? `the ${to}` : to}` : what;
+  };
 </script>
 
 <svelte:window {onkeydown} />
@@ -209,7 +222,7 @@
           {@const s = view.nodes[n.id]}
           {@const on = pick.chosen.includes(n.id)}
           {@const needers = pick.neededBy[n.id]}
-          {@const before = on || !canPick(plan) ? [] : mustTurnOnFirst(plan, wanted ?? defaultFeatures(plan), n.id)}   <!-- steps to turn on first -->
+          {@const before = on || !canPick(plan) ? [] : mustTurnOnFirst(plan, wanted ?? defaultFeatures(plan), n.id, ticked)}   <!-- steps to turn on first -->
           <li class="step {started ? s.state : ''}" class:off={!on} aria-label={n.id}>
             <span class="pick">{#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${title(n)}`} checked={on} disabled={!!needers || before.length > 0}
               aria-describedby={needers ? `needed-${n.id}` : before.length ? `before-${n.id}` : undefined}
@@ -222,9 +235,9 @@
               {:else if n.service}<span title={n.place ?? undefined}>{n.service} (cloud)</span>
               {:else if !started && on && (n.options?.length ?? 0) > 1}
                 <select aria-label={`Where ${n.id} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
-                  {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o)}</option>{/each}
+                  {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o, plan.places)}</option>{/each}
                 </select>
-              {:else if n.place}<span title={n.place}>{placeName(n.place)}</span>
+              {:else if n.place}<span title={n.place}>{placeName(n.place, plan.places)}</span>
               {:else if n.where}{n.where}   <!-- a CLI from before plans named places -->
               {:else}<span class="error">Cannot run here</span>{/if}
             </span>
@@ -243,7 +256,8 @@
               {#if started}{#if s.message}<span class="muted">{s.message}</span>{/if}
               {:else if on}
                 {#if needers}<span class="muted" id={`needed-${n.id}`}>Needed by {list(needers.map(titleOf))}</span>{/if}
-                {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
+                <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
+                {#if n.cost_usd}<span>{machineCost(plan, n) ? 'Up to ' : ''}${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
                 {#each n.missing_secrets as k (k)}<span class="error">Needs {k}</span>{/each}
               {:else if before.length}
@@ -261,10 +275,10 @@
                     <dd>{#each fixed as m (m.id)}<span title={m.source ?? undefined}>{m.id}</span> <span class="muted">({LICENCE[m.licence_mode] ?? m.licence_mode}{m.size_gb ? `, ${m.size_gb} GB` : ''})</span><br />{/each}</dd>{/if}
                   {#if n.downloads.length}<dt>Downloads first</dt>
                     <dd>{#each n.downloads as d (d.id)}<span title={d.source ?? undefined}>{d.id}</span> <span class="muted">({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}, {LICENCE[d.licence_mode] ?? d.licence_mode}{d.gated ? ', gated: needs access granted on Hugging Face' : ''})</span><br />{/each}</dd>{/if}
-                  <dt>Leaves this machine</dt><dd>{n.uploads?.length ? `${list(n.uploads)}${n.service ? `, sent to the ${n.service}` : ''}` : 'Nothing'}</dd>
+                  <dt>Leaves this machine</dt><dd>{leaves(n)}</dd>
                   {#if n.service}<dt>Runs on</dt><dd>The {n.service}, in the cloud</dd>
                   {:else if n.options?.length}<dt>Can run on</dt>
-                    <dd>{#each n.options as o (o)}<span title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o)}</span><br />{/each}</dd>{/if}
+                    <dd>{#each n.options as o (o)}<span title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o, plan.places)}</span><br />{/each}</dd>{/if}
                   {#each n.settings ?? [] as st (st.key)}
                     <dt><label for={`set-${n.id}-${st.key}`}>{capital(st.key)}</label></dt>
                     <dd class="setting">

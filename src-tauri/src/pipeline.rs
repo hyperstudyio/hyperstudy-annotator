@@ -81,14 +81,15 @@ pub type Uploads = std::collections::BTreeMap<String, Agreed>;
 #[derive(Debug, Default, Clone, serde::Deserialize, PartialEq)]
 pub struct Agreed {
     pub kinds: Vec<String>,
-    /// the hosted API it sends them to (the plan's `service`), or none
+    /// where it sends them: the hosted API (the plan's `service`) or the other machine it runs on (`upload_to`), or none
     pub service: Option<String>,
 }
 
 /// The app's own check, against a fresh plan of what is about to run, that nothing leaves this machine beyond what the
-/// user agreed to: a node that sends a kind of data not agreed for it is refused. Every node counts, cached ones too (a
-/// cache can be gone by the time the run starts), and a plan that does not say what a node sends (a CLI from before
-/// plans carried `uploads`) is refused.
+/// user agreed to: a node that sends a kind of data not agreed for it, or sends anything to a place not agreed for it
+/// (a node on another machine always sends its inputs there, even holding none of the kinds), is refused. Every node
+/// counts, cached ones too (a cache can be gone by the time the run starts), and a plan that does not say what a node
+/// sends (a CLI from before plans carried `uploads`) is refused.
 pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
     let nodes = plan["nodes"].as_array().ok_or_else(|| Error::Bundle("the pipeline's plan lists no nodes; nothing could be checked".into()))?;
     for n in nodes {
@@ -100,17 +101,44 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
         // an entry that is not a kind's name is not something that was agreed to: the plan is refused, not read around
         let kinds = uploads.iter().map(|u| u.as_str()).collect::<Option<Vec<&str>>>()
             .ok_or_else(|| Error::Bundle(format!("the pipeline's plan does not say plainly what {id} sends off this machine")))?;
-        let beyond: Vec<&str> = kinds.into_iter().filter(|k| !agreed.iter().any(|a| a == k)).collect();
+        let beyond: Vec<&str> = kinds.iter().copied().filter(|k| !agreed.iter().any(|a| a == k)).collect();
         if !beyond.is_empty() {
             return Err(Error::Bundle(format!("{id} would send {} off this machine, which was not agreed to", beyond.join(", "))));
         }
+        // where to: `upload_to` (perception #15), else the API's `service` for a node that sends kinds
+        let to = match n.get("upload_to") {
+            // kinds that leave for nowhere: a plan that contradicts itself is refused, not read as sending nothing
+            Some(Value::Null) if !kinds.is_empty() => return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data"))),
+            Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.as_str()),
+            Some(_) => return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data"))),
+            None if !kinds.is_empty() => n["service"].as_str(),
+            None => None,
+        };
+        // a node on another machine (as the plan's `places` say, perception #15) sends its inputs there: the plan must
+        // say where, plainly. A place the plan's `places` do not list is not taken to be this machine.
+        if let Some(places) = plan.get("places").filter(|p| !p.is_null()) {
+            let here = n["place"].as_str().map(|p| places[p]["remote"] == Value::Bool(false)).unwrap_or(n["place"].is_null());
+            if !here && to.is_none() {
+                return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data")));
+            }
+        }
         // the same data sent somewhere else is not what was agreed to either
-        let service = n["service"].as_str();
-        if !uploads.is_empty() && allowed.get(id).and_then(|a| a.service.as_deref()) != service {
-            return Err(Error::Bundle(format!("{id} would send its data to {}, which was not agreed to", service.unwrap_or("another place"))));
+        if (to.is_some() || !kinds.is_empty()) && allowed.get(id).map(|a| a.service.as_deref()) != Some(to) {
+            return Err(Error::Bundle(format!("{id} would send its data to {}, which was not agreed to", to.unwrap_or("another place"))));
         }
     }
     Ok(())
+}
+
+/// `--max-cost-usd N` for the run's spending cap (the graph's, raised by what a cloud machine costs: the dialog
+/// computes it), checked as a plain amount.
+pub fn cost_args(cap: Option<f64>) -> Result<Vec<String>> {
+    match cap {
+        None => Ok(vec![]),
+        Some(c) if c.is_finite() && (0.0..10_000.0).contains(&c) => Ok(vec!["--max-cost-usd".into(), format!("{c:.2}")]),
+        Some(c) => Err(Error::Bundle(format!("not a spending cap: {c}"))),
+    }
 }
 
 /// The run in progress: whether there is one, its CLI process, and a cancel asked for before that existed, all under
@@ -475,10 +503,7 @@ mod tests {
     #[test]
     fn a_run_can_be_stopped_by_its_process_before_it_has_an_id() {
         let dir = repo();
-        let script = dir.path().join("slow-uv");
-        fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();   // a first environment sync that does not end
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let script = executable(dir.path(), "slow-uv", "#!/bin/sh\nsleep 30\n");   // a first environment sync that does not end
         let p = Pipeline::new(dir.path(), script).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let started = std::time::Instant::now();
@@ -532,12 +557,56 @@ mod tests {
     }
 
     #[test]
+    fn a_node_on_another_machine_needs_that_machine_agreed_to_even_when_its_inputs_hold_no_kinds() {
+        let on = |to: Value, kinds: Value| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
+            {"id": "faces", "cached": false, "uploads": kinds, "upload_to": to, "service": null}]});
+        let agreed_to = |to: &str, kinds: &[&str]| -> Uploads {
+            [("faces".to_string(), Agreed { kinds: kinds.iter().map(|k| k.to_string()).collect(), service: Some(to.into()) })].into_iter().collect()
+        };
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!([])), &Uploads::new()).unwrap_err().to_string().contains("to lab (SSH)"));
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).is_ok());
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!(["video"])), &agreed_to("lab (SSH)", &["video"])).is_ok());
+        // another machine than the one agreed to, or more than was agreed, is refused
+        assert!(upload_gate(&on(serde_json::json!("gpu2 (SSH)"), serde_json::json!(["video"])), &agreed_to("lab (SSH)", &["video"])).is_err());
+        assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!(["video", "audio"])), &agreed_to("lab (SSH)", &["video"])).is_err());
+        // nothing leaves: no agreement needed; an answer that is not a place is refused (fail closed)
+        assert!(upload_gate(&on(Value::Null, serde_json::json!([])), &Uploads::new()).is_ok());
+        // kinds that go nowhere: refused, whatever was agreed (it would hide the API's destination)
+        let api = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
+            {"id": "captions", "cached": false, "uploads": ["frames"], "upload_to": null, "service": "Anthropic API"}]});
+        let none: Uploads = [("captions".to_string(), Agreed { kinds: vec!["frames".into()], service: None })].into_iter().collect();
+        assert!(upload_gate(&api, &none).unwrap_err().to_string().contains("plainly"));
+        // a plan that puts a node on another machine but does not say where its inputs go is refused, whatever else was
+        // agreed (the run would get --allow-uploads for the agreed step)
+        let placed = |place: &str, to: Option<Value>| {
+            let mut node = serde_json::json!({"id": "faces", "cached": false, "uploads": [], "place": place});
+            if let Some(to) = to { node["upload_to"] = to; }
+            serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [node],
+                "places": {"native:mps": {"title": "This machine", "remote": false, "accelerator": "mps"},
+                           "ssh-lab:cuda": {"title": "lab (SSH)", "remote": true, "accelerator": "cuda"}}})
+        };
+        let other: Uploads = [("captions".to_string(), Agreed { kinds: vec!["frames".into()], service: Some("Anthropic API".into()) })].into_iter().collect();
+        assert!(upload_gate(&placed("ssh-lab:cuda", None), &other).unwrap_err().to_string().contains("plainly"));
+        assert!(upload_gate(&placed("ssh-lab:cuda", Some(Value::Null)), &other).unwrap_err().to_string().contains("plainly"));
+        assert!(upload_gate(&placed("gpu9:cuda", None), &other).unwrap_err().to_string().contains("plainly"));   // not listed
+        assert!(upload_gate(&placed("native:mps", None), &other).is_ok());
+        assert!(upload_gate(&placed("ssh-lab:cuda", Some(serde_json::json!("lab (SSH)"))), &agreed_to("lab (SSH)", &[])).is_ok());   // said, and agreed
+        assert!(upload_gate(&on(serde_json::json!({"host": "lab"}), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).unwrap_err().to_string().contains("plainly"));
+    }
+
+    #[test]
+    fn the_spending_cap_is_a_plain_amount() {
+        assert_eq!(cost_args(None).unwrap(), Vec::<String>::new());
+        assert_eq!(cost_args(Some(0.989)).unwrap(), vec!["--max-cost-usd", "0.99"]);
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 1e6] {
+            assert!(cost_args(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn a_cli_that_prints_something_else_is_stopped_not_left_running_unobserved() {
         let dir = repo();
-        let script = dir.path().join("chatty-uv");
-        fs::write(&script, "#!/bin/sh\necho 'Resolved 12 packages in 3ms'\nsleep 30\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let script = executable(dir.path(), "chatty-uv", "#!/bin/sh\necho 'Resolved 12 packages in 3ms'\nsleep 30\n");
         let p = Pipeline::new(dir.path(), script).unwrap();
         let started = std::time::Instant::now();
         let mut pid = 0;
@@ -632,12 +701,19 @@ mod tests {
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).
-    fn fake_uv(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
-        let path = dir.join("fake-uv");
-        fs::write(&path, format!("#!/bin/sh\ncat <<'EOF'\n{stdout}\nEOF\necho '{stderr}' >&2\nexit {code}\n")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    /// A script tests run. A child process (`install`) writes the executable: had this process written it, another test
+    /// thread forking at that moment would hold its write handle in the child until exec, and running the script would
+    /// fail with "Text file busy" (ETXTBSY, seen in CI). The source it copies is never executed.
+    fn executable(dir: &Path, name: &str, text: &str) -> PathBuf {
+        let (path, src) = (dir.join(name), dir.join(format!("{name}.txt")));
+        fs::write(&src, text).unwrap();
+        let status = std::process::Command::new("install").args(["-m", "755"]).arg(&src).arg(&path).status().unwrap();
+        assert!(status.success(), "install could not write {}", path.display());
         path
+    }
+
+    fn fake_uv(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
+        executable(dir, "fake-uv", &format!("#!/bin/sh\ncat <<'EOF'\n{stdout}\nEOF\necho '{stderr}' >&2\nexit {code}\n"))
     }
 
     #[test]
