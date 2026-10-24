@@ -20,6 +20,24 @@ test('while the carry-over offer is open, workspace keys do nothing and focus is
   await offer.waitFor();
   await expect(page.getByRole('button', { name: 'Carry over', exact: true })).toBeFocused();
   for (const key of ['j', '1', 'o', 'e']) await page.keyboard.press(key);
+  // nor can Tab reach the page behind it (it is inert): Import or Undo there would also end the offer
+  for (let i = 0; i < 6; i++) await page.keyboard.press('Tab');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.viewer')).toHaveAttribute('inert', '');
   await expect(page.getByText('0 corrections')).toBeVisible();
-  await expect(offer).toBeVisible();
+});
+
+test('what could not be carried over is listed with a Dismiss button that says which correction it removes', async ({ page }) => {
+  for (const b of ['bundle-l4', 'bundle-pipeline']) {
+    const res = await page.request.get(`${RUN}/${b}/manifest.json`);
+    test.skip(!res.ok(), `the clip 2 bundles are not served at ${RUN}`);
+  }
+  const sha = (await (await page.request.get(`${RUN}/bundle-pipeline/manifest.json`)).json()).video.sha256;
+  // face:58 of the Mac run has no counterpart in the L4 run
+  await page.addInitScript((key) => {
+    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify([{ op: 'entity.include', id: 'face:58', included: false, at: '2026-10-24T00:00:00.000Z' }]));
+  }, `hyperstudy-annotator:corrections:${sha}`);
+  await page.goto(URL);
+  await page.getByRole('button', { name: 'Carry over', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Dismiss: 58 excluded (face)' })).toBeVisible();
 });

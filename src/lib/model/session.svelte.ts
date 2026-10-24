@@ -4,7 +4,7 @@
 import { Bundle, extent } from './bundle';
 import { iou } from '../geometry';
 import {
-  FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
+  FORMAT, ImportError, NOT_PERSON, RunUnknownError, UNKNOWN, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
   type AnnotationType, type CorrectionsFile, type Note, type Op,
 } from './corrections';
 import { View, type Tab } from './view.svelte';
@@ -137,7 +137,8 @@ export class Session {
    *  and all of it matches, and refused otherwise; a file that does not say its run is refused when the video has
    *  several runs. Never imported onto ids that may name other faces. */
   async parseCorrections(text: string, lineage?: Lineage,
-    load: (v: EarlierVersion) => Promise<Bundle> = async (v) => Bundle.load(await v.open())): Promise<Op[]> {
+    load: (v: EarlierVersion) => Promise<Bundle> = async (v) => Bundle.load(await v.open()),
+    { thisRun = false }: { thisRun?: boolean } = {}): Promise<Op[]> {
     let doc: CorrectionsFile;
     try { doc = JSON.parse(text); } catch { throw new ImportError('that file is not JSON'); }
     const ops = readCorrectionsFile(doc, this.bundle.sha256);
@@ -149,9 +150,9 @@ export class Session {
       // not a carry-over (no record, and the index is the op's place in the file, not in a log)
       return r.ops.map(({ carried_from, ...op }) => ({ ...op, reanchored_from: carried_from }) as Op);
     }
-    if (!doc.bundle && lineage) {
+    if (!doc.bundle && lineage && !thisRun) {   // thisRun: the user said it was made on this run
       const others = await lineage.others();
-      if (others) throw new ImportError(`the file does not say which run of this video it was made on, and the library has ${others + 1} runs of it. Import it into the run it was made on, then open the newer run to carry it over`);
+      if (others) throw new RunUnknownError(others + 1);
     }
     const missing = unknownRefs(ops, (id) => this.bundle.has(id));
     if (missing.length) throw new ImportError(`the file refers to ${plural(missing.length, 'id')} this bundle does not have (${missing.slice(0, 5).join(', ')})`);

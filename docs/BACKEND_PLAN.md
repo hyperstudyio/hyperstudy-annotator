@@ -46,8 +46,8 @@ dialogs by hand, is still open).
      records its bundle (manifest sha256). A file for another version is re-anchored like a carry-over when that
      version is in the library and every op matches (each op then names its place in the file, `reanchored_from`);
      otherwise it is refused, pointing to the carry-over, which lists what does not match. A file without the field
-     (every `/1` and `/2` file so far) is refused on a video with several versions, with directions to import it into
-     the run it was made on and carry it over.
+     (every `/1` and `/2` file so far), on a video with several versions, is imported only after the user says it was
+     made on the run they are importing it into.
    - **Older ops keep loading.** Ops in SQLite and in `perception-corrections/2` files (and `/1`, through
      `opFromV1`) have no author or base version. They load with base version = the bundle whose log holds them and
      author = unknown, never as unmatched or rejected. If the fields change the file format, it becomes `/3`, and

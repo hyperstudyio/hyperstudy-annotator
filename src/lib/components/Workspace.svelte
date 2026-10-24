@@ -73,7 +73,7 @@
 
 <svelte:window {onkeydown} />
 
-<div class="viewer">
+<div class="viewer" inert={s.modal}>
   <Header {onback} />
   <div class="workspace" style="--drawer-w:{drawerW}">
     <section class="stage">

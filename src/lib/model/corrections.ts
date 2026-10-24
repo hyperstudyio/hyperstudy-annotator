@@ -114,6 +114,14 @@ export interface CorrectionsFile { format: string; sha256: string; bundle?: stri
 /** Thrown when a v1 op refers to something this bundle has no id for; the import is refused as a whole. */
 export class ImportError extends Error {}
 
+/** A file that does not say which run it was made on, for a video the library has several runs of: the user says
+ *  whether it was made on this one (then parseCorrections with `thisRun`). */
+export class RunUnknownError extends ImportError {
+  constructor(readonly runs: number) {
+    super(`the file does not say which run of this video it was made on, and the library has ${runs} runs of it`);
+  }
+}
+
 const v1Person = (p: unknown): string => {
   if (p === 'Unknown') return UNKNOWN;
   if (p === '__not_person') return NOT_PERSON;

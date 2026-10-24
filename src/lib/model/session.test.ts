@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { Bundle, type Layers } from './bundle';
-import { NOT_PERSON, UNKNOWN } from './corrections';
+import { NOT_PERSON, RunUnknownError, UNKNOWN } from './corrections';
 import { MemoryStorage, SHA, face, makeBundle } from './fixture.test-helpers';
 import { Session, coVisible, stampAfter } from './session.svelte';
 import { View } from './view.svelte';
@@ -226,9 +226,11 @@ describe('which run a corrections file was made on', () => {
     await expect(s.parseCorrections(file([caption], 'gone'), lineage({}), load)).rejects.toThrow(/another run of this video that is not in the library/);
   });
 
-  test('an old file that does not say its run is refused when the video has several runs, and imports when it has one', async () => {
+  test('an old file that does not say its run asks on a video with several runs, imports once the user says it is this run\'s, and imports when the video has one run', async () => {
     const { s } = session(makeBundle({}, 'this-run'));
-    await expect(s.parseCorrections(file([caption]), lineage({ other: makeBundle({}, 'other') }), load)).rejects.toThrow(/does not say which run/);
+    const several = lineage({ other: makeBundle({}, 'other') });
+    await expect(s.parseCorrections(file([caption]), several, load)).rejects.toBeInstanceOf(RunUnknownError);
+    expect(await s.parseCorrections(file([caption]), several, load, { thisRun: true })).toEqual([caption]);
     expect(await s.parseCorrections(file([caption]), lineage({}), load)).toEqual([caption]);
   });
 });
