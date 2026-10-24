@@ -37,8 +37,15 @@ dialogs by hand, is still open).
      delete, removing an old version must not be the only thing that kept an op: carried-over ops are copies, and
      the ops left for review are stored with the new version's carry-over record, which has no foreign key to the
      old version.
-   - **Carried ops never override newer edits.** A carry-over goes only onto an empty log, as one batch (one undo
-     takes it all back), so `fold`'s last-write-wins cannot put an old correction over a newer one.
+   - **Carried ops never override newer edits.** A carry-over goes only onto an empty log (once the new version
+     has corrections of its own, it is no longer offered), as one batch re-stamped with the carry time (one undo
+     takes it all back), so `fold`'s last-write-wins cannot put an old correction over a newer one. An op replaced
+     later by one that cannot be carried is not carried either.
+   - **Importing a corrections file into a re-run.** Exports so far record only the video's sha256, not the bundle
+     they were made on, so on a video with several versions their ids may name other faces. From now on an export
+     records its bundle (manifest sha256). A file for another version is re-anchored like a carry-over when that
+     version is in the library, and otherwise lists its bundle ops for review. For a file without the field (every
+     `/1` and `/2` file so far) on a video with several versions, the user says which version it was made on.
    - **Older ops keep loading.** Ops in SQLite and in `perception-corrections/2` files (and `/1`, through
      `opFromV1`) have no author or base version. They load with base version = the bundle whose log holds them and
      author = unknown, never as unmatched or rejected. If the fields change the file format, it becomes `/3`, and
@@ -92,6 +99,24 @@ dialogs by hand, is still open).
    correction log of record is kept (Firestore documents are limited to 1 MB, so a subcollection or a file), how the
    desktop app authenticates (decided: an API key created in HyperStudy, pasted into Settings), and how a local edit
    becomes a HyperStudy edit (and the reverse).
+
+## Status
+
+**Step 1 (2026-10-24): carrying corrections over, built.** `model/carryover.ts` matches each id an op refers to in the
+newer bundle:
+- segments (faces, utterances, shots, sounds, text, events, object tracks) one-to-one by time overlap, and faces by box
+  overlap at the same moments;
+- people, voices and object identities by where their members went (tracks weighted by samples, so a face seen once
+  still counts).
+
+Ops that cannot be matched are listed in the Review tab with the reason and the moment, until dismissed. Migration 2
+adds `carryovers`; the carried ops are copies appended to the new version's log, each with `carried_from` (bundle, index).
+- Checked in Chrome (browser mode, `&previous=`) on OOO clip 2: the Mac run's 93 corrections onto the L4 run, 91
+  carried. Of the other two, one person's only face is unassigned in the L4 run, and one face track has no counterpart.
+  The Mac log was unchanged.
+- Not yet: the library listing versions under one video; checking the native app's offer by hand (as for port step 9);
+  each op's author (needs a user identity in Settings) and base version (implicit in which log holds it, today);
+  importing a corrections file into a re-run (the rule above).
 
 ## Also to sort out
 

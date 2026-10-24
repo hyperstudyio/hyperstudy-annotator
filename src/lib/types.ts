@@ -26,6 +26,7 @@ export interface BundleSummary {
   imported_at: string;
   layers: Record<string, LicenceMode>;
   video_path: string | null;
+  corrections: number;
 }
 
 export interface Span { start: number; end: number }

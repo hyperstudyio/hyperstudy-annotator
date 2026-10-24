@@ -15,6 +15,7 @@
   import Drawer from './Drawer.svelte';
   import Lightbox from './Lightbox.svelte';
   import Toast from './Toast.svelte';
+  import CarryOffer from './CarryOffer.svelte';
 
   let { session: s, source, onback }: { session: Session; source: BundleSource; onback?: () => void } = $props();
   // svelte-ignore state_referenced_locally
@@ -85,6 +86,7 @@
 </div>
 <Lightbox />
 <Toast />
+<CarryOffer />
 
 <style>
   .viewer { height: 100%; display: flex; flex-direction: column; min-width: 0; }

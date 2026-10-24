@@ -5,6 +5,14 @@ export function nearest<T extends { t: number }>(samples: T[], t: number, maxGap
   return d <= maxGap ? best : null;
 }
 
+/** Overlap of two [x, y, w, h] boxes: intersection over union. */
+export function iou(a: number[], b: number[]) {
+  const w = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]));
+  const h = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+  const i = w * h;
+  return i ? i / (a[2] * a[3] + b[2] * b[3] - i) : 0;
+}
+
 /** Where the video's picture sits inside its element (object-fit: contain letterboxes it). The bundle's own frame size
  *  is used, so boxes in source pixels map correctly before the video's metadata has loaded. */
 export function contentRect(video: HTMLVideoElement, vw: number, vh: number) {

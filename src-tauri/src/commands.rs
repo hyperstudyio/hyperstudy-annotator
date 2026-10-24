@@ -2,7 +2,7 @@
 //! finds their videos, and serves layer files to the viewer.
 
 use crate::error::{Error, Result};
-use crate::library::{self, BundleSummary};
+use crate::library::{self, BundleSummary, Carryover};
 use crate::bundle;
 use rusqlite::Connection;
 use serde::Serialize;
@@ -132,4 +132,29 @@ pub fn read_corrections_file(path: String) -> Result<String> {
 #[tauri::command]
 pub fn write_corrections_file(path: String, text: String) -> Result<()> {
     library::write_corrections_file(&PathBuf::from(path), &text)
+}
+
+#[tauri::command]
+pub fn previous_version(state: State<'_, AppState>, id: String) -> Result<Option<BundleSummary>> {
+    library::previous_version(&state.db.lock().unwrap(), &id)
+}
+
+#[tauri::command]
+pub fn get_carryover(state: State<'_, AppState>, id: String) -> Result<Option<Carryover>> {
+    library::get_carryover(&state.db.lock().unwrap(), &id)
+}
+
+#[tauri::command]
+pub fn carry_over(state: State<'_, AppState>, id: String, from: String, ops: Vec<Value>, unmatched: Value) -> Result<usize> {
+    library::carry_over(&state.db.lock().unwrap(), &id, &from, &ops, &unmatched)
+}
+
+#[tauri::command]
+pub fn decline_carryover(state: State<'_, AppState>, id: String, from: String) -> Result<()> {
+    library::decline_carryover(&state.db.lock().unwrap(), &id, &from)
+}
+
+#[tauri::command]
+pub fn dismiss_unmatched(state: State<'_, AppState>, id: String, index: u64) -> Result<Carryover> {
+    library::dismiss_unmatched(&state.db.lock().unwrap(), &id, index)
 }

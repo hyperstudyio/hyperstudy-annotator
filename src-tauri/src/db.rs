@@ -1,4 +1,4 @@
-//! The local library: imported bundles, located videos, and (from phase 3) the corrections op log.
+//! The local library: imported bundles, located videos, the corrections op log, and carry-overs between versions.
 //!
 //! Migrations are numbered and applied in order; `PRAGMA user_version` records the last one applied
 //! (the same scheme as Flowmail).
@@ -42,6 +42,24 @@ const MIGRATIONS: &[Migration] = &[Migration {
         );
         CREATE INDEX corrections_by_bundle ON corrections(bundle_id, id);
     "#,
+}, Migration {
+    version: 2,
+    name: "carry-over",
+    sql: r#"
+        -- Bundles of one video (same video_sha256) are versions of it: a re-run is imported as a new bundle.
+        CREATE INDEX bundles_by_video ON bundles(video_sha256);
+        -- A newer version's log can start from an earlier version's, re-anchored to the new ids by the app. The earlier
+        -- log is never changed: the carried ops are appended to the new bundle's log as copies (each names the op it came
+        -- from), so deleting the earlier version loses nothing. from_bundle_id has no foreign key for the same reason.
+        CREATE TABLE carryovers (
+            bundle_id      TEXT PRIMARY KEY REFERENCES bundles(id) ON DELETE CASCADE,   -- the newer version
+            from_bundle_id TEXT NOT NULL,
+            status         TEXT NOT NULL CHECK (status IN ('carried', 'declined')),
+            carried        INTEGER NOT NULL,
+            unmatched      TEXT NOT NULL,            -- JSON [{index, op, reason, span}]: left for review until dismissed
+            created_at     TEXT NOT NULL
+        );
+    "#,
 }];
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -76,5 +94,20 @@ mod tests {
         let v: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
         assert_eq!(v, MIGRATIONS.last().unwrap().version);
         conn.execute("INSERT INTO videos VALUES ('abc', '/tmp/v.mp4', 'now')", []).unwrap();
+    }
+
+    #[test]
+    fn a_version_1_library_keeps_its_corrections_through_migration_2() {
+        let conn = Connection::open_in_memory().unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute_batch(MIGRATIONS[0].sql).unwrap();
+        tx.pragma_update(None, "user_version", 1).unwrap();
+        tx.commit().unwrap();
+        conn.execute("INSERT INTO bundles VALUES ('b', 'm', 't', 'v', '0.1.0', '/d', '/s', 'now')", []).unwrap();
+        conn.execute("INSERT INTO corrections (bundle_id, op, created_at) VALUES ('b', '{\"op\":\"x\"}', 'now')", []).unwrap();
+        migrate(&conn).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM corrections WHERE bundle_id = 'b'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        conn.execute("INSERT INTO carryovers VALUES ('b', 'a', 'declined', 0, '[]', 'now')", []).unwrap();
     }
 }

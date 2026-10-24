@@ -31,6 +31,11 @@ pub fn run() {
             commands::find_prototype_corrections,
             commands::read_corrections_file,
             commands::write_corrections_file,
+            commands::previous_version,
+            commands::get_carryover,
+            commands::carry_over,
+            commands::decline_carryover,
+            commands::dismiss_unmatched,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the annotator");
