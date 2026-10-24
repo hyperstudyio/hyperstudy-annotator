@@ -5,8 +5,8 @@
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
-  import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor, runnable,
-    settingsFor, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings } from '../pipeline';
+  import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor, runnable,
+    settingsFor, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -18,7 +18,7 @@
   let plan = $state<Plan | null>(null);
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
   let wanted = $state<Set<string> | null>(null);   // the features on (null: the first plan's defaults)
-  let ticked = $state(new Set<string>());   // the ones the user turned on themselves: only these may send data off
+  let ticked = $state<Ticked>({});   // the ones the user turned on themselves, with what they sent then: all they may send
   let settings = $state<Settings>({});   // settings the user chose: node -> key -> value
   let open = $state<string | null>(null);   // the step whose details show
   let msgs = $state.raw<PipelineMessage[]>([]);
@@ -36,15 +36,17 @@
     const next = new Set(wanted ?? (plan ? defaultFeatures(plan) : []));
     if (on) next.add(id); else next.delete(id);   // what it needs comes along, and goes when nothing else needs it
     wanted = next;
-    const mine = new Set(ticked);
-    if (on) mine.add(id); else mine.delete(id);
-    ticked = mine;
+    const n = plan?.nodes.find((x) => x.id === id);
+    const { [id]: _, ...rest } = ticked;
+    ticked = on && n ? { ...rest, [id]: tick(n) } : rest;
   }
   const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
   let planning = $state(false);   // a newer plan is on its way: the one on screen is not what would run
   const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && runnable(active) && !started && !planning);
-  const why = $derived(active && !started ? blockers(active) : []);
+  // what blocks a run: the plan's own problems, and a step that would send data off beyond what the user agreed to
+  const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
+    `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -92,15 +94,15 @@
     folder = path;
     // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
     // flight from the old one is superseded too)
-    graph = null; plan = null; places = {}; wanted = null; ticked = new Set(); settings = {}; open = null;
+    graph = null; plan = null; places = {}; wanted = null; ticked = {}; settings = {}; open = null;
     newestPlan(Promise.resolve(null), (p) => (plan = p), () => {});
     graphs = await api.graphs();
     if (graphs.some((g) => g.file === FULL_GRAPH)) await chooseGraph(FULL_GRAPH);
   });
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
-  const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = new Set(); await makePlan(); } };
-  const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = new Set(); settings = {}; open = null; await makePlan(); };
+  const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
+  const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; open = null; await makePlan(); };
   const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(true); };
   const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
   const total = $derived(active ? totalEstimate(active) : null);
@@ -114,7 +116,7 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; wanted = keepChoices(p, wanted ?? defaultFeatures(p), ticked); busy = null; planning = false; },
+    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked)); busy = null; planning = false; },
       (e) => { plan = null; error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {

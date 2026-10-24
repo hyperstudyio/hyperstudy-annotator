@@ -100,22 +100,40 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
  *  part of running: the app always lets them.) */
 export interface Consent { uploads: Record<string, string[]> }
 
+/** The steps the user turned on themselves, each with what it sent, and where to, on the plan on screen when they did:
+ *  that is what they chose to send, and all they chose. */
+export type Ticked = Record<string, { kinds: string[]; service: string | null }>;
+
+/** What ticking `n` agrees to: what the plan on screen shows it sends, and where. */
+export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: n.service ?? null });
+
+/** Whether what `n` sends now is within what the user agreed to when they ticked it (no new kind, no other place). */
+function covered(n: PlanNode, ticked: Ticked): boolean {
+  const t = ticked[n.id];
+  return !n.uploads?.length || (!!t && n.uploads.every((k) => t.kinds.includes(k)) && (n.service ?? null) === t.service);
+}
+
 /** What a run of these steps lets happen: its models download as part of running, and turning on a feature that sends
- *  data to a cloud API is the choice to send what the plan shows it sends (such features start off, see
- *  defaultFeatures). Only the steps the user ticked on themselves count (`ticked`): a default, or a step that came
- *  along for another feature, agreed to nothing (see mustTurnOnFirst, keepChoices). The app holds a fresh plan to exactly this before it starts, so a step
- *  that would send data the plan on screen did not show, or that the user did not turn on, is refused. */
-export const consentFor = (plan: Plan, ticked: Set<string>): Consent => ({
-  uploads: Object.fromEntries(plan.nodes.filter((n) => ticked.has(n.id) && n.uploads?.length).map((n) => [n.id, [...n.uploads!]])),
+ *  data to a cloud API is the choice to send what the plan then showed it sends (such features start off, see
+ *  defaultFeatures). Only what the user ticked counts: a default, a step that came along for another feature, or a
+ *  step that now sends more than when it was ticked agreed to nothing. The app holds a fresh plan to exactly this
+ *  before it starts. */
+export const consentFor = (plan: Plan, ticked: Ticked): Consent => ({
+  uploads: Object.fromEntries(plan.nodes.filter((n) => n.uploads?.length && covered(n, ticked)).map((n) => [n.id, [...n.uploads!]])),
 });
 
-/** The features still on when a new plan arrives: a step that now sends data off (a new place, a new setting) stays on
- *  only if the user turned it on themselves (`ticked`): a default, or a choice made before it sent anything, is not the
- *  choice to send. A plan whose steps cannot be chosen runs whole (blockers refuses it if a step sends data off). */
-export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Set<string>): Set<string> {
-  if (!canPick(plan)) return defaultFeatures(plan);
-  const sends = new Set(plan.nodes.filter((n) => n.uploads?.length).map((n) => n.id));
-  return new Set([...wanted].filter((id) => !sends.has(id) || ticked.has(id)));
+/** Steps that would run and send data off beyond what the user agreed to: the run waits until they tick them. */
+export const unagreed = (plan: Plan, ticked: Ticked) => plan.nodes.filter((n) => !covered(n, ticked)).map((n) => n.id);
+
+/** The features still on when a new plan arrives, and the ticks that still stand: a step that now sends data off (a new
+ *  place, a new setting) stays on only if it sends nothing beyond what the user agreed to when they ticked it; else it
+ *  goes off, and its tick with it (ticking it again agrees to what it sends now). A plan whose steps cannot be chosen
+ *  runs whole (blockers refuses it if a step sends data off). */
+export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Ticked): { wanted: Set<string>; ticked: Ticked } {
+  if (!canPick(plan)) return { wanted: defaultFeatures(plan), ticked };
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const keep = new Set([...wanted].filter((id) => { const n = byId.get(id); return !n || covered(n, ticked); }));
+  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(id))) };
 }
 
 /** The steps that send data off which turning on `id` would bring along although the user has not turned them on:

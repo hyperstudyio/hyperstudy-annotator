@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, keepChoices, mustTurnOnFirst, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -44,19 +44,27 @@ test('a plan can run when every node has a place and its secrets; downloads are 
 test('turning on a feature that sends data off is the consent to send it, and a plan that does not say what leaves is not run', () => {
   const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.1, cost_note: '', uploads: ['frames'], needs: [], settings: [] };
   const plan = (n: Partial<PlanNode>): Plan => ({ ok: true, estimated_usd: 0.1, nodes: [{ ...node, ...n }] });
-  expect(consentFor(plan({}), new Set(['captions']))).toEqual({ uploads: { captions: ['frames'] } });   // exactly what it sends
-  expect(consentFor(plan({ uploads: [] }), new Set(['captions']))).toEqual({ uploads: {} });   // nothing to send: none given
-  expect(consentFor(plan({}), new Set())).toEqual({ uploads: {} });   // not turned on by the user: nothing agreed
-  // a default that a new plan makes send data off (a cloud place, say) goes off: only a step the user ticked may send
-  expect([...keepChoices(plan({}), new Set(['captions']), new Set())]).toEqual([]);
-  expect([...keepChoices(plan({}), new Set(['captions']), new Set(['captions']))]).toEqual(['captions']);
-  expect([...keepChoices(plan({ uploads: [] }), new Set(['captions']), new Set())]).toEqual(['captions']);   // sends nothing: stays
-  const whole = plan({});
-  delete whole.nodes[0].needs;   // cannot be chosen from: it runs whole, and blockers keeps it from sending
-  expect([...keepChoices(whole, new Set(), new Set())]).toEqual(['captions']);
+  const t = (kinds: string[], service: string | null = null): Ticked => ({ captions: { kinds, service } });
+  expect(consentFor(plan({}), t(['frames']))).toEqual({ uploads: { captions: ['frames'] } });   // exactly what it sends
+  expect(consentFor(plan({ uploads: [] }), t(['frames']))).toEqual({ uploads: {} });   // nothing to send: none given
+  expect(consentFor(plan({}), {})).toEqual({ uploads: {} });   // not ticked by the user: nothing agreed
+  // agreeing to frames is not agreeing to the transcript too, nor to sending them to another service
+  expect(consentFor(plan({ uploads: ['frames', 'transcript'] }), t(['frames']))).toEqual({ uploads: {} });
+  expect(consentFor(plan({ service: 'Other API' }), t(['frames'], 'Anthropic API'))).toEqual({ uploads: {} });
+  expect(unagreed(plan({ uploads: ['frames', 'transcript'] }), t(['frames']))).toEqual(['captions']);
+  expect(tick(plan({ service: 'Anthropic API' }).nodes[0])).toEqual({ kinds: ['frames'], service: 'Anthropic API' });
   const beforeSettings = plan({});
   delete beforeSettings.nodes[0].settings;   // a CLI from before perception #14: no --allow-uploads
   expect(blockers(beforeSettings)).toEqual(['captions sends data off this machine and this pipeline cannot be told it may (update hyperstudy-perception)']);
+  // a new plan: a step that sends no more than when it was ticked stays on; one that sends more (or a default that now
+  // sends anything) goes off, its tick with it
+  expect(keepChoices(plan({}), new Set(['captions']), t(['frames']))).toEqual({ wanted: new Set(['captions']), ticked: t(['frames']) });
+  expect(keepChoices(plan({ uploads: ['frames', 'transcript'] }), new Set(['captions']), t(['frames']))).toEqual({ wanted: new Set(), ticked: {} });
+  expect(keepChoices(plan({}), new Set(['captions']), {})).toEqual({ wanted: new Set(), ticked: {} });
+  expect(keepChoices(plan({ uploads: [] }), new Set(['captions']), {}).wanted).toEqual(new Set(['captions']));   // sends nothing: stays
+  const whole = plan({});
+  delete whole.nodes[0].needs;   // cannot be chosen from: it runs whole, and blockers keeps it from sending
+  expect([...keepChoices(whole, new Set(), {}).wanted]).toEqual(['captions']);
   expect(runnable(plan({}))).toBe(true);
   const older = plan({});
   delete older.nodes[0].uploads;   // a CLI from before plans said what leaves the machine
