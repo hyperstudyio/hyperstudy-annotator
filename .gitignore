@@ -10,5 +10,5 @@ fixtures/local/
 # browser test output
 test-results/
 playwright-report/
-# the uv the app bundles (scripts/fetch-uv.sh)
+# the uv the app bundles, fetched by scripts/fetch-uv.sh (never committed)
 src-tauri/binaries/
