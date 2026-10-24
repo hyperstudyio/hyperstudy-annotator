@@ -19,6 +19,8 @@ pub struct AppState {
     pub running: Mutex<Option<String>>,
     /// the CLI process of that run, to stop it before it has named the run (a slow first environment sync)
     pub child: Mutex<Option<u32>>,
+    /// a cancel that came before the CLI started (during the consent check)
+    pub start_gate: pipeline::StartGate,
 }
 
 const PIPELINE_FOLDER: &str = "pipeline_folder";
@@ -259,6 +261,7 @@ fn clear_run(app: &AppHandle) {
     let state = app.state::<AppState>();
     *state.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *state.child.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    let _ = state.start_gate.check();   // an unused cancel request does not carry over to the next run
 }
 
 /// Cancel only the run in progress (a stale dialog must not cancel another).
@@ -274,6 +277,7 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
     // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
     pipeline::upload_gate(&p.one(&["plan", graph, "--input", &input], "plan")?, allow_uploads)?;
+    state.start_gate.check()?;   // canceled while that plan ran: nothing starts
     let mut args = vec!["run", graph, "--input", &input];
     if allow_downloads {
         args.push("--allow-downloads");
@@ -320,6 +324,8 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
         let named = if named { state.running.lock().unwrap().clone() } else { None };
         return match (named, pid) {
             (None, Some(pid)) => pipeline::stop_process(pid),
+            // the run is still being checked (no CLI process yet): it will not start
+            (None, None) if state.running.lock().unwrap().is_some() => { state.start_gate.request(); Ok(()) }
             // the CLI named the run before the window heard it: cancel that run
             (Some(run), _) => { let p = pipeline(&state)?; blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await }
             (None, None) => Err(Error::Bundle("no pipeline run is in progress".into())),

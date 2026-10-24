@@ -63,12 +63,13 @@ pub fn inside(path: &Path, dir: &Path) -> Result<PathBuf> {
     if p.starts_with(&d) { Ok(p) } else { Err(Error::Bundle(format!("the pipeline wrote to {}, not inside {}", path.display(), dir.display()))) }
 }
 
-/// Stop a process (the CLI before it has named its run). Its exit then ends `run_to_end`, which reports it.
+/// Stop a CLI process and everything it started (its process group on Unix, its tree on Windows). Its exit then ends
+/// `run_to_end`, which reports it.
 pub fn stop_process(pid: u32) -> Result<()> {
     let status = if cfg!(windows) {
         Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).status()?
     } else {
-        Command::new("kill").args(["-TERM", &pid.to_string()]).status()?
+        Command::new("kill").args(["-TERM", "--", &format!("-{pid}")]).status()?   // the group the CLI leads
     };
     if status.success() { Ok(()) } else { Err(Error::Bundle(format!("could not stop the pipeline process {pid}"))) }
 }
@@ -88,6 +89,24 @@ pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A cancel asked for before the CLI has started (while the app checks consent against a fresh plan): the run then
+/// does not start. A request is used once.
+#[derive(Default)]
+pub struct StartGate(std::sync::atomic::AtomicBool);
+
+impl StartGate {
+    pub fn request(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub fn check(&self) -> Result<()> {
+        if self.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            Err(Error::Bundle("the run was canceled before it started".into()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// The problems of an `error` object, as one message.
@@ -123,6 +142,13 @@ impl Pipeline {
     fn command(&self, args: &[&str]) -> Command {
         let orchestrator = self.repo.join("orchestrator");
         let mut c = Command::new(&self.uv);
+        #[cfg(unix)]
+        {
+            // its own process group: stopping it stops what it started too (uv runs Python as a child, which would
+            // otherwise live on, holding the output pipes open)
+            use std::os::unix::process::CommandExt;
+            c.process_group(0);
+        }
         c.arg("run").arg("--quiet").arg("--project").arg(&orchestrator).arg("perception").arg("--json").args(args)
             .current_dir(&orchestrator).stdin(Stdio::null());
         if let Some(home) = &self.home {
@@ -184,7 +210,7 @@ impl Pipeline {
             on(&o);
         });
         if read.is_err() {
-            let _ = child.kill();   // no longer read: stopped, not left running unobserved (or dying at its next write)
+            let _ = stop_process(child.id());   // no longer read: stopped (with what it started), not left unobserved
         }
         let status = child.wait()?;
         let last_words = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
@@ -368,6 +394,15 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "it waited for the CLI instead of stopping it");
         let alive = Command::new("kill").args(["-0", &pid.to_string()]).status().unwrap().success();
         assert!(!alive, "the CLI is still running");
+    }
+
+    #[test]
+    fn a_cancel_asked_for_before_the_cli_starts_stops_the_run_from_starting() {
+        let gate = StartGate::default();
+        assert!(gate.check().is_ok());
+        gate.request();
+        assert!(gate.check().unwrap_err().to_string().contains("canceled before it started"));
+        assert!(gate.check().is_ok(), "a request is used once");
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).

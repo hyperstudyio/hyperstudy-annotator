@@ -151,6 +151,8 @@
     {#if view.imported}
       <span class="muted">Imported into the library.</span>
       <button class="primary" onclick={() => onopen(view.imported!.id)}>Open</button>
+    {:else if started && !done && view.status === 'succeeded'}
+      <span class="muted">Importing into the library…</span>   <!-- nothing left to cancel -->
     {:else if started && !done}
       <button onclick={cancel}>Cancel run</button>
     {:else if !started}
