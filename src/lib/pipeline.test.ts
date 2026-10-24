@@ -45,7 +45,7 @@ test('turning on a feature that sends data off is the consent to send it, and a 
   const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.1, cost_note: '', uploads: ['frames'], needs: [], settings: [] };
   const plan = (n: Partial<PlanNode>): Plan => ({ ok: true, estimated_usd: 0.1, nodes: [{ ...node, ...n }] });
   const t = (kinds: string[], service: string | null = null): Ticked => ({ captions: { kinds, service } });
-  expect(consentFor(plan({}), t(['frames']))).toEqual({ uploads: { captions: ['frames'] } });   // exactly what it sends
+  expect(consentFor(plan({}), t(['frames']))).toEqual({ uploads: { captions: { kinds: ['frames'], service: null } } });   // exactly what it sends
   expect(consentFor(plan({ uploads: [] }), t(['frames']))).toEqual({ uploads: {} });   // nothing to send: none given
   expect(consentFor(plan({}), {})).toEqual({ uploads: {} });   // not ticked by the user: nothing agreed
   // agreeing to frames is not agreeing to the transcript too, nor to sending them to another service
@@ -62,6 +62,15 @@ test('turning on a feature that sends data off is the consent to send it, and a 
   expect(keepChoices(plan({ uploads: ['frames', 'transcript'] }), new Set(['captions']), t(['frames']))).toEqual({ wanted: new Set(), ticked: {} });
   expect(keepChoices(plan({}), new Set(['captions']), {})).toEqual({ wanted: new Set(), ticked: {} });
   expect(keepChoices(plan({ uploads: [] }), new Set(['captions']), {}).wanted).toEqual(new Set(['captions']));   // sends nothing: stays
+  // a step held on for another feature that now sends data off: the feature that brings it goes off (the held-on step
+  // cannot be turned on by itself, its box being held)
+  const chain: Plan = { ok: true, estimated_usd: 0, nodes: [{ ...node, id: 'faces', uploads: [], cost_usd: 0 },
+    { ...node, id: 'summary', uploads: [], cost_usd: 0, needs: ['faces'] }] };
+  const cloudFaces: Plan = { ...chain, nodes: chain.nodes.map((n) => n.id === 'faces' ? { ...n, uploads: ['frames'], service: 'Some API' } : n) };
+  expect(keepChoices(chain, new Set(['summary']), { summary: { kinds: [], service: null } }).wanted).toEqual(new Set(['summary']));
+  expect(keepChoices(cloudFaces, new Set(['summary']), { summary: { kinds: [], service: null } })).toEqual({ wanted: new Set(), ticked: {} });
+  expect(keepChoices(cloudFaces, new Set(['summary', 'faces']), { faces: { kinds: ['frames'], service: 'Some API' } }).wanted)
+    .toEqual(new Set(['summary', 'faces']));   // the user ticked faces for what it sends: both stay
   const whole = plan({});
   delete whole.nodes[0].needs;   // cannot be chosen from: it runs whole, and blockers keeps it from sending
   expect([...keepChoices(whole, new Set(), {}).wanted]).toEqual(['captions']);

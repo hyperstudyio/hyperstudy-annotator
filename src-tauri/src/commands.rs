@@ -288,7 +288,7 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     state.control.before_start()?;   // canceled while that plan ran: nothing starts
     // models download as part of running the features chosen (their details list them)
     let mut args = [&["run", graph, "--input", &input, "--allow-downloads"][..], &places].concat();
-    if uploads.values().any(|kinds| !kinds.is_empty()) {   // the upload gate above held the fresh plan to exactly these
+    if uploads.values().any(|a| !a.kinds.is_empty()) {   // the upload gate above held the fresh plan to exactly these
         args.push("--allow-uploads");
     }
     let outcome = p.run_to_end_with(&args, |pid| {

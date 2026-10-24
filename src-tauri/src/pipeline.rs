@@ -74,9 +74,16 @@ pub fn stop_process(pid: u32) -> Result<()> {
     if status.success() { Ok(()) } else { Err(Error::Bundle(format!("could not stop the pipeline process {pid}"))) }
 }
 
-/// What the user agreed may leave this machine: node id -> the kinds of data it sends (what the plan on screen showed
-/// for the features they turned on).
-pub type Uploads = std::collections::BTreeMap<String, Vec<String>>;
+/// What the user agreed may leave this machine: node id -> the kinds of data it sends and where to (what the plan on
+/// screen showed for the features they turned on).
+pub type Uploads = std::collections::BTreeMap<String, Agreed>;
+
+#[derive(Debug, Default, Clone, serde::Deserialize, PartialEq)]
+pub struct Agreed {
+    pub kinds: Vec<String>,
+    /// the hosted API it sends them to (the plan's `service`), or none
+    pub service: Option<String>,
+}
 
 /// The app's own check, against a fresh plan of what is about to run, that nothing leaves this machine beyond what the
 /// user agreed to: a node that sends a kind of data not agreed for it is refused. Every node counts, cached ones too (a
@@ -89,13 +96,18 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
         let Some(uploads) = n["uploads"].as_array() else {
             return Err(Error::Bundle(format!("the pipeline does not say what {id} sends off this machine; update hyperstudy-perception")));
         };
-        let agreed = allowed.get(id).map(Vec::as_slice).unwrap_or_default();
+        let agreed = allowed.get(id).map(|a| a.kinds.as_slice()).unwrap_or_default();
         // an entry that is not a kind's name is not something that was agreed to: the plan is refused, not read around
         let kinds = uploads.iter().map(|u| u.as_str()).collect::<Option<Vec<&str>>>()
             .ok_or_else(|| Error::Bundle(format!("the pipeline's plan does not say plainly what {id} sends off this machine")))?;
         let beyond: Vec<&str> = kinds.into_iter().filter(|k| !agreed.iter().any(|a| a == k)).collect();
         if !beyond.is_empty() {
             return Err(Error::Bundle(format!("{id} would send {} off this machine, which was not agreed to", beyond.join(", "))));
+        }
+        // the same data sent somewhere else is not what was agreed to either
+        let service = n["service"].as_str();
+        if !uploads.is_empty() && allowed.get(id).and_then(|a| a.service.as_deref()) != service {
+            return Err(Error::Bundle(format!("{id} would send its data to {}, which was not agreed to", service.unwrap_or("another place"))));
         }
     }
     Ok(())
@@ -492,7 +504,7 @@ mod tests {
             {"id": "decode", "cached": false, "uploads": []},
             {"id": "captions", "cached": true, "uploads": uploads}]});
         let agreed = |pairs: &[(&str, &[&str])]| -> Uploads {
-            pairs.iter().map(|(n, ks)| (n.to_string(), ks.iter().map(|k| k.to_string()).collect())).collect()
+            pairs.iter().map(|(n, ks)| (n.to_string(), Agreed { kinds: ks.iter().map(|k| k.to_string()).collect(), service: None })).collect()
         };
         assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[("captions", &["frames"])])).is_ok());
         // a cached node can still run (its cache can be gone by then): it needs the agreement too
@@ -501,6 +513,15 @@ mod tests {
         assert!(upload_gate(&plan(serde_json::json!(["frames", "transcript"])), &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("send transcript"));
         assert!(upload_gate(&plan(serde_json::json!(["frames"])), &agreed(&[("decode", &["frames"])])).is_err());
         assert!(upload_gate(&plan(serde_json::json!([])), &agreed(&[])).is_ok());
+        // the same kinds sent to another service than agreed are refused
+        let to = |service: Option<&str>| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
+            {"id": "captions", "cached": false, "uploads": ["frames"], "service": service}]});
+        let agreed_to = |service: Option<&str>| -> Uploads {
+            [("captions".to_string(), Agreed { kinds: vec!["frames".into()], service: service.map(String::from) })].into_iter().collect()
+        };
+        assert!(upload_gate(&to(Some("Anthropic API")), &agreed_to(Some("Anthropic API"))).is_ok());
+        assert!(upload_gate(&to(Some("Other API")), &agreed_to(Some("Anthropic API"))).unwrap_err().to_string().contains("to Other API"));
+        assert!(upload_gate(&to(None), &agreed_to(Some("Anthropic API"))).is_err());
         // an entry that is not a kind's name is refused, not skipped (fail closed)
         assert!(upload_gate(&plan(serde_json::json!(["frames", 1])), &agreed(&[("captions", &["frames"])])).unwrap_err().to_string().contains("plainly"));
         assert!(upload_gate(&plan(serde_json::json!([{"kind": "video"}])), &agreed(&[])).is_err());

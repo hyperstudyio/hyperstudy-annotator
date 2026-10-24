@@ -96,9 +96,9 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
   return v;
 }
 
-/** What a run lets happen: `uploads` is node id -> the kinds of data it may send off this machine. (Models download as
- *  part of running: the app always lets them.) */
-export interface Consent { uploads: Record<string, string[]> }
+/** What a run lets happen: `uploads` is node id -> the kinds of data it may send off this machine, and where to (its
+ *  service, or null). (Models download as part of running: the app always lets them.) */
+export interface Consent { uploads: Record<string, { kinds: string[]; service: string | null }> }
 
 /** The steps the user turned on themselves, each with what it sent, and where to, on the plan on screen when they did:
  *  that is what they chose to send, and all they chose. */
@@ -119,7 +119,8 @@ function covered(n: PlanNode, ticked: Ticked): boolean {
  *  step that now sends more than when it was ticked agreed to nothing. The app holds a fresh plan to exactly this
  *  before it starts. */
 export const consentFor = (plan: Plan, ticked: Ticked): Consent => ({
-  uploads: Object.fromEntries(plan.nodes.filter((n) => n.uploads?.length && covered(n, ticked)).map((n) => [n.id, [...n.uploads!]])),
+  uploads: Object.fromEntries(plan.nodes.filter((n) => n.uploads?.length && covered(n, ticked))
+    .map((n) => [n.id, { kinds: [...n.uploads!], service: n.service ?? null }])),
 });
 
 /** Steps that would run and send data off beyond what the user agreed to: the run waits until they tick them. */
@@ -131,8 +132,10 @@ export const unagreed = (plan: Plan, ticked: Ticked) => plan.nodes.filter((n) =>
  *  runs whole (blockers refuses it if a step sends data off). */
 export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Ticked): { wanted: Set<string>; ticked: Ticked } {
   if (!canPick(plan)) return { wanted: defaultFeatures(plan), ticked };
+  // a feature stays on only if nothing it would run (itself, and what it needs) sends beyond what was agreed: a step
+  // held on for another feature cannot be turned on by itself, so the feature that brings it goes off instead
   const byId = new Map(plan.nodes.map((n) => [n.id, n]));
-  const keep = new Set([...wanted].filter((id) => { const n = byId.get(id); return !n || covered(n, ticked); }));
+  const keep = new Set([...wanted].filter((id) => picked(plan, new Set([id])).chosen.every((c) => covered(byId.get(c)!, ticked))));
   return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(id))) };
 }
 
