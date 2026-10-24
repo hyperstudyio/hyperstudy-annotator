@@ -12,8 +12,9 @@ export type ValueKind = 'binary' | 'category' | 'number' | 'text';
 export interface AnnotationType { id: string; name: string; kind: ValueKind; target: 'person' | 'scene'; options: string[]; min?: number; max?: number }
 export interface Note { id: string; type: string; start: number; end: number; value: boolean | string | number | null; person: string | null }
 
-/** `carried_from`: an op carried over from an earlier version of the bundle (a re-run), naming the op it copies. */
-export type Op = { at?: string; carried_from?: { bundle: string; index: number } } & (
+/** `carried_from`: an op carried over from an earlier version's log (a re-run), naming the op it copies there.
+ *  `reanchored_from`: an op imported from a file made on another run, naming that run and the op's place in the file. */
+export type Op = { at?: string; carried_from?: { bundle: string; index: number }; reanchored_from?: { bundle: string; index: number } } & (
   | { op: 'person.create'; person: string; name: string }
   | { op: 'person.rename'; person: string; name: string }
   | { op: 'person.merge'; from: string; into: string }

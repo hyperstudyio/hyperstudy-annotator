@@ -200,7 +200,17 @@ describe('which run a corrections file was made on', () => {
   test('a file from another run in the library is re-anchored when everything matches', async () => {
     const { s } = session(makeBundle({}, 'this-run'));
     const ops = await s.parseCorrections(file([caption], 'other'), lineage({ other: makeBundle({}, 'other') }), load);
-    expect(ops).toMatchObject([{ ...caption, carried_from: { bundle: 'other', index: 0 } }]);
+    expect(ops).toMatchObject([{ ...caption, reanchored_from: { bundle: 'other', index: 0 } }]);
+  });
+
+  test('re-anchored imports name the file position they came from, and do not count as a carry-over', async () => {
+    const { s } = session(makeBundle({}, 'this-run'));
+    s.carry = { from_bundle_id: 'v1', status: 'carried', carried: 3, created_at: '',
+      unmatched: [{ index: 0, op: caption as never, reason: 'x', span: null }] };   // an earlier carry-over, since undone
+    const ops = await s.parseCorrections(file([caption], 'other'), lineage({ other: makeBundle({}, 'other') }), load);
+    expect(ops).toEqual([{ ...caption, reanchored_from: { bundle: 'other', index: 0 } }]);
+    await s.replaceCorrections(ops);
+    expect(s.notCarried).toEqual([]);   // the undone carry-over's list does not come back
   });
 
   test('a file from another run is refused when some of it does not match, pointing to carry-over', async () => {

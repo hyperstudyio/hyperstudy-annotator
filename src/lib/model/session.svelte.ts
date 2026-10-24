@@ -144,7 +144,8 @@ export class Session {
       if (!v) throw new ImportError('the file was made on another run of this video that is not in the library. Import it into that run, then open this run to carry its corrections over');
       const r = carryOver(ops, await load(v), this.bundle, v.id);
       if (r.unmatched.length) throw new ImportError(`the file was made on another run of this video. ${v.label}: ${r.unmatched.length} of its ${plural(ops.length, 'correction')} could not be matched to this run. Import it into that run, then open this run to carry it over: the ones that do not match are then listed for review`);
-      return r.ops;
+      // not a carry-over (no record, and the index is the op's place in the file, not in a log)
+      return r.ops.map(({ carried_from, ...op }) => ({ ...op, reanchored_from: carried_from }) as Op);
     }
     if (!doc.bundle && lineage) {
       const others = await lineage.others();

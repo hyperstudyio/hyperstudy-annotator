@@ -7,6 +7,7 @@
   import { useSession, useSource } from '../model/context';
   import { plural, stampAfter } from '../model/session.svelte';
   import type { EarlierVersion } from '../source';
+  import { latestOnly } from '../latest';
 
   const s = useSession(), source = useSource();
   let offer = $state<EarlierVersion | null>(null);
@@ -16,13 +17,12 @@
   // Checked on opening (which also loads what was not carried) and whenever the log becomes empty or stops being
   // empty: an undo that takes a carry-over back offers it again.
   const empty = $derived(s.ops.length === 0);
-  let check = 0;   // only the newest check sets the offer: an older one finishing later would show a stale offer
+  const newest = latestOnly();   // an older check finishing later would show a stale offer
   $effect(() => {
     const lineage = source.lineage;
     void empty;
     if (!lineage) return;
-    const n = ++check;
-    untrack(() => { s.checkCarry(lineage).then((o) => { if (n === check) offer = o; }).catch((e) => (error = String(e))); });
+    untrack(() => newest(s.checkCarry(lineage), (o) => (offer = o), (e) => (error = String(e))));
   });
 
   async function carry() {
@@ -49,7 +49,8 @@
 </script>
 
 {#if offer}
-  <div class="offer" role="dialog" aria-label="Carry over corrections">
+  <div class="backdrop"></div>
+  <div class="offer" role="dialog" aria-modal="true" aria-label="Carry over corrections">
     <div class="title">This is a newer run of this video</div>
     <p>{offer.label} has {plural(offer.corrections, 'correction')}. Carry them over? Each is matched to this run’s faces,
       people, utterances and shots; any that cannot be matched are listed in the Review tab, not dropped.</p>
@@ -62,8 +63,10 @@
 {/if}
 
 <style>
-  /* over the video, below the header's banners (a corrections file found next to the bundle shows one there) */
-  .offer { position: fixed; top: 140px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100vw - 32px)); z-index: 45;
+  /* A modal: the choice comes before any work on this version, and nothing on the page (a header banner of any
+     height) can sit over it or under it half-hidden. */
+  .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 44; }
+  .offer { position: fixed; top: 30%; left: 50%; transform: translate(-50%, -30%); width: min(520px, calc(100vw - 32px)); z-index: 45;
            background: var(--color-bg-card); border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 12px 14px;
            box-shadow: 0 8px 24px rgba(0, 0, 0, .4); }
   .title { font-weight: 600; margin-bottom: 4px; }
