@@ -10,6 +10,10 @@ Status: plan, 2026-10-24. Follows the Svelte port (PORT_PLAN.md, done).
   corrections of record). Everything else is kept locally, in the app's library. Local-only users never sync.
 - **Pipeline UI.** Users choose where each node runs (this machine, a cloud GPU, a model API) and see an estimated
   price and duration for each choice before anything starts.
+- **User-owned servers.** A third kind of compute next to local and cloud: a machine the user can SSH to (a lab GPU
+  server, a DGX Spark). Price 0, duration from measurements on that machine.
+- **HyperStudy connection.** A Settings page where the user pastes an API key created in HyperStudy. Stored in the
+  OS keychain; nothing else is needed to connect.
 
 ## What exists
 
@@ -36,6 +40,13 @@ Status: plan, 2026-10-24. Follows the Svelte port (PORT_PLAN.md, done).
      records its seconds and usage; adding the device or instance type and the input's duration gives seconds per
      video minute per node per device, and price from that times the hourly rate (cloud) or per-unit cost (APIs).
      Until a node has measurements on a device, the estimate says so instead of guessing.
+   - **SSH servers.** An orchestrator backend that sends single nodes to a user's machine over SSH, using the
+     node file protocol as is: rsync the node, its uv environment definition and its inputs; run it; rsync `out/`
+     and `response.json` back and check them like any other result. The server needs only uv, ffmpeg and the
+     drivers, no root. Hosts come from the user's `~/.ssh/config` and keys from their ssh-agent: the app never
+     stores private keys or passwords. The server is probed once (`perception doctor --json` over SSH) so placement
+     knows its platform and accelerators. SkyPilot's SSH Node Pools were considered: they install k3s on each
+     machine, which needs root and is heavy for a shared lab server.
    - Model downloads and missing secrets are shown before the run (the dry run already reports both). Secrets live
      in the OS keychain.
 3. **Analysis export and a Python bundle reader.** In hyperstudy-perception: load a bundle, apply the op log, and
@@ -44,7 +55,8 @@ Status: plan, 2026-10-24. Follows the Svelte port (PORT_PLAN.md, done).
    Python SDK building on the reader of step 3, and `Workspace.svelte` embedded in HyperStudy through a third
    `BundleSource`. Design questions: where bundles are stored (next to the videos, keyed by sha256?), how the
    correction log of record is kept (Firestore documents are limited to 1 MB, so a subcollection or a file), how the
-   desktop app authenticates, and how a local edit becomes a HyperStudy edit (and the reverse).
+   desktop app authenticates (decided: an API key created in HyperStudy, pasted into Settings), and how a local edit
+   becomes a HyperStudy edit (and the reverse).
 
 ## Also to sort out
 
