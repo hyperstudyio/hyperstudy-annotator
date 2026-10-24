@@ -17,10 +17,8 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// a pipeline run in progress (one at a time: GPU nodes are exclusive); its run id once the CLI has said it
     pub running: Mutex<Option<String>>,
-    /// the CLI process of that run, to stop it before it has named the run (a slow first environment sync)
-    pub child: Mutex<Option<u32>>,
-    /// a cancel that came before the CLI started (during the consent check)
-    pub start_gate: pipeline::StartGate,
+    /// that run's CLI process, and a cancel that came before it started (stops it before it has named the run)
+    pub control: pipeline::RunControl,
 }
 
 const PIPELINE_FOLDER: &str = "pipeline_folder";
@@ -243,7 +241,7 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
         *running = Some(String::new());
     }
     std::thread::spawn(move || {
-        let _clear = ClearRun(app.clone());   // even if this thread panics, the next run is not refused forever
+        let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };   // a panic clears it too
         let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads, &places) {
             Ok(last) => last,
             Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
@@ -257,21 +255,10 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     Ok(())
 }
 
-/// Clears the run-in-progress state if the run thread panics (normally the thread clears it before its last event; a
-/// second clear afterwards could wipe a run started in between).
-struct ClearRun(AppHandle);
-impl Drop for ClearRun {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            clear_run(&self.0);
-        }
-    }
-}
 fn clear_run(app: &AppHandle) {
     let state = app.state::<AppState>();
     *state.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    *state.child.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    let _ = state.start_gate.check();   // an unused cancel request does not carry over to the next run
+    state.control.clear();
 }
 
 /// Cancel only the run in progress (a stale dialog must not cancel another).
@@ -289,14 +276,13 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
     let places: Vec<&str> = places.iter().map(String::as_str).collect();
     let plan_args = [&["plan", graph, "--input", &input][..], &places].concat();
     pipeline::upload_gate(&p.one(&plan_args, "plan")?, allow_uploads)?;
-    state.start_gate.check()?;   // canceled while that plan ran: nothing starts
+    state.control.before_start()?;   // canceled while that plan ran: nothing starts
     let mut args = [&["run", graph, "--input", &input][..], &places].concat();
     if allow_downloads {
         args.push("--allow-downloads");
     }
     let outcome = p.run_to_end_with(&args, |pid| {
-        *state.child.lock().unwrap() = Some(pid);
-        if state.start_gate.check().is_err() {   // canceled between the consent check and now: stop what just started
+        if state.control.spawned(pid) {   // canceled between the consent check and now: stop what just started
             let _ = pipeline::stop_process(pid);
         }
     }, |o| {
@@ -336,16 +322,16 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
 #[tauri::command]
 pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) -> Result<()> {
     let Some(run) = run else {
-        let named = state.running.lock().unwrap().as_deref().is_some_and(|r| !r.is_empty());
-        let pid = *state.child.lock().unwrap();
-        let named = if named { state.running.lock().unwrap().clone() } else { None };
-        return match (named, pid) {
-            (None, Some(pid)) => pipeline::stop_process(pid),
-            // the run is still being checked (no CLI process yet): it will not start
-            (None, None) if state.running.lock().unwrap().is_some() => { state.start_gate.request(); Ok(()) }
-            // the CLI named the run before the window heard it: cancel that run
-            (Some(run), _) => { let p = pipeline(&state)?; blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await }
-            (None, None) => Err(Error::Bundle("no pipeline run is in progress".into())),
+        let named = state.running.lock().unwrap().clone().filter(|r| !r.is_empty());
+        if let Some(run) = named {   // the CLI named the run before the window heard it: cancel that run
+            let p = pipeline(&state)?;
+            return blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await;
+        }
+        let in_progress = state.running.lock().unwrap().is_some();
+        return match state.control.cancel(in_progress) {
+            pipeline::Cancel::Stop(pid) => pipeline::stop_process(pid),
+            pipeline::Cancel::WillNotStart => Ok(()),
+            pipeline::Cancel::Nothing => Err(Error::Bundle("no pipeline run is in progress".into())),
         };
     };
     check_cancel(state.running.lock().unwrap().as_deref(), &run)?;

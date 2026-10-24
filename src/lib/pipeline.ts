@@ -109,8 +109,10 @@ export function duration(seconds: number): string {
   return `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
 }
 
-/** The plan's estimated time: what will run (cached nodes do not), and the nodes with no estimate yet. */
-export function totalEstimate(plan: Plan): { seconds: number; unknown: string[] } {
+/** The plan's estimated time: what will run (cached nodes do not), and the nodes with no estimate yet; null when the
+ *  pipeline gives no estimates at all (a CLI from before plans carried them). */
+export function totalEstimate(plan: Plan): { seconds: number; unknown: string[] } | null {
+  if (!plan.nodes.some((n) => 'estimate_s' in n)) return null;
   const running = plan.nodes.filter((n) => !n.cached);
   return { seconds: running.reduce((a, n) => a + (n.estimate_s ?? 0), 0), unknown: running.filter((n) => n.estimate_s == null).map((n) => n.id) };
 }

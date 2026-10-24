@@ -131,7 +131,7 @@
               <td>
                 {#if started}<span class="state {s.state}">{STATE_LABEL[s.state]}</span> <span class="meta">{s.message}</span>
                 {:else}
-                  {#if !n.cached}<span class="meta" title={n.estimate_basis}>{n.estimate_s != null ? `about ${duration(n.estimate_s)}` : 'no estimate yet'}</span>{/if}
+                  {#if !n.cached && 'estimate_s' in n}<span class="meta" title={n.estimate_basis}>{n.estimate_s != null ? `about ${duration(n.estimate_s)}` : 'no estimate yet'}</span>{/if}
                   {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
                   {#if n.uploads?.length}<span class="uploads">sends {n.uploads.join(', ')} off this machine</span>{/if}
                   {#if n.why_not}<span class="error">{n.why_not}</span>{/if}

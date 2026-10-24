@@ -69,3 +69,8 @@ test('times read as people say them, and a plan totals what will run (not what i
   expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] })).toEqual({ seconds: 98, unknown: [] });
   expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('asr', 2), node('faces', null)] })).toEqual({ seconds: 2, unknown: ['faces'] });
 });
+
+test('a CLI that gives no estimates shows none, rather than nothing estimated', () => {
+  const node: PlanNode = { id: 'asr', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] };
+  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node] })).toBeNull();
+});
