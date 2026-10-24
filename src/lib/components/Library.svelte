@@ -3,6 +3,8 @@
   // locate its video (checked by sha256; bundles never contain video), and open it.
   import { open } from '@tauri-apps/plugin-dialog';
   import { api } from '../source';
+  import { tauriPipeline, type PipelineApi } from '../pipeline';
+  import PipelineDialog from './PipelineDialog.svelte';
   import type { BundleSummary, LicenceMode } from '../types';
 
   let { onopen }: { onopen: (id: string) => void } = $props();
@@ -10,6 +12,8 @@
   let bundles = $state<BundleSummary[]>([]);
   let busy = $state<string | null>(null);
   let error = $state<string | null>(null);
+  let pipeline = $state<PipelineApi | null>(null);   // the Run pipeline dialog, while open
+  const openPipeline = async () => { pipeline = await tauriPipeline(); };
 
   async function refresh() { bundles = await api.list(); }
   $effect(() => { refresh().catch((e) => (error = String(e))); });
@@ -33,10 +37,14 @@
   const strictest = (b: BundleSummary) => Object.values(b.layers).reduce((a, m) => (ORDER.indexOf(m) > ORDER.indexOf(a) ? m : a), 'commercial-ok' as LicenceMode);
 </script>
 
-<div class="library">
+{#if pipeline}
+  <PipelineDialog api={pipeline} onclose={() => { pipeline = null; refresh(); }} onopen={(id) => { pipeline = null; onopen(id); }} />
+{/if}
+<div class="library" inert={!!pipeline}>
   <header>
     <h1>HyperStudy Annotator</h1>
     <span class="spacer"></span>
+    <button onclick={openPipeline} disabled={!!busy}>Run pipeline…</button>
     <button class="primary" onclick={importBundle} disabled={!!busy}>Import bundle…</button>
   </header>
   {#if busy}<p class="muted status">{busy}</p>{/if}

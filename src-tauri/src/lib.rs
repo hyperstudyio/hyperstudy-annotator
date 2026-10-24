@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod error;
 mod library;
+mod pipeline;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -14,7 +15,8 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(data_dir.join("bundles"))?;
             let conn = db::open(&data_dir.join("annotator.db"))?;
-            app.manage(commands::AppState { db: Mutex::new(conn), data_dir });
+            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), child: Mutex::new(None),
+                                             start_gate: Default::default() });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -38,6 +40,13 @@ pub fn run() {
             commands::carry_over,
             commands::decline_carryover,
             commands::dismiss_unmatched,
+            commands::get_pipeline_folder,
+            commands::set_pipeline_folder,
+            commands::pipeline_doctor,
+            commands::pipeline_graphs,
+            commands::pipeline_plan,
+            commands::pipeline_run,
+            commands::pipeline_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the annotator");

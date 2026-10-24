@@ -1,20 +1,29 @@
-//! Commands the frontend invokes: thin wrappers over `library`. The app never runs models: it imports bundles,
-//! finds their videos, and serves layer files to the viewer.
+//! Commands the frontend invokes: thin wrappers over `library` (import bundles, find their videos, serve layer files to
+//! the viewer) and `pipeline` (run the perception CLI, whose processes run the models, and import what it makes).
 
 use crate::error::{Error, Result};
 use crate::library::{self, BundleSummary, Carryover};
+use crate::pipeline::{self, GraphPreset, Pipeline};
 use crate::bundle;
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub data_dir: PathBuf,
+    /// a pipeline run in progress (one at a time: GPU nodes are exclusive); its run id once the CLI has said it
+    pub running: Mutex<Option<String>>,
+    /// the CLI process of that run, to stop it before it has named the run (a slow first environment sync)
+    pub child: Mutex<Option<u32>>,
+    /// a cancel that came before the CLI started (during the consent check)
+    pub start_gate: pipeline::StartGate,
 }
+
+const PIPELINE_FOLDER: &str = "pipeline_folder";
 
 #[derive(Serialize)]
 pub struct OpenedBundle {
@@ -167,4 +176,175 @@ pub fn decline_carryover(state: State<'_, AppState>, id: String, from: String) -
 #[tauri::command]
 pub fn dismiss_unmatched(state: State<'_, AppState>, id: String, index: u64) -> Result<Carryover> {
     library::dismiss_unmatched(&state.db.lock().unwrap(), &id, index)
+}
+
+// --- running the perception pipeline (pipeline.rs) ---
+
+fn pipeline_at(folder: &str, data_dir: &std::path::Path) -> Result<Pipeline> {
+    pipeline::check_folder(std::path::Path::new(folder), data_dir)?;
+    Pipeline::new(std::path::Path::new(folder), pipeline::bundled_uv(&std::env::current_exe()?)?)
+}
+
+fn pipeline(state: &AppState) -> Result<Pipeline> {
+    let folder = library::get_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER)?
+        .ok_or_else(|| Error::NotFound("choose the hyperstudy-perception folder first".into()))?;
+    pipeline_at(&folder, &state.data_dir)
+}
+
+#[tauri::command]
+pub fn get_pipeline_folder(state: State<'_, AppState>) -> Result<Option<String>> {
+    library::get_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER)
+}
+
+/// Check a folder with `perception doctor` and remember it; returns what the doctor found.
+#[tauri::command]
+pub async fn set_pipeline_folder(state: State<'_, AppState>, path: String) -> Result<Value> {
+    let (folder, data_dir) = (path.clone(), state.data_dir.clone());
+    let doctor = blocking(move || pipeline_at(&folder, &data_dir)?.one(&["doctor"], "doctor")).await?;
+    library::set_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER, &path)?;
+    Ok(doctor)
+}
+
+#[tauri::command]
+pub async fn pipeline_doctor(state: State<'_, AppState>) -> Result<Value> {
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&["doctor"], "doctor")).await
+}
+
+#[tauri::command]
+pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
+    pipeline(&state)?.graphs()
+}
+
+/// What a run of `graph` on `video` would do: placement, cache, downloads, missing secrets and cost per node.
+#[tauri::command]
+pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: String) -> Result<Value> {
+    let p = pipeline(&state)?;
+    let g = p.graph(&graph)?;
+    blocking(move || p.one(&["plan", &g.to_string_lossy(), "--input", &format!("video={video}")], "plan")).await
+}
+
+/// Start a run. Its objects arrive as `pipeline` events; when it succeeds, the bundle is exported, imported into the
+/// library and its video recorded, then an `imported` event carries the bundle's summary.
+#[tauri::command]
+pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool,
+                    allow_uploads: bool) -> Result<()> {
+    let p = pipeline(&state)?;
+    let g = p.graph(&graph)?;
+    {
+        let mut running = state.running.lock().unwrap();
+        if running.is_some() {
+            return Err(Error::Bundle("a pipeline run is already in progress".into()));
+        }
+        *running = Some(String::new());
+    }
+    std::thread::spawn(move || {
+        let _clear = ClearRun(app.clone());   // even if this thread panics, the next run is not refused forever
+        let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads) {
+            Ok(last) => last,
+            Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
+        };
+        // cleared before the last event: once the dialog hears it, a new run may start
+        clear_run(&app);
+        if let Some(last) = last {
+            let _ = app.emit("pipeline", last);
+        }
+    });
+    Ok(())
+}
+
+struct ClearRun(AppHandle);
+impl Drop for ClearRun {
+    fn drop(&mut self) { clear_run(&self.0); }
+}
+fn clear_run(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    *state.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *state.child.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    let _ = state.start_gate.check();   // an unused cancel request does not carry over to the next run
+}
+
+/// Cancel only the run in progress (a stale dialog must not cancel another).
+pub fn check_cancel(running: Option<&str>, run: &str) -> Result<()> {
+    if !run.is_empty() && running == Some(run) { Ok(()) } else { Err(Error::Bundle(format!("run {run:?} is not the one in progress"))) }
+}
+
+/// The run, then its import; the final `imported` event, for the caller to send once the run is no longer in progress.
+fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool,
+                  allow_uploads: bool) -> Result<Option<Value>> {
+    let state = app.state::<AppState>();
+    let input = format!("video={video}");
+    let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
+    // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
+    pipeline::upload_gate(&p.one(&["plan", graph, "--input", &input], "plan")?, allow_uploads)?;
+    state.start_gate.check()?;   // canceled while that plan ran: nothing starts
+    let mut args = vec!["run", graph, "--input", &input];
+    if allow_downloads {
+        args.push("--allow-downloads");
+    }
+    let outcome = p.run_to_end_with(&args, |pid| *state.child.lock().unwrap() = Some(pid), |o| {
+        if o["type"] == "run.created" {   // only an id in the CLI's form stands for the run in progress
+            if let Some(id) = o["run"].as_str().and_then(|r| pipeline::run_id(r).ok()) {
+                *state.running.lock().unwrap() = Some(id.to_string());
+            }
+        }
+        let _ = app.emit("pipeline", o);
+    })?;
+    let Some((run, status)) = outcome else { return Ok(None) };   // refused: its objects said why
+    let run = pipeline::run_id(&run)?.to_string();   // it names a folder this function deletes
+    if status != "succeeded" {
+        return Ok(None);   // its events said what failed
+    }
+
+    let out = state.data_dir.join("exports").join(&run);
+    let imported = (|| {
+        let exported = p.one(&["export", &run, "--output", &out.to_string_lossy()], "exported")?;
+        let path = exported["path"].as_str().ok_or_else(|| Error::Bundle("the pipeline exported no path".into()))?;
+        let path = pipeline::inside(std::path::Path::new(path), &out)?;   // where it was asked, so it is removed below
+        library::import_dir(&state.db, &path, &state.data_dir)
+    })();
+    if out.exists() {
+        std::fs::remove_dir_all(&out)?;   // the library holds its own copy (or the import failed): frames and crops go
+    }
+    let summary = imported?;
+    library::check_video(&summary.video_sha256, std::path::Path::new(video))?;   // the bundle names the video it was made from
+    let conn = state.db.lock().unwrap();
+    library::record_video(&conn, &summary.video_sha256, video)?;
+    let summary = library::get(&conn, &summary.id)?;
+    Ok(Some(serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary})))
+}
+
+/// Cancel the run in progress: through `perception cancel` once the CLI has named it, else by stopping its process
+/// (it has not started a node yet: an environment sync, or the coordinator starting).
+#[tauri::command]
+pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) -> Result<()> {
+    let Some(run) = run else {
+        let named = state.running.lock().unwrap().as_deref().is_some_and(|r| !r.is_empty());
+        let pid = *state.child.lock().unwrap();
+        let named = if named { state.running.lock().unwrap().clone() } else { None };
+        return match (named, pid) {
+            (None, Some(pid)) => pipeline::stop_process(pid),
+            // the run is still being checked (no CLI process yet): it will not start
+            (None, None) if state.running.lock().unwrap().is_some() => { state.start_gate.request(); Ok(()) }
+            // the CLI named the run before the window heard it: cancel that run
+            (Some(run), _) => { let p = pipeline(&state)?; blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await }
+            (None, None) => Err(Error::Bundle("no pipeline run is in progress".into())),
+        };
+    };
+    check_cancel(state.running.lock().unwrap().as_deref(), &run)?;
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_run_in_progress_can_be_canceled() {
+        assert!(check_cancel(Some("20261024-095828-1ad462"), "20261024-095828-1ad462").is_ok());
+        assert!(check_cancel(Some("20261024-095828-1ad462"), "20261024-090000-000000").is_err());
+        assert!(check_cancel(None, "20261024-095828-1ad462").is_err());
+        assert!(check_cancel(Some(""), "").is_err());   // starting: the CLI has not named the run yet
+    }
 }

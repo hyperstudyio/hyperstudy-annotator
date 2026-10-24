@@ -6,14 +6,19 @@
   import Library from './lib/components/Library.svelte';
   import Viewer from './lib/components/Viewer.svelte';
   import { httpSource, inTauri, tauriSource, type BundleSource } from './lib/source';
+  import PipelineDialog from './lib/components/PipelineDialog.svelte';
+  import type { PipelineApi } from './lib/pipeline';
 
   let source = $state<BundleSource | null>(null);
   let error = $state<string | null>(null);
   const desktop = inTauri();
+  // browser mode's ?pipeline-demo: the Run pipeline dialog against a scripted stand-in (Tauri is absent here)
+  let demo = $state<PipelineApi | null>(null);
 
   if (!desktop) {
     const q = new URLSearchParams(location.search);
     const bundle = q.get('bundle');
+    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (demo = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start' })));
     if (bundle) httpSource(bundle, q.get('video'), q.get('previous')).then((s) => (source = s)).catch((e) => (error = String(e)));
   }
 
@@ -23,6 +28,9 @@
   }
 </script>
 
+{#if demo}
+  <PipelineDialog api={demo} onclose={() => (demo = null)} onopen={(id) => (error = `would open ${id}`)} />
+{/if}
 {#if source}
   <Viewer {source} onback={desktop ? () => (source = null) : undefined} />
 {:else if desktop}
