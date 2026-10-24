@@ -17,10 +17,8 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// a pipeline run in progress (one at a time: GPU nodes are exclusive); its run id once the CLI has said it
     pub running: Mutex<Option<String>>,
-    /// the CLI process of that run, to stop it before it has named the run (a slow first environment sync)
-    pub child: Mutex<Option<u32>>,
-    /// a cancel that came before the CLI started (during the consent check)
-    pub start_gate: pipeline::StartGate,
+    /// that run's CLI process, and a cancel that came before it started (stops it before it has named the run)
+    pub control: pipeline::RunControl,
 }
 
 const PIPELINE_FOLDER: &str = "pipeline_folder";
@@ -218,19 +216,23 @@ pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
 
 /// What a run of `graph` on `video` would do: placement, cache, downloads, missing secrets and cost per node.
 #[tauri::command]
-pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: String) -> Result<Value> {
+pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: String,
+                           places: Option<std::collections::BTreeMap<String, String>>) -> Result<Value> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
-    blocking(move || p.one(&["plan", &g.to_string_lossy(), "--input", &format!("video={video}")], "plan")).await
+    let mut args = vec!["plan".to_string(), g.to_string_lossy().into_owned(), "--input".into(), format!("video={video}")];
+    args.extend(pipeline::place_args(&places.unwrap_or_default())?);
+    blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "plan")).await
 }
 
 /// Start a run. Its objects arrive as `pipeline` events; when it succeeds, the bundle is exported, imported into the
 /// library and its video recorded, then an `imported` event carries the bundle's summary.
 #[tauri::command]
 pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool,
-                    allow_uploads: bool) -> Result<()> {
+                    allow_uploads: bool, places: Option<std::collections::BTreeMap<String, String>>) -> Result<()> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
+    let places = pipeline::place_args(&places.unwrap_or_default())?;
     {
         let mut running = state.running.lock().unwrap();
         if running.is_some() {
@@ -239,8 +241,8 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
         *running = Some(String::new());
     }
     std::thread::spawn(move || {
-        let _clear = ClearRun(app.clone());   // even if this thread panics, the next run is not refused forever
-        let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads) {
+        let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };   // a panic clears it too
+        let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads, &places) {
             Ok(last) => last,
             Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
         };
@@ -253,15 +255,10 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     Ok(())
 }
 
-struct ClearRun(AppHandle);
-impl Drop for ClearRun {
-    fn drop(&mut self) { clear_run(&self.0); }
-}
 fn clear_run(app: &AppHandle) {
     let state = app.state::<AppState>();
     *state.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    *state.child.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    let _ = state.start_gate.check();   // an unused cancel request does not carry over to the next run
+    state.control.clear();
 }
 
 /// Cancel only the run in progress (a stale dialog must not cancel another).
@@ -271,18 +268,24 @@ pub fn check_cancel(running: Option<&str>, run: &str) -> Result<()> {
 
 /// The run, then its import; the final `imported` event, for the caller to send once the run is no longer in progress.
 fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool,
-                  allow_uploads: bool) -> Result<Option<Value>> {
+                  allow_uploads: bool, places: &[String]) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
     let input = format!("video={video}");
     let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
     // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
-    pipeline::upload_gate(&p.one(&["plan", graph, "--input", &input], "plan")?, allow_uploads)?;
-    state.start_gate.check()?;   // canceled while that plan ran: nothing starts
-    let mut args = vec!["run", graph, "--input", &input];
+    let places: Vec<&str> = places.iter().map(String::as_str).collect();
+    let plan_args = [&["plan", graph, "--input", &input][..], &places].concat();
+    pipeline::upload_gate(&p.one(&plan_args, "plan")?, allow_uploads)?;
+    state.control.before_start()?;   // canceled while that plan ran: nothing starts
+    let mut args = [&["run", graph, "--input", &input][..], &places].concat();
     if allow_downloads {
         args.push("--allow-downloads");
     }
-    let outcome = p.run_to_end_with(&args, |pid| *state.child.lock().unwrap() = Some(pid), |o| {
+    let outcome = p.run_to_end_with(&args, |pid| {
+        if state.control.spawned(pid) {   // canceled between the consent check and now: stop what just started
+            let _ = pipeline::stop_process(pid);
+        }
+    }, |o| {
         if o["type"] == "run.created" {   // only an id in the CLI's form stands for the run in progress
             if let Some(id) = o["run"].as_str().and_then(|r| pipeline::run_id(r).ok()) {
                 *state.running.lock().unwrap() = Some(id.to_string());
@@ -319,16 +322,16 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video:
 #[tauri::command]
 pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) -> Result<()> {
     let Some(run) = run else {
-        let named = state.running.lock().unwrap().as_deref().is_some_and(|r| !r.is_empty());
-        let pid = *state.child.lock().unwrap();
-        let named = if named { state.running.lock().unwrap().clone() } else { None };
-        return match (named, pid) {
-            (None, Some(pid)) => pipeline::stop_process(pid),
-            // the run is still being checked (no CLI process yet): it will not start
-            (None, None) if state.running.lock().unwrap().is_some() => { state.start_gate.request(); Ok(()) }
-            // the CLI named the run before the window heard it: cancel that run
-            (Some(run), _) => { let p = pipeline(&state)?; blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await }
-            (None, None) => Err(Error::Bundle("no pipeline run is in progress".into())),
+        let named = state.running.lock().unwrap().clone().filter(|r| !r.is_empty());
+        if let Some(run) = named {   // the CLI named the run before the window heard it: cancel that run
+            let p = pipeline(&state)?;
+            return blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await;
+        }
+        let in_progress = state.running.lock().unwrap().is_some();
+        return match state.control.cancel(in_progress) {
+            pipeline::Cancel::Stop(pid) => pipeline::stop_process(pid),
+            pipeline::Cancel::WillNotStart => Ok(()),
+            pipeline::Cancel::Nothing => Err(Error::Bundle("no pipeline run is in progress".into())),
         };
     };
     check_cancel(state.running.lock().unwrap().as_deref(), &run)?;

@@ -17,13 +17,15 @@ const graphs: GraphPreset[] = [
 ];
 const plan: Plan = {
   ok: false, estimated_usd: 0.156, nodes: [
-    { id: 'decode', uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] },
+    { id: 'decode', uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
+      place: 'native:cpu', options: ['native:cpu'], estimate_s: null, estimate_basis: '' },
     { id: 'asr', uses: 'audio.asr@1.0.0', where: 'native (mps)', why_not: '', cached: false,
       downloads: [{ id: 'parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', size_gb: 2.4, gated: false, licence_mode: 'commercial-ok' }],
-      missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] },
-    { id: 'faces', uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] },
+      missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:mps', options: ['native:mps'], estimate_s: 1.8, estimate_basis: 'median of 4 runs of audio.asr@1.0.0 on native:mps here' },
+    { id: 'faces', uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
+      place: 'native:mps', options: ['native:mps', 'native:cpu'], estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' },
     { id: 'captions', uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
-      uploads: ['frames', 'faces', 'transcript'] },
+      uploads: ['frames', 'faces', 'transcript'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 176.1, estimate_basis: 'median of 2 runs of vlm.shot-captions@1.0.0 on native:cpu here' },
   ],
 };
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'demo-run', node, kind, message, at: null });
@@ -55,8 +57,12 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     setFolder: async (path) => { folder = path; return doctor; },
     doctor: async () => doctor,
     graphs: async () => graphs,
-    plan: async () => plan,
-    async run(_graph, _video, _allow, on) {
+    async plan(_graph, _video, places) {   // faces can run on the Apple GPU (measured before) or the CPU (never yet)
+      const cpu = places.faces === 'native:cpu';
+      return { ...plan, nodes: plan.nodes.map((n) => n.id !== 'faces' ? n : { ...n, place: cpu ? 'native:cpu' : 'native:mps', where: cpu ? 'native (cpu)' : 'native (mps)',
+        estimate_s: cpu ? null : 96, estimate_basis: cpu ? 'no runs of vision.face-track@1.0.0 on native:cpu here yet' : 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' }) };
+    },
+    async run(_graph, _video, _allow, _places, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       listener = on;
       const first = slowStart ? 60_000 : 0;

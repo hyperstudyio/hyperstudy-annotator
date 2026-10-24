@@ -78,7 +78,8 @@ pub fn stop_process(pid: u32) -> Result<()> {
 /// counts, cached ones too (a cache can be gone by the time the run starts), and a plan that does not say what a node
 /// sends (a CLI from before plans carried `uploads`) is refused.
 pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
-    for n in plan["nodes"].as_array().into_iter().flatten() {
+    let nodes = plan["nodes"].as_array().ok_or_else(|| Error::Bundle("the pipeline's plan lists no nodes; nothing could be checked".into()))?;
+    for n in nodes {
         let id = n["id"].as_str().unwrap_or("?");
         let Some(uploads) = n["uploads"].as_array() else {
             return Err(Error::Bundle(format!("the pipeline does not say what {id} sends off this machine; update hyperstudy-perception")));
@@ -91,22 +92,96 @@ pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
     Ok(())
 }
 
-/// A cancel asked for before the CLI has started (while the app checks consent against a fresh plan): the run then
-/// does not start. A request is used once.
+/// The CLI process of the run in progress, and a cancel asked for before it existed, under one lock: whichever comes
+/// second, the cancel or the CLI starting, sees the other, so a cancel is never lost in between.
 #[derive(Default)]
-pub struct StartGate(std::sync::atomic::AtomicBool);
+pub struct RunControl(std::sync::Mutex<RunProc>);
 
-impl StartGate {
-    pub fn request(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+#[derive(Default)]
+struct RunProc {
+    pid: Option<u32>,
+    cancel: bool,
+}
+
+/// What a cancel does.
+#[derive(Debug, PartialEq)]
+pub enum Cancel {
+    /// stop this process (the CLI is running)
+    Stop(u32),
+    /// the CLI has not started: it will not (or is stopped the moment it does)
+    WillNotStart,
+    /// no run is in progress
+    Nothing,
+}
+
+impl RunControl {
+    fn lock(&self) -> std::sync::MutexGuard<'_, RunProc> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
-    pub fn check(&self) -> Result<()> {
-        if self.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            Err(Error::Bundle("the run was canceled before it started".into()))
-        } else {
-            Ok(())
+
+    /// Just before spawning the CLI: an error if the run was canceled meanwhile (nothing starts).
+    pub fn before_start(&self) -> Result<()> {
+        if std::mem::take(&mut self.lock().cancel) {
+            return Err(Error::Bundle("the run was canceled before it started".into()));
+        }
+        Ok(())
+    }
+
+    /// The CLI started as `pid`; true when a cancel came first, and the caller stops it.
+    pub fn spawned(&self, pid: u32) -> bool {
+        let mut p = self.lock();
+        p.pid = Some(pid);
+        std::mem::take(&mut p.cancel)
+    }
+
+    /// A cancel, with no run id yet: `in_progress` says whether a run is starting at all.
+    pub fn cancel(&self, in_progress: bool) -> Cancel {
+        let mut p = self.lock();
+        match p.pid {
+            Some(pid) => Cancel::Stop(pid),
+            None if in_progress => {
+                p.cancel = true;
+                Cancel::WillNotStart
+            }
+            None => Cancel::Nothing,
         }
     }
+
+    /// The run is over: no process, and no request carried over to the next run.
+    pub fn clear(&self) {
+        *self.lock() = RunProc::default();
+    }
+}
+
+/// Runs its closure only if the thread is panicking (a run thread's crash clears the run state; a normal end clears it
+/// itself, before its last event).
+pub struct OnPanic<F: FnMut()>(pub F);
+
+impl<F: FnMut()> Drop for OnPanic<F> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            (self.0)();
+        }
+    }
+}
+
+/// `--place NODE=PLACE` arguments for where the user chose nodes run. Node ids and places must have the CLI's own form,
+/// so nothing else reaches its command line: a node id, never an option (no leading '-'); a place `backend:target`, the
+/// target as cloud or SSH places will name theirs (cloud:a100, ssh:lab-gpu.local).
+pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result<Vec<String>> {
+    let starts = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric());
+    let id_ok = |s: &str| starts(s) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let backend_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase());
+    let target_ok = |s: &str| starts(s) && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || ".-_".contains(c));
+    let mut out = vec![];
+    for (node, place) in places {
+        let ok = id_ok(node) && place.split_once(':').is_some_and(|(b, t)| backend_ok(b) && target_ok(t));
+        if !ok {
+            return Err(Error::Bundle(format!("not a node and a place: {node:?} = {place:?}")));
+        }
+        out.extend(["--place".to_string(), format!("{node}={place}")]);
+    }
+    Ok(out)
 }
 
 /// The problems of an `error` object, as one message.
@@ -377,6 +452,8 @@ mod tests {
         assert!(upload_gate(&plan(serde_json::json!([])), false).is_ok());
         let older = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [{"id": "captions", "cached": false}]});
         assert!(upload_gate(&older, true).unwrap_err().to_string().contains("does not say what captions sends"));
+        let empty = serde_json::json!({"v": 1, "type": "plan", "ok": true});   // no node list: nothing was checked
+        assert!(upload_gate(&empty, true).unwrap_err().to_string().contains("no nodes"));
     }
 
     #[test]
@@ -397,12 +474,53 @@ mod tests {
     }
 
     #[test]
-    fn a_cancel_asked_for_before_the_cli_starts_stops_the_run_from_starting() {
-        let gate = StartGate::default();
-        assert!(gate.check().is_ok());
-        gate.request();
-        assert!(gate.check().unwrap_err().to_string().contains("canceled before it started"));
-        assert!(gate.check().is_ok(), "a request is used once");
+    fn a_cancel_is_never_lost_whichever_comes_first_the_cancel_or_the_cli_starting() {
+        // cancel before the CLI exists: the run must not start, and if it already spawned, it is stopped at once
+        let c = RunControl::default();
+        assert_eq!(c.cancel(true), Cancel::WillNotStart);
+        assert!(c.before_start().is_err(), "checked before spawning: it does not start");
+        let c = RunControl::default();
+        assert_eq!(c.cancel(true), Cancel::WillNotStart);
+        assert!(c.spawned(42), "spawned after the cancel: the caller stops it");
+        // the CLI started first: cancel stops that process
+        let c = RunControl::default();
+        assert!(!c.spawned(42));
+        assert_eq!(c.cancel(true), Cancel::Stop(42));
+        // nothing in progress: nothing to cancel, and no request lingers for the next run
+        let c = RunControl::default();
+        assert_eq!(c.cancel(false), Cancel::Nothing);
+        assert!(c.before_start().is_ok());
+        c.cancel(true);
+        c.clear();
+        assert!(c.before_start().is_ok(), "a request does not carry over");
+    }
+
+    #[test]
+    fn the_crash_guard_runs_only_when_the_thread_panics() {
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        std::thread::spawn(move || { let _g = OnPanic(move || flag.store(true, std::sync::atomic::Ordering::SeqCst)); }).join().unwrap();
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst), "a normal end clears nothing");
+        let flag = ran.clone();
+        let _ = std::thread::spawn(move || { let _g = OnPanic(move || flag.store(true, std::sync::atomic::Ordering::SeqCst)); panic!("boom"); }).join();
+        assert!(ran.load(std::sync::atomic::Ordering::SeqCst), "a panic clears the run state");
+    }
+
+    #[test]
+    fn places_become_place_arguments_and_only_in_their_own_form() {
+        let mut places = std::collections::BTreeMap::new();
+        places.insert("faces".to_string(), "native:cpu".to_string());
+        assert_eq!(place_args(&places).unwrap(), vec!["--place".to_string(), "faces=native:cpu".to_string()]);
+        let mut later = std::collections::BTreeMap::new();   // the places cloud and SSH backends will offer
+        later.insert("faces".to_string(), "cloud:a100".to_string());
+        later.insert("asr".to_string(), "ssh:lab-gpu.local".to_string());
+        assert!(place_args(&later).is_ok());
+        for (node, place) in [("faces", "native:cpu --allow-downloads"), ("../x", "native:cpu"), ("faces", "NATIVE:CPU"), ("faces", "native"),
+                              ("--allow-downloads", "native:cpu"), ("-x", "native:cpu")] {
+            let mut bad = std::collections::BTreeMap::new();
+            bad.insert(node.to_string(), place.to_string());
+            assert!(place_args(&bad).is_err(), "{node}={place}");
+        }
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).

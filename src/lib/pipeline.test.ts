@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, foldRun, runnable, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
+import { blockers, duration, foldRun, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -58,4 +58,19 @@ test('data leaving this machine needs the same consent as a download, and a plan
 test('consent to upload covers cached nodes too (a cache can be gone by the time the run starts)', () => {
   const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: ['frames'] };
   expect(blockers({ ok: true, estimated_usd: 0, nodes: [node] }, NONE)).toEqual(['captions sends frames off this machine (tick the box below the plan)']);
+});
+
+test('times read as people say them, and a plan totals what will run (not what is cached)', () => {
+  expect(duration(1.8)).toBe('2 s');
+  expect(duration(96)).toBe('1 min 36 s');
+  expect(duration(3725)).toBe('1 h 2 min');
+  const node = (id: string, estimate_s: number | null, cached = false): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached,
+    downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], estimate_s, estimate_basis: '' });
+  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('decode', 30, true), node('asr', 2), node('faces', 96)] })).toEqual({ seconds: 98, unknown: [] });
+  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node('asr', 2), node('faces', null)] })).toEqual({ seconds: 2, unknown: ['faces'] });
+});
+
+test('a CLI that gives no estimates shows none, rather than nothing estimated', () => {
+  const node: PlanNode = { id: 'asr', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] };
+  expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node] })).toBeNull();
 });
