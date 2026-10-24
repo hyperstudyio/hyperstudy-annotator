@@ -92,13 +92,15 @@ pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
     Ok(())
 }
 
-/// The CLI process of the run in progress, and a cancel asked for before it existed, under one lock: whichever comes
-/// second, the cancel or the CLI starting, sees the other, so a cancel is never lost in between.
+/// The run in progress: whether there is one, its CLI process, and a cancel asked for before that existed, all under
+/// one lock. Whichever comes second, the cancel or the CLI starting (or the run ending), sees the other, so a cancel is
+/// never lost and never outlives its run.
 #[derive(Default)]
 pub struct RunControl(std::sync::Mutex<RunProc>);
 
 #[derive(Default)]
 struct RunProc {
+    active: bool,
     pid: Option<u32>,
     cancel: bool,
 }
@@ -119,6 +121,11 @@ impl RunControl {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// A run begins (before its consent check).
+    pub fn start(&self) {
+        *self.lock() = RunProc { active: true, ..RunProc::default() };
+    }
+
     /// Just before spawning the CLI: an error if the run was canceled meanwhile (nothing starts).
     pub fn before_start(&self) -> Result<()> {
         if std::mem::take(&mut self.lock().cancel) {
@@ -134,12 +141,12 @@ impl RunControl {
         std::mem::take(&mut p.cancel)
     }
 
-    /// A cancel, with no run id yet: `in_progress` says whether a run is starting at all.
-    pub fn cancel(&self, in_progress: bool) -> Cancel {
+    /// A cancel, with no run id yet.
+    pub fn cancel(&self) -> Cancel {
         let mut p = self.lock();
         match p.pid {
             Some(pid) => Cancel::Stop(pid),
-            None if in_progress => {
+            None if p.active => {
                 p.cancel = true;
                 Cancel::WillNotStart
             }
@@ -182,6 +189,16 @@ pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result
         out.extend(["--place".to_string(), format!("{node}={place}")]);
     }
     Ok(out)
+}
+
+/// `--only` for the steps the user picked (empty: the whole graph). Node ids only, in the CLI's own form.
+pub fn only_args(nodes: &[String]) -> Result<Vec<String>> {
+    let ok = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if let Some(bad) = nodes.iter().find(|n| !ok(n)) {
+        return Err(Error::Bundle(format!("not a node id: {bad:?}")));
+    }
+    Ok(if nodes.is_empty() { vec![] } else { vec!["--only".to_string(), nodes.join(",")] })
 }
 
 /// The problems of an `error` object, as one message.
@@ -477,21 +494,31 @@ mod tests {
     fn a_cancel_is_never_lost_whichever_comes_first_the_cancel_or_the_cli_starting() {
         // cancel before the CLI exists: the run must not start, and if it already spawned, it is stopped at once
         let c = RunControl::default();
-        assert_eq!(c.cancel(true), Cancel::WillNotStart);
+        c.start();
+        assert_eq!(c.cancel(), Cancel::WillNotStart);
         assert!(c.before_start().is_err(), "checked before spawning: it does not start");
         let c = RunControl::default();
-        assert_eq!(c.cancel(true), Cancel::WillNotStart);
+        c.start();
+        assert_eq!(c.cancel(), Cancel::WillNotStart);
         assert!(c.spawned(42), "spawned after the cancel: the caller stops it");
         // the CLI started first: cancel stops that process
         let c = RunControl::default();
+        c.start();
         assert!(!c.spawned(42));
-        assert_eq!(c.cancel(true), Cancel::Stop(42));
-        // nothing in progress: nothing to cancel, and no request lingers for the next run
+        assert_eq!(c.cancel(), Cancel::Stop(42));
+    }
+
+    #[test]
+    fn a_cancel_that_races_the_end_of_a_run_does_not_refuse_the_next_one() {
         let c = RunControl::default();
-        assert_eq!(c.cancel(false), Cancel::Nothing);
-        assert!(c.before_start().is_ok());
-        c.cancel(true);
+        c.start();
+        c.clear();                                   // the run ended
+        assert_eq!(c.cancel(), Cancel::Nothing);     // the late cancel finds nothing, and sets nothing
+        c.start();
+        assert!(c.before_start().is_ok(), "the next run starts");
+        c.cancel();
         c.clear();
+        c.start();
         assert!(c.before_start().is_ok(), "a request does not carry over");
     }
 
@@ -520,6 +547,15 @@ mod tests {
             let mut bad = std::collections::BTreeMap::new();
             bad.insert(node.to_string(), place.to_string());
             assert!(place_args(&bad).is_err(), "{node}={place}");
+        }
+    }
+
+    #[test]
+    fn only_arguments_name_nodes_and_nothing_else() {
+        assert_eq!(only_args(&["decode".into(), "asr".into()]).unwrap(), vec!["--only".to_string(), "decode,asr".to_string()]);
+        assert!(only_args(&[]).unwrap().is_empty());
+        for bad in ["--allow-downloads", "a,b", "../x", ""] {
+            assert!(only_args(&[bad.to_string()]).is_err(), "{bad}");
         }
     }
 

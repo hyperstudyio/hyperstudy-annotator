@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, duration, foldRun, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
+import { blockers, duration, foldRun, picked, placesFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -73,4 +73,17 @@ test('times read as people say them, and a plan totals what will run (not what i
 test('a CLI that gives no estimates shows none, rather than nothing estimated', () => {
   const node: PlanNode = { id: 'asr', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] };
   expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node] })).toBeNull();
+});
+
+test('unticking a step drops every step that needs it, and the rest is what runs', () => {
+  const node = (id: string, needs: string[]): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [],
+    missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], needs });
+  const plan: Plan = { ok: true, estimated_usd: 0, nodes: [node('decode', []), node('asr', ['decode']), node('faces', ['decode']), node('captions', ['decode', 'asr', 'faces'])] };
+  expect(picked(plan, new Set())).toEqual({ chosen: ['decode', 'asr', 'faces', 'captions'], dropped: [], only: null });
+  expect(picked(plan, new Set(['faces']))).toEqual({ chosen: ['decode', 'asr'], dropped: ['faces', 'captions'], only: ['decode', 'asr'] });
+  expect(picked(plan, new Set(['decode'])).chosen).toEqual([]);   // everything needs decode
+});
+
+test('places are sent only for the steps that run (the CLI refuses a place for a node --only left out)', () => {
+  expect(placesFor({ faces: 'native:cpu', asr: 'native:cpu' }, ['decode', 'asr'])).toEqual({ asr: 'native:cpu' });
 });

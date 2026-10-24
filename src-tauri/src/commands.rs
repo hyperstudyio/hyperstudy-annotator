@@ -229,16 +229,20 @@ pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: Str
 /// library and its video recorded, then an `imported` event carries the bundle's summary.
 #[tauri::command]
 pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool,
-                    allow_uploads: bool, places: Option<std::collections::BTreeMap<String, String>>) -> Result<()> {
+                    allow_uploads: bool, places: Option<std::collections::BTreeMap<String, String>>,
+                    only: Option<Vec<String>>) -> Result<()> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
-    let places = pipeline::place_args(&places.unwrap_or_default())?;
+    // where nodes run and which run: both reach the consent re-check and the run itself
+    let mut places = pipeline::place_args(&places.unwrap_or_default())?;
+    places.extend(pipeline::only_args(&only.unwrap_or_default())?);
     {
         let mut running = state.running.lock().unwrap();
         if running.is_some() {
             return Err(Error::Bundle("a pipeline run is already in progress".into()));
         }
         *running = Some(String::new());
+        state.control.start();
     }
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };   // a panic clears it too
@@ -327,8 +331,7 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
             let p = pipeline(&state)?;
             return blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await;
         }
-        let in_progress = state.running.lock().unwrap().is_some();
-        return match state.control.cancel(in_progress) {
+        return match state.control.cancel() {
             pipeline::Cancel::Stop(pid) => pipeline::stop_process(pid),
             pipeline::Cancel::WillNotStart => Ok(()),
             pipeline::Cancel::Nothing => Err(Error::Bundle("no pipeline run is in progress".into())),

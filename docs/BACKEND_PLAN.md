@@ -144,10 +144,25 @@ Checked:
   decoded, exported and imported.
 - The dialog in Chrome against a scripted stand-in (`?pipeline-demo` in browser mode, where Tauri is absent).
 
+**Step 2, second part (2026-10-24): where each node runs, and how long it takes** (annotator #8, perception #11).
+- A node that can run in several places here has a menu (`native:mps`, `native:cpu`...). Changing it plans again, and
+  the places go to `plan`, to the consent re-check and to `run` as `--place NODE=PLACE` (`place_args` checks their form:
+  a node id that is not an option, `backend:target`). Places reset with a new graph or pipeline folder.
+- Each node that will run shows its estimated time: the median of its measured seconds per minute of video for that
+  node and place on this machine, times this video's length; the reason when there is none. The total counts only
+  what will run.
+- From review: a cancel is never lost between the consent check and the CLI starting, nor kept past its run
+  (`RunControl`, one lock); upload consent is re-checked with the same places.
+
+- **Stage picker** (perception #12): each step of the chosen graph has a checkbox; unticking one leaves out every step
+  that needs it, and ticking one ticks back what it needs. The time, cost, consent and blockers count only the steps
+  that run; the run gets `--only` with them (`only_args` checks their form) and places only for them. A preset graph
+  is pruned rather than a graph built from manifests: wiring nodes by artifact type is ambiguous (captions consumes and
+  refines shots).
+
 Not yet:
-- choosing nodes and where each runs (the dialog runs a graph as its manifests place it);
-- duration estimates from measured runs;
-- the SSH backend;
+- estimates for every option, not only the chosen place (the plan asks for each choice's duration and price);
+- the cloud and SSH backends (their places will join the same menus);
 - the native window checked by hand.
 
 ## Also to sort out
