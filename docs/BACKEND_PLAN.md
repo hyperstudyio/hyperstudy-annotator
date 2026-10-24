@@ -82,6 +82,23 @@ dialogs by hand, is still open).
    desktop app authenticates (decided: an API key created in HyperStudy, pasted into Settings), and how a local edit
    becomes a HyperStudy edit (and the reverse).
 
+## Status
+
+**Step 1 (2026-10-24): carrying corrections over, built.** `model/carryover.ts` matches each id an op refers to in the
+newer bundle:
+- segments (faces, utterances, shots, sounds, text, events, object tracks) one-to-one by time overlap, and faces by box
+  overlap at the same moments;
+- people, voices and object identities by where their members went (tracks weighted by samples, so a face seen once
+  still counts).
+
+Ops that cannot be matched are listed in the Review tab with the reason and the moment, until dismissed. Migration 2
+adds `carryovers`; the carried ops are copies appended to the new version's log, each with `carried_from` (bundle, index).
+- Checked in Chrome (browser mode, `&previous=`) on OOO clip 2: the Mac run's 93 corrections onto the L4 run, 91
+  carried. Of the other two, one person's only face is unassigned in the L4 run, and one face track has no counterpart.
+  The Mac log was unchanged.
+- Not yet: the library listing versions under one video; checking the native app's offer by hand (as for port step 9);
+  each op's author (needs a user identity in Settings).
+
 ## Also to sort out
 
 - Long films: per-frame samples in a binary sidecar (Parquet) instead of JSON (2 minutes of faces is ~14 MB of

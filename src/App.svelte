@@ -1,7 +1,8 @@
 <script lang="ts">
   // In the desktop app: the library, then a bundle in the viewer.
   // In a browser (development and testing): ?bundle=<URL of a bundle folder>&video=<URL of its video> opens that
-  // bundle straight in the viewer; vite serves /devdata from a local http-server (see README).
+  // bundle straight in the viewer; vite serves /devdata from a local http-server (see README). &previous=<URL of an
+  // earlier bundle of the same video> opens it as a re-run, offering the earlier bundle's corrections.
   import Library from './lib/components/Library.svelte';
   import Viewer from './lib/components/Viewer.svelte';
   import { httpSource, inTauri, tauriSource, type BundleSource } from './lib/source';
@@ -13,7 +14,7 @@
   if (!desktop) {
     const q = new URLSearchParams(location.search);
     const bundle = q.get('bundle');
-    if (bundle) httpSource(bundle, q.get('video')).then((s) => (source = s)).catch((e) => (error = String(e)));
+    if (bundle) httpSource(bundle, q.get('video'), q.get('previous')).then((s) => (source = s)).catch((e) => (error = String(e)));
   }
 
   async function openBundle(id: string) {

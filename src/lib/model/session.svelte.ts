@@ -2,13 +2,14 @@
 // playback. Every view asks the session its questions (who a face is, who speaks, what is sent to agents, what the
 // review queue holds), so the answers are the same everywhere and folded from the same op log.
 import { Bundle, extent } from './bundle';
+import { iou } from '../geometry';
 import {
   FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
   type AnnotationType, type CorrectionsFile, type Note, type Op,
 } from './corrections';
 import { View, type Tab } from './view.svelte';
 import { Playback } from '../playback.svelte';
-import type { CorrectionStore } from '../source';
+import type { CarryRecord, CorrectionStore } from '../source';
 import type {
   FaceTrack, FacesDetail, FacingEvent, GazeEvent, GestureEvent, ObjectTrack, Shot, SoundEvent, Span, Speaker, TextItem, Utterance,
 } from '../types';
@@ -39,13 +40,6 @@ export const sameSpan = (a: Span | null, b: Span | null) => !!a && !!b && Math.a
 export const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 const byStart = (list: Segment[]) => list.sort((a, b) => a.span.start - b.span.start || a.span.end - b.span.end);
 const stripKind = (id: string) => id.replace(/^[a-z]+:/, '');
-
-export function iou(a: number[], b: number[]) {
-  const w = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]));
-  const h = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
-  const i = w * h;
-  return i ? i / (a[2] * a[3] + b[2] * b[3] - i) : 0;
-}
 
 /** Face tracks of one person that are on screen together at different places (so one of them is someone else). */
 export function coVisible(tracks: FaceTrack[]): [FaceTrack, FaceTrack][] {
@@ -83,6 +77,8 @@ export class Session {
   marking = $state<number | null>(null);
   message = $state<{ text: string; n: number } | null>(null);
   lightbox = $state<Lightbox | null>(null);
+  /** What this version carried over from an earlier one (the ops it could not match wait for review). */
+  carry = $state<CarryRecord | null>(null);
   /** The name being edited, as "<id>@<area>" (a rename link opens the editor of the name in that area). */
   renaming = $state<string | null>(null);
   /** py-feat per sample (a large side file), loaded when a view first needs it. */
@@ -385,7 +381,8 @@ export class Session {
     const sounds = this.bundle.sounds.filter((s) => s.agreement === false);
     return { speakers, pairs, sounds };
   });
-  readonly openInQueue = $derived(this.queue.speakers.filter((u) => !this.reviewed(u)).length + this.queue.pairs.length);
+  readonly openInQueue = $derived(this.queue.speakers.filter((u) => !this.reviewed(u)).length + this.queue.pairs.length
+    + (this.carry?.unmatched.length ?? 0));
 
   nextInQueue(dir: 1 | -1 = 1) {
     const q = this.queue.speakers;

@@ -4,6 +4,7 @@
 //                this browser's localStorage, keyed by the video's sha256.
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import type { Unmatched } from './model/carryover';
 import type { Op } from './model/corrections';
 import type { BundleSummary, Manifest } from './types';
 
@@ -21,6 +22,23 @@ export interface CorrectionStore {
   subscribe?(onchange: () => void): () => void;
 }
 
+/** What happened to an earlier version's corrections when this version was opened. */
+export interface CarryRecord { from_bundle_id: string; status: 'carried' | 'declined'; carried: number; unmatched: Unmatched[]; created_at: string }
+
+/** An earlier version of the same video (a re-run's predecessor) whose corrections can start this one's log. */
+export interface EarlierVersion { id: string; label: string; corrections: number; open(): Promise<BundleSource> }
+
+/** Versions of one video. The earlier version's log is only read; carried ops go into this version's log. */
+export interface Lineage {
+  record(): Promise<CarryRecord | null>;
+  /** The newest earlier version with corrections (when this one has none and nothing was carried or declined). */
+  previous(): Promise<EarlierVersion | null>;
+  carry(from: string, ops: Op[], unmatched: Unmatched[]): Promise<number>;
+  decline(from: string): Promise<void>;
+  /** Take one op (by its index in the earlier log) off the review list. */
+  dismiss(index: number): Promise<CarryRecord>;
+}
+
 /** A corrections file found next to the bundle (the prototype's `perception_corrections.json`). */
 export interface FoundFile { path: string; text: string }
 
@@ -29,6 +47,8 @@ export interface BundleSource {
   manifest: Manifest;
   videoUrl: string | null;
   corrections: CorrectionStore;
+  /** Earlier versions of this video, when the source knows about them. */
+  lineage?: Lineage;
   /** A layer file, parsed; null when the manifest lists no such layer. */
   layer<T>(name: string): Promise<T | null>;
   /** A side file the manifest lists (e.g. layers/faces_detail.json), parsed. */
@@ -59,7 +79,15 @@ export const api = {
   findPrototypeCorrections: (id: string) => invoke<FoundFile | null>('find_prototype_corrections', { id }),
   readCorrectionsFile: (path: string) => invoke<string>('read_corrections_file', { path }),
   writeCorrectionsFile: (path: string, text: string) => invoke<void>('write_corrections_file', { path, text }),
+  previousVersion: (id: string) => invoke<BundleSummary | null>('previous_version', { id }),
+  getCarryover: (id: string) => invoke<CarryRecord | null>('get_carryover', { id }),
+  carryOver: (id: string, from: string, ops: Op[], unmatched: Unmatched[]) => invoke<number>('carry_over', { id, from, ops, unmatched }),
+  declineCarryover: (id: string, from: string) => invoke<void>('decline_carryover', { id, from }),
+  dismissUnmatched: (id: string, index: number) => invoke<CarryRecord>('dismiss_unmatched', { id, index }),
 };
+
+const versionLabel = (b: { created_at?: string | null; imported_at?: string }) =>
+  `The version made ${new Date(b.created_at || b.imported_at || '').toLocaleString()}`;
 
 // TODO: [ANNOTATOR-PORT] Step 9 - Check the native dialogs by hand: import a corrections file, export one (save
 // dialog), and the offer to import the prototype's perception_corrections.json next to an imported bundle.
@@ -77,6 +105,16 @@ export async function tauriSource(id: string): Promise<BundleSource> {
       append: (ops) => api.appendCorrections(id, ops),
       truncate: (keep) => api.truncateCorrections(id, keep),
       replace: (ops) => api.replaceCorrections(id, ops),
+    },
+    lineage: {
+      record: () => api.getCarryover(id),
+      async previous() {
+        const b = await api.previousVersion(id);
+        return b && { id: b.id, label: versionLabel(b), corrections: b.corrections, open: () => tauriSource(b.id) };
+      },
+      carry: (from, ops, unmatched) => api.carryOver(id, from, ops, unmatched),
+      decline: (from) => api.declineCarryover(id, from),
+      dismiss: (index) => api.dismissUnmatched(id, index),
     },
     async layer<T>(name: string) {
       return name in manifest.layers ? (JSON.parse(await api.readLayer(id, name)) as T) : null;
@@ -101,7 +139,10 @@ export async function tauriSource(id: string): Promise<BundleSource> {
  *  copy loaded earlier, so two tabs of the same bundle do not overwrite each other's work. */
 export class LocalCorrectionStore implements CorrectionStore {
   readonly key: string;
-  constructor(sha256: string, private storage: Storage = localStorage) { this.key = `hyperstudy-annotator:corrections:${sha256}`; }
+  /** `version` keeps a re-run's log apart from the log of the video's first bundle (browser mode's `previous=`). */
+  constructor(sha256: string, private storage: Storage = localStorage, version?: string) {
+    this.key = `hyperstudy-annotator:corrections:${sha256}${version ? `:${version}` : ''}`;
+  }
   #read(): Op[] {
     const text = this.storage.getItem(this.key);
     return text ? (JSON.parse(text) as Op[]) : [];
@@ -118,11 +159,37 @@ export class LocalCorrectionStore implements CorrectionStore {
   }
 }
 
-export async function httpSource(bundleUrl: string, videoUrl: string | null): Promise<BundleSource> {
+/** Browser mode's lineage: `previous` is the URL of the earlier bundle, whose log is the video's usual one; this
+ *  version's log and its carry-over record are kept under this bundle's URL. */
+function localLineage(base: string, previousUrl: string, videoUrl: string | null, store: CorrectionStore, storage: Storage = localStorage): Lineage {
+  const key = `hyperstudy-annotator:carryover:${base}`;
+  const read = (): CarryRecord | null => { const t = storage.getItem(key); return t ? (JSON.parse(t) as CarryRecord) : null; };
+  const write = (r: CarryRecord) => { storage.setItem(key, JSON.stringify(r)); return r; };
+  return {
+    async record() { return read(); },
+    async previous() {
+      const prev = await httpSource(previousUrl, videoUrl);
+      const n = (await prev.corrections.load()).length;
+      return n && !read() && !(await store.load()).length ? { id: previousUrl, label: `The bundle at ${previousUrl}`, corrections: n, open: async () => prev } : null;
+    },
+    async carry(from, ops, unmatched) {
+      if (read()) throw new Error('this version already carried over (or declined) an earlier version’s corrections');
+      if ((await store.load()).length) throw new Error('this version already has corrections of its own');
+      const n = await store.append(ops);
+      write({ from_bundle_id: from, status: 'carried', carried: ops.length, unmatched, created_at: new Date().toISOString() });
+      return n;
+    },
+    async decline(from) { write({ from_bundle_id: from, status: 'declined', carried: 0, unmatched: [], created_at: new Date().toISOString() }); },
+    async dismiss(index) { const r = read()!; return write({ ...r, unmatched: r.unmatched.filter((u) => u.index !== index) }); },
+  };
+}
+
+export async function httpSource(bundleUrl: string, videoUrl: string | null, previousUrl: string | null = null): Promise<BundleSource> {
   const base = bundleUrl.replace(/\/$/, '');
   const res = await fetch(`${base}/manifest.json`);
   if (!res.ok) throw new Error(`no manifest at ${base} (${res.status})`);
   const manifest = (await res.json()) as Manifest;
+  const store = new LocalCorrectionStore(manifest.video.sha256, localStorage, previousUrl ? base : undefined);
   const getJson = async <T>(path: string) => {
     const r = await fetch(`${base}/${path}`);
     if (!r.ok) throw new Error(`${path}: ${r.status}`);
@@ -132,7 +199,8 @@ export async function httpSource(bundleUrl: string, videoUrl: string | null): Pr
     title: manifest.video.filename?.replace(/\.[^.]+$/, '') ?? base.split('/').pop() ?? 'bundle',
     manifest,
     videoUrl,
-    corrections: new LocalCorrectionStore(manifest.video.sha256),
+    corrections: store,
+    lineage: previousUrl ? localLineage(base, previousUrl, videoUrl, store) : undefined,
     async layer<T>(name: string) {
       const entry = manifest.layers[name];
       return entry ? getJson<T>(entry.file) : null;

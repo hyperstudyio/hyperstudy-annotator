@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { useSession } from '../../model/context';
+  import { useSession, useSource } from '../../model/context';
+  import { describe } from '../../model/carryover';
   import { fmt } from '../../geometry';
   import { UNCERTAIN_GAP, NEUTRAL } from '../../model/session.svelte';
   import type { Utterance } from '../../types';
@@ -7,7 +8,8 @@
   import Swatch from '../ui/Swatch.svelte';
   import InspectUtterance from '../inspect/InspectUtterance.svelte';
 
-  const s = useSession();
+  const s = useSession(), source = useSource();
+  const dismiss = async (index: number) => { s.carry = await source.lineage!.dismiss(index); };
   const q = $derived(s.queue);
   const open = $derived(q.speakers.filter((u) => !s.reviewed(u)).length);
   const cur = $derived(s.selection?.kind === 'utt' ? s.bundle.utt.get(s.selection.id) ?? null : null);
@@ -23,6 +25,19 @@
   <div class="current"><InspectUtterance u={cur} /></div>
 {:else}
   <div class="callout info">Pick an utterance below, or press <kbd>j</kbd> to start. Its faces are numbered on the video.</div>
+{/if}
+{#if s.carry?.unmatched.length}
+  <h3>Not carried over from the earlier run · {s.carry.unmatched.length}</h3>
+  <div class="meta" style="margin-bottom:6px">Corrections made on an earlier run of this video that could not be matched to this one. Redo the ones still needed, then dismiss them.</div>
+  <div class="list">
+    {#each s.carry.unmatched as u (u.index)}
+      <div class="item">
+        {#if u.span}<button class="link meta" title="Go to this moment" onclick={() => s.playback.seek(u.span!.start)}>{fmt(u.span.start)}</button>{/if}
+        <span class="grow"><span class="what">{describe(u.op)}</span><span class="meta why">{u.reason}</span></span>
+        <button onclick={() => dismiss(u.index)}>Dismiss</button>
+      </div>
+    {/each}
+  </div>
 {/if}
 <h3>Who is speaking · {open} of {q.speakers.length} left</h3>
 <div class="meta">Faces are on screen but the speaker model is unsure (gap under {UNCERTAIN_GAP}, or no face scored as speaking). Grouped by shot.</div>
@@ -77,4 +92,5 @@
   .current { border: 1px solid var(--color-border-strong); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; }
   .shot-group { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; color: var(--color-text-secondary); background: none; border: 0; padding: 0; }
   .left { text-align: left; color: var(--color-text-primary); }
+  .what, .why { display: block; white-space: normal; }
 </style>
