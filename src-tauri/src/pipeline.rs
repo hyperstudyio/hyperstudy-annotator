@@ -191,6 +191,25 @@ pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result
     Ok(out)
 }
 
+/// `--set node.key=value` for the settings the user chose (node -> key -> value). Only the fixed choices a plan offers
+/// are chosen in the app (a model name, an effort), so a value is a plain word: letters, digits and `.`, `_`, `-`.
+pub fn set_args(settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>) -> Result<Vec<String>> {
+    let starts = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric());
+    let id_ok = |s: &str| starts(s) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let key_ok = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_lowercase()) && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    let value_ok = |s: &str| starts(s) && s.len() <= 100 && s.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c));
+    let mut out = vec![];
+    for (node, keys) in settings {
+        for (key, value) in keys {
+            if !(id_ok(node) && key_ok(key) && value_ok(value)) {
+                return Err(Error::Bundle(format!("not a node's setting: {node:?}.{key:?} = {value:?}")));
+            }
+            out.extend(["--set".to_string(), format!("{node}.{key}={value}")]);
+        }
+    }
+    Ok(out)
+}
+
 /// `--only` for the steps the user picked (empty: the whole graph). Node ids only, in the CLI's own form.
 pub fn only_args(nodes: &[String]) -> Result<Vec<String>> {
     let ok = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
@@ -547,6 +566,20 @@ mod tests {
             let mut bad = std::collections::BTreeMap::new();
             bad.insert(node.to_string(), place.to_string());
             assert!(place_args(&bad).is_err(), "{node}={place}");
+        }
+    }
+
+    #[test]
+    fn settings_become_set_arguments_only_as_plain_words() {
+        let one = |node: &str, key: &str, value: &str| {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(node.to_string(), std::collections::BTreeMap::from([(key.to_string(), value.to_string())]));
+            m
+        };
+        assert_eq!(set_args(&one("captions", "model", "claude-opus-5-5")).unwrap(), vec!["--set".to_string(), "captions.model=claude-opus-5-5".to_string()]);
+        for (node, key, value) in [("captions", "model", "x --allow-uploads"), ("captions", "model", "-x"), ("captions", "model", ""),
+                                   ("captions", "Model", "a"), ("captions", "model.x", "a"), ("../x", "model", "a"), ("captions", "model", "{a: b}")] {
+            assert!(set_args(&one(node, key, value)).is_err(), "{node}.{key}={value}");
         }
     }
 

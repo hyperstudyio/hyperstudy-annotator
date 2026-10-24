@@ -164,6 +164,13 @@ Checked:
   before moving a node. Step checkboxes appear only when the plan says what every step needs (an older CLI's plan
   would let a step run without its inputs); without them the whole graph runs.
 
+- **Features** (perception #14): the app runs the pipeline's `graphs/full.yaml` and offers each node as a feature by its
+  title. Turning one on brings what it needs, held on while something needs it ("Needed by …"); a feature that sends
+  data off the machine or costs money starts off. Each step opens to its details (what it makes, the models it uses
+  and their licences, what leaves the machine, where it can run and how long each place takes) and its fixed-choice
+  settings (a model, with its price), sent as `--set`. Upload consent reaches the CLI as `--allow-uploads`. A
+  pipeline folder with no full graph offers its graphs instead.
+
 Not yet:
 - each choice's price, not only its duration: every place is local and free today, so this comes with the cloud
   backends, whose places cost money;

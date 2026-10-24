@@ -1,9 +1,11 @@
 <script lang="ts">
   // Run the perception pipeline on a video and import the bundle it makes: the pipeline folder (checked by
-  // `perception doctor`), a video, one of the pipeline's graphs, the plan (where each node runs, what is cached, what
-  // must be downloaded, what it costs), then the run, node by node.
+  // `perception doctor`), a video, the features to run from the pipeline's full graph (what they need comes along),
+  // the plan (where each step runs, what is cached, what must be downloaded or sent off, what it costs, each step's
+  // details and settings), then the run, step by step. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
-  import { blockers, canPick, duration, foldRun, picked, placeLabel, placeName, placesFor, runnable, schedule, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
+  import { blockers, canPick, choiceLabel, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor, runnable, schedule,
+    settingsFor, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -16,24 +18,22 @@
   let allowDownloads = $state(false);
   let allowUploads = $state(false);
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
-  let skipped = $state(new Set<string>());   // steps the user unticked (what needs them is left out too)
+  let wanted = $state<Set<string> | null>(null);   // the features the user turned on (null: the first plan's defaults)
+  let settings = $state<Settings>({});   // settings the user chose: node -> key -> value
+  let open = $state<string | null>(null);   // the step whose details show
   let msgs = $state.raw<PipelineMessage[]>([]);
   let started = $state(false);
   let error = $state<string | null>(null);
   let busy = $state<string | null>(null);
   let stop: (() => void) | null = null;
 
-  const pick = $derived(plan ? picked(plan, skipped) : { chosen: [], dropped: [], only: null });
-  // the plan of what will run: the steps picked (time, cost, consent and blockers count only these)
+  const pick = $derived(plan ? picked(plan, wanted ?? defaultFeatures(plan)) : { chosen: [], neededBy: {}, only: null });
+  // the plan of what will run: the features on and what they need (time, cost, consent and blockers count only these)
   const active = $derived(plan ? { ...plan, nodes: plan.nodes.filter((n) => pick.chosen.includes(n.id)) } : null);
   function toggle(id: string, on: boolean) {
-    const next = new Set(skipped);
-    if (!on) next.add(id);
-    else {   // ticking a step ticks back what it needs
-      const need = (n: string) => { next.delete(n); for (const u of plan?.nodes.find((x) => x.id === n)?.needs ?? []) need(u); };
-      need(id);
-    }
-    skipped = next;
+    const next = new Set(wanted ?? (plan ? defaultFeatures(plan) : []));
+    if (on) next.add(id); else next.delete(id);   // what it needs comes along, and goes when nothing else needs it
+    wanted = next;
   }
   const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
@@ -59,6 +59,7 @@
     folder = await api.folder();
     if (!folder) return;
     [doctor, graphs] = await Promise.all([api.doctor(), api.graphs()]);
+    if (graphs.some((g) => g.file === FULL_GRAPH)) graph = FULL_GRAPH;   // features are picked from it
   });
   $effect(() => { loadFolder(); return () => stop?.(); });
 
@@ -69,13 +70,15 @@
     folder = path;
     // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
     // flight from the old one is superseded too)
-    graph = null; plan = null; allowDownloads = false; allowUploads = false; places = {}; skipped = new Set();
+    graph = null; plan = null; allowDownloads = false; allowUploads = false; places = {}; wanted = null; settings = {}; open = null;
     newestPlan(Promise.resolve(null), (p) => (plan = p), () => {});
     graphs = await api.graphs();
+    if (graphs.some((g) => g.file === FULL_GRAPH)) await chooseGraph(FULL_GRAPH);
   });
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };
-  const chooseGraph = async (file: string) => { graph = file; places = {}; skipped = new Set(); await makePlan(); };
+  const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; settings = {}; open = null; await makePlan(); };
   const choosePlace = async (node: string, place: string) => { places = { ...places, [node]: place }; await makePlan(); };
+  const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(); };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
   // A permission to download is for the plan on screen: a new plan takes it back. Only the newest plan request may set
@@ -85,11 +88,11 @@
     plan = null; allowDownloads = false; allowUploads = false; error = null;
     if (!graph || !video) return;
     busy = 'Planning…';
-    newestPlan(api.plan(graph, video, places), (p) => { plan = p; busy = null; }, (e) => { error = String(e); busy = null; });
+    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; wanted ??= defaultFeatures(p); busy = null; }, (e) => { error = String(e); busy = null; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = [];
-    try { stop = await api.run(graph!, video!, consent, placesFor(places, pick.chosen), pick.only, (m) => { msgs = [...msgs, m]; }); }
+    try { stop = await api.run(graph!, video!, consent, placesFor(places, pick.chosen), pick.only, settingsFor(settings, pick.chosen), (m) => { msgs = [...msgs, m]; }); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
@@ -113,6 +116,10 @@
   // a range only when running side by side could save real time (within a tenth, one number says it)
   const timeText = $derived(!total ? '' : total.fastest >= total.seconds * 0.9
     ? `about ${duration(total.seconds)}` : `${duration(total.fastest)} to ${duration(total.seconds)}`);
+  const title = (n: PlanNode) => n.title || n.id;
+  const titleOf = (id: string) => { const n = plan?.nodes.find((x) => x.id === id); return n ? title(n) : id; };
+  const LICENCE: Record<string, string> = { 'academic-only': 'academic use only', 'commercial-ok': 'commercial use allowed', 'needs-review': 'licence under review', 'api-terms': "the API provider's terms" };
+  const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
   const missing = $derived([...(uploading.length && !allowUploads ? ['the upload'] : []), ...(downloads.length && !allowDownloads ? ['the download'] : [])]);
 </script>
 
@@ -144,6 +151,7 @@
         {#if video}<span class="file" title={video}>{name(video)}</span>{:else}<span class="muted">None chosen</span>{/if}
         <button onclick={chooseVideo} disabled={started}>{video ? 'Change…' : 'Choose…'}</button>
       </div>
+      {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
       <div class="value graphs">
         <div class="segments" role="radiogroup" aria-labelledby="graph-label">
@@ -155,6 +163,7 @@
         </div>
         {#if chosenGraph}<p class="muted">{chosenGraph.description}</p>{/if}
       </div>
+      {/if}
     </div>
   {/if}
 
@@ -168,14 +177,18 @@
       <ol class="steps">
         {#each started ? active?.nodes ?? [] : plan.nodes as n (n.id)}
           {@const s = view.nodes[n.id]}
-          {@const off = pick.dropped.includes(n.id)}
+          {@const on = pick.chosen.includes(n.id)}
+          {@const needers = pick.neededBy[n.id]}
           {@const t = times[n.id]}
-          <li class="step {started ? s.state : ''}" class:off aria-label={n.id}>
-            <span class="pick">{#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${n.id}`} checked={!off} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}</span>
-            <span class="name">{n.id}</span>
+          <li class="step {started ? s.state : ''}" class:off={!on} aria-label={n.id}>
+            <span class="pick">{#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${n.id}`} checked={on} disabled={!!needers}
+              title={needers ? `Needed by ${list(needers.map(titleOf))}` : undefined} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}</span>
+            <button class="name" aria-expanded={open === n.id} aria-controls={`details-${n.id}`} onclick={() => (open = open === n.id ? null : n.id)}>
+              <span class="chev" aria-hidden="true"></span>{title(n)}
+            </button>
             <span class="where">
               {#if n.cached}<span class="muted">Already done</span>
-              {:else if !started && !off && (n.options?.length ?? 0) > 1}
+              {:else if !started && on && (n.options?.length ?? 0) > 1}
                 <select aria-label={`Where ${n.id} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
                   {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o)}</option>{/each}
                 </select>
@@ -184,28 +197,54 @@
               {:else}<span class="error">Cannot run here</span>{/if}
             </span>
             <span class="track" aria-hidden="true">
-              {#if n.cached}<span class="bar done"></span>
-              {:else if t && !off}
+              {#if n.cached && on}<span class="bar done"></span>
+              {:else if t && on}
                 <span class="bar" class:unknown={t.seconds == null}
                       style:left="{(t.start / span) * 100}%" style:width={t.seconds == null ? null : `${Math.max((t.seconds / span) * 100, 1.5)}%`}></span>
               {/if}
             </span>
             <span class="time" title={n.estimate_basis}>
               {#if started}<span class="state">{STATE_LABEL[s.state]}</span>
-              {:else if !off && !n.cached && n.estimate_s != null}{duration(n.estimate_s)}
-              {:else if !off && !n.cached && 'estimate_s' in n}<span class="muted">No estimate</span>{/if}
+              {:else if on && !n.cached && n.estimate_s != null}{duration(n.estimate_s)}
+              {:else if on && !n.cached && 'estimate_s' in n}<span class="muted">No estimate</span>{/if}
             </span>
             <div class="notes">
-              {#if off}<span class="muted">Left out{skipped.has(n.id) ? '' : `, because it needs ${list((n.needs ?? []).filter((u) => pick.dropped.includes(u)))}`}</span>
-              {:else if started}{#if s.message}<span class="muted">{s.message}</span>{/if}
-              {:else}
+              {#if started}{#if s.message}<span class="muted">{s.message}</span>{/if}
+              {:else if on}
+                {#if needers}<span class="muted">Needed by {list(needers.map(titleOf))}</span>{/if}
                 {#if n.uploads?.length}<span class="caution">Sends {list(n.uploads)} off this machine</span>{/if}
                 {#if n.cost_usd}<span>${n.cost_usd.toFixed(2)}</span>{/if}
-                {#each n.downloads as d (d.id)}<span class="muted">Downloads {d.id} ({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}{d.gated ? ', gated' : ''}, {d.licence_mode})</span>{/each}
+                {#each n.downloads as d (d.id)}<span class="muted">Downloads {d.id} ({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}{d.gated ? ', gated' : ''}, {LICENCE[d.licence_mode] ?? d.licence_mode})</span>{/each}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
                 {#each n.missing_secrets as k (k)}<span class="error">Needs {k}</span>{/each}
+              {:else if n.uploads?.length || n.cost_usd || n.cost_note}
+                <span class="muted">Off: it {[n.uploads?.length ? `sends ${list(n.uploads)} off this machine` : '', n.cost_usd || n.cost_note ? 'costs money' : ''].filter(Boolean).join(' and ')}</span>
               {/if}
             </div>
+            {#if open === n.id}
+              <!-- a model a setting picks shows as that setting, not as a fixed one -->
+              {@const fixed = (n.models ?? []).filter((m) => !(n.settings ?? []).some((st) => st.choices.includes(m.id)))}
+              <div class="details" id={`details-${n.id}`}>
+                {#if n.description}<p>{n.description}.</p>{/if}
+                <dl>
+                  {#if n.outputs}<dt>Makes</dt><dd>{list(Object.keys(n.outputs))}</dd>{/if}
+                  {#if fixed.length}<dt>Uses</dt>
+                    <dd>{#each fixed as m (m.id)}<span title={m.source ?? undefined}>{m.id}</span> <span class="muted">({LICENCE[m.licence_mode] ?? m.licence_mode}{m.size_gb ? `, ${m.size_gb} GB` : ''})</span><br />{/each}</dd>{/if}
+                  <dt>Leaves this machine</dt><dd>{n.uploads?.length ? list(n.uploads) : 'Nothing'}</dd>
+                  {#if n.options?.length}<dt>Can run on</dt>
+                    <dd>{#each n.options as o (o)}<span title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o)}</span><br />{/each}</dd>{/if}
+                  {#each n.settings ?? [] as st (st.key)}
+                    <dt><label for={`set-${n.id}-${st.key}`}>{capital(st.key)}</label></dt>
+                    <dd class="setting">
+                      <select id={`set-${n.id}-${st.key}`} value={st.value} disabled={started} onchange={(e) => chooseSetting(n.id, st.key, e.currentTarget.value)}>
+                        {#each st.choices as c (c)}<option value={c}>{choiceLabel(st, c)}</option>{/each}
+                      </select>
+                      {#if st.description}<span class="muted">{st.description}</span>{/if}
+                    </dd>
+                  {/each}
+                </dl>
+              </div>
+            {/if}
           </li>
         {/each}
       </ol>
@@ -280,12 +319,25 @@
   h3 { font-size: 15px; font-weight: 600; margin: 0; font-variant-numeric: tabular-nums; }
   .plan > .muted { font-size: 12px; margin-top: 2px; }
   .steps { list-style: none; margin: 14px 0 0; padding: 0; }
-  .step { display: grid; grid-template-columns: 20px minmax(72px, .8fr) minmax(180px, 1.6fr) minmax(0, 1.6fr) 84px; column-gap: 10px; align-items: center;
+  .step { display: grid; grid-template-columns: 20px minmax(136px, 1fr) minmax(180px, 1.5fr) minmax(0, 1.4fr) 84px; column-gap: 10px; align-items: center;
           padding: 7px 0; border-top: 1px solid var(--color-border-default); }
   .step:first-child { border-top: 0; }
-  .step.off > :not(.notes) { opacity: .45; }
+  .step.off > :not(.notes):not(.details):not(.name):not(.pick) { opacity: .45; }
+  .step.off .name { color: var(--color-text-secondary); font-weight: 500; }
   .pick { display: flex; }
-  .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name { font: inherit; font-weight: 600; text-align: left; background: none; border: 0; padding: 0; border-radius: 3px; color: inherit; cursor: pointer;
+          display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name:hover:not(:disabled) { background: none; text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+  .name:focus-visible { outline: 2px solid var(--color-info); outline-offset: 2px; }
+  .chev { flex: none; width: 0; height: 0; border-left: 4px solid var(--color-text-muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .12s; }
+  .name[aria-expanded="true"] .chev { transform: rotate(90deg); }
+  .details { grid-column: 2 / -1; margin: 8px 0 4px; padding: 10px 12px; border-left: 2px solid var(--color-border-strong); background: rgba(255, 255, 255, .025);
+             border-radius: 0 6px 6px 0; font-size: 12px; color: var(--color-text-secondary); max-width: 72ch; }
+  .details p { margin-bottom: 8px; color: var(--color-text-primary); }
+  .details dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; }
+  .details dt { color: var(--color-text-muted); }
+  .details dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .details .setting { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
   .where { color: var(--color-text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .where select { max-width: 100%; }   /* a menu is as wide as its longest option (with its estimate): keep it in its column */
   .time { text-align: right; font-variant-numeric: tabular-nums; color: var(--color-text-secondary); white-space: nowrap; }
@@ -298,13 +350,11 @@
   .bar.unknown { width: 28px; background: repeating-linear-gradient(135deg, #555 0 3px, transparent 3px 6px); }   /* no estimate: no length to draw */
   .bar.done { left: 0; right: 0; background: var(--color-primary); }   /* already done: nothing left to run */
   /* during the run the same bars show each step's state */
-  .step.running .bar, .step.retrying .bar { background: var(--color-info); animation: pulse 1.6s ease-in-out infinite; }
-  .step.retrying .bar { background: var(--color-caution); }
+  /* progress is green: pulsing while a step runs (or retries), solid once done; waiting keeps the plan's grey */
+  .step.running .bar, .step.retrying .bar { background: var(--color-primary); animation: pulse 1.6s ease-in-out infinite; }
   .step.succeeded .bar, .step.cached .bar { background: var(--color-primary); }
   .step.failed .bar { background: var(--color-danger); }
-  .step.canceled .bar { background: #444; }
-  .step.running .state { color: var(--color-info); }
-  .step.retrying .state { color: var(--color-caution); }
+  .step.running .state, .step.retrying .state { color: var(--color-text-primary); }
   .step.succeeded .state, .step.cached .state { color: var(--color-primary); }
   .step.failed .state { color: var(--color-danger); }
   @keyframes pulse { 50% { opacity: .55; } }
@@ -327,5 +377,6 @@
     .where { grid-area: 2 / 2 / 3 / 4; }
     .track { grid-area: 3 / 2 / 4 / 4; }
     .notes { grid-area: 4 / 2 / 5 / 4; }
+    .details { grid-area: 5 / 2 / 6 / 4; }
   }
 </style>

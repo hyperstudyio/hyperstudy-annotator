@@ -12,21 +12,31 @@ const doctor: Doctor = {
   ],
 };
 const graphs: GraphPreset[] = [
+  { file: 'full.yaml', pipeline: 'perception-full', description: 'Everything the pipeline can do.' },
   { file: 'faces.yaml', pipeline: 'perception-faces', description: 'Decode and face tracks.' },
   { file: 'mvp-captions.yaml', pipeline: 'perception-mvp-captions', description: 'Decode, speech, faces and shot captions (Claude Haiku).' },
 ];
 const plan: Plan = {
   ok: false, estimated_usd: 0.156, nodes: [
-    { id: 'decode', needs: [], uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
+    { id: 'decode', needs: [], title: 'Shots and audio', description: 'Video identity and timing, shots, keyframes and 16 kHz mono audio',
+      outputs: { media: 'media.v1', shots: 'bundle.shots@0.1', keyframes: 'keyframes.v1', audio: 'audio.v1' },
+      models: [{ id: 'pyscenedetect', source: null, licence_mode: 'commercial-ok', size_gb: null }], settings: [], uses: 'core.decode@1.0.0', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
       place: 'native:cpu', options: ['native:cpu'], estimate_s: null, estimate_basis: '' },
-    { id: 'asr', needs: ['decode'], uses: 'audio.asr@1.0.0', where: 'native (mps)', why_not: '', cached: false,
+    { id: 'asr', needs: ['decode'], title: 'Speech transcript', description: 'Word-timed transcript and utterances (Parakeet TDT v3)',
+      outputs: { transcript: 'bundle.transcript@0.1' }, settings: [],
+      models: [{ id: 'parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', licence_mode: 'commercial-ok', size_gb: 2.4 }], uses: 'audio.asr@1.0.0', where: 'native (mps)', why_not: '', cached: false,
       downloads: [{ id: 'parakeet-tdt-0.6b-v3', source: 'hf://mlx-community/parakeet-tdt-0.6b-v3', size_gb: 2.4, gated: false, licence_mode: 'commercial-ok' }],
       missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:mps', options: ['native:mps'], estimate_s: 1.8, estimate_basis: 'median of 4 runs of audio.asr@1.0.0 on native:mps here' },
-    { id: 'faces', needs: ['decode'], uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
+    { id: 'faces', needs: ['decode'], title: 'Face tracks', description: 'Face tracks within shots, identity clusters across the video (py-feat + ArcFace), crops',
+      outputs: { faces: 'bundle.faces@0.1', people: 'bundle.people@0.1' }, settings: [],
+      models: [{ id: 'img2pose', source: 'hf://py-feat/img2pose', licence_mode: 'academic-only', size_gb: 0.6 }], uses: 'vision.face-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
       place: 'native:mps', options: ['native:mps', 'native:cpu'], estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here',
       estimates: { 'native:mps': { estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' },
         'native:cpu': { estimate_s: null, estimate_basis: 'no runs of vision.face-track@1.0.0 on native:cpu here yet' } } },
-    { id: 'captions', needs: ['decode', 'asr', 'faces'], uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
+    { id: 'captions', needs: ['decode', 'asr', 'faces'], title: 'Shot captions', description: 'Per-shot descriptions from keyframes, speech and the face roster',
+      outputs: { shots: 'bundle.shots@0.1' }, models: [{ id: 'claude-haiku-5-5', source: null, licence_mode: 'api-terms', size_gb: null }],
+      settings: [{ key: 'model', description: 'Which Claude model writes the captions', value: 'claude-haiku-5-5', choices: ['claude-haiku-5-5', 'claude-opus-5-5'],
+        prices: { 'claude-haiku-5-5': 0.003, 'claude-opus-5-5': 0.12 }, per: 'shot' }], uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
       uploads: ['frames', 'faces', 'transcript'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 176.1, estimate_basis: 'median of 2 runs of vlm.shot-captions@1.0.0 on native:cpu here' },
   ],
 };
@@ -59,19 +69,23 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     folder: async () => folder,
     setFolder: async (path) => { folder = path; return doctor; },
     doctor: async () => doctor,
-    graphs: async () => graphs,
-    async plan(_graph, _video, places) {   // faces can run on the Apple GPU (measured before) or the CPU (never yet)
+    graphs: async () => oldCli ? graphs.filter((g) => g.file !== 'full.yaml') : graphs,   // an older pipeline has no full graph
+    async plan(_graph, _video, places, settings) {   // faces can run on the Apple GPU (measured before) or the CPU (never yet)
       const cpu = places.faces === 'native:cpu';
-      if (oldCli) return { ...plan, nodes: plan.nodes.map(({ needs, place, options, estimates, estimate_s, estimate_basis, ...n }) => n) };
-      const nodes = noNeeds ? plan.nodes.map(({ needs: _, ...n }) => n) : plan.nodes;
+      if (oldCli) return { ...plan, nodes: plan.nodes.map(({ needs, place, options, estimates, estimate_s, estimate_basis, title, description, outputs, models, settings, ...n }) => n) };
+      const opus = settings.captions?.model === 'claude-opus-5-5';   // 52 shots: $0.003 or $0.12 each
+      const priced = plan.nodes.map((n) => n.id !== 'captions' ? n : { ...n, cost_usd: opus ? 6.24 : 0.156,
+        settings: n.settings!.map((x) => ({ ...x, value: opus ? 'claude-opus-5-5' : 'claude-haiku-5-5' })) });
+      const nodes = noNeeds ? priced.map(({ needs: _, ...n }) => n) : priced;
       return { ...plan, nodes: nodes.map((n) => n.id !== 'faces' ? n : { ...n, place: cpu ? 'native:cpu' : 'native:mps', where: cpu ? 'native (cpu)' : 'native (mps)',
         estimate_s: cpu ? null : 96, estimate_basis: cpu ? 'no runs of vision.face-track@1.0.0 on native:cpu here yet' : 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' }) };
     },
-    async run(_graph, _video, _allow, _places, _only, on) {
+    async run(_graph, _video, _allow, _places, only, _settings, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       listener = on;
       const first = slowStart ? 60_000 : 0;
-      timers = script.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
+      const ran = script.filter((m) => m.type !== 'event' || !m.node || !only || only.includes(m.node));   // as --only does
+      timers = ran.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
       return () => timers.forEach(clearTimeout);
     },
     async cancel(run) {

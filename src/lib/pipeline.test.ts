@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
+import { blockers, canPick, choiceLabel, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -75,13 +75,30 @@ test('a CLI that gives no estimates shows none, rather than nothing estimated', 
   expect(totalEstimate({ ok: true, estimated_usd: 0, nodes: [node] })).toBeNull();
 });
 
-test('unticking a step drops every step that needs it, and the rest is what runs', () => {
-  const node = (id: string, needs: string[]): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [],
-    missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], needs });
-  const plan: Plan = { ok: true, estimated_usd: 0, nodes: [node('decode', []), node('asr', ['decode']), node('faces', ['decode']), node('captions', ['decode', 'asr', 'faces'])] };
-  expect(picked(plan, new Set())).toEqual({ chosen: ['decode', 'asr', 'faces', 'captions'], dropped: [], only: null });
-  expect(picked(plan, new Set(['faces']))).toEqual({ chosen: ['decode', 'asr'], dropped: ['faces', 'captions'], only: ['decode', 'asr'] });
-  expect(picked(plan, new Set(['decode'])).chosen).toEqual([]);   // everything needs decode
+test('turning a feature on runs what it needs too, and says which features need it', () => {
+  const node = (id: string, needs: string[], extra: Partial<PlanNode> = {}): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [],
+    missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], needs, ...extra });
+  const plan: Plan = { ok: true, estimated_usd: 0, nodes: [node('decode', []), node('asr', ['decode']), node('faces', ['decode']),
+    node('captions', ['decode', 'asr', 'faces'], { uploads: ['frames'], cost_usd: 0.16 })] };
+  expect(picked(plan, new Set(['faces']))).toEqual({ chosen: ['decode', 'faces'], neededBy: { decode: ['faces'] }, only: ['decode', 'faces'] });
+  expect(picked(plan, new Set(['captions']))).toEqual({ chosen: ['decode', 'asr', 'faces', 'captions'],
+    neededBy: { decode: ['asr', 'faces', 'captions'], asr: ['captions'], faces: ['captions'] }, only: null });
+  // a feature turned on by the user is still held on while another needs it (turned off, it would come straight back)
+  expect(picked(plan, new Set(['faces', 'captions'])).neededBy.faces).toEqual(['captions']);
+  expect(picked(plan, new Set(['decode', 'faces'])).neededBy).toEqual({ decode: ['faces'] });
+  expect(picked(plan, new Set()).chosen).toEqual([]);
+  expect([...defaultFeatures(plan)]).toEqual(['decode', 'asr', 'faces']);   // captions sends data off and costs money
+  const old = { ...plan, nodes: plan.nodes.map(({ needs: _, ...n }) => n) };
+  expect([...defaultFeatures(old)]).toEqual(['decode', 'asr', 'faces', 'captions']);   // no needs: the whole graph
+});
+
+test('a setting\'s choices show their price when the cost depends on them, and settings go only for steps that run', () => {
+  const s: Setting = { key: 'model', description: '', value: 'claude-haiku-5-5', choices: ['claude-haiku-5-5', 'claude-opus-5-5'],
+    prices: { 'claude-haiku-5-5': 0.003, 'claude-opus-5-5': 0.12 }, per: 'shot' };
+  expect(choiceLabel(s, 'claude-haiku-5-5')).toBe('claude-haiku-5-5, $0.003 per shot');
+  expect(choiceLabel(s, 'claude-opus-5-5')).toBe('claude-opus-5-5, $0.12 per shot');
+  expect(choiceLabel({ ...s, prices: null, per: null }, 'low')).toBe('low');
+  expect(settingsFor({ captions: { model: 'claude-opus-5-5' }, faces: {} }, ['decode', 'faces'])).toEqual({ faces: {} });
 });
 
 test('places are sent only for the steps that run (the CLI refuses a place for a node --only left out)', () => {

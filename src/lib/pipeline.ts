@@ -17,7 +17,16 @@ export interface PlanNode {
   needs?: string[];
   /** Each of `options` -> its estimate, to compare places before choosing one; absent from older CLIs. */
   estimates?: Record<string, { estimate_s: number | null; estimate_basis: string }>;
+  /** What it gives, in a few words ("Face tracks"), and the rest of what its details show; absent from older CLIs. */
+  title?: string; description?: string; outputs?: Record<string, string>;
+  models?: { id: string; source: string | null; licence_mode: string; size_gb: number | null }[];
+  settings?: Setting[];
 }
+
+/** A node setting with a fixed list of choices (a model, an effort), and each choice's price when the cost depends on it. */
+export interface Setting { key: string; description: string; value: string | null; choices: string[]; prices: Record<string, number> | null; per: string | null }
+/** The settings the user chose: node id -> key -> value. */
+export type Settings = Record<string, Record<string, string>>;
 
 /** Where the user moved nodes: node id -> place. */
 export type Places = Record<string, string>;
@@ -43,11 +52,11 @@ export interface PipelineApi {
   setFolder(path: string): Promise<Doctor>;
   doctor(): Promise<Doctor>;
   graphs(): Promise<GraphPreset[]>;
-  plan(graph: string, video: string, places: Places): Promise<Plan>;
+  plan(graph: string, video: string, places: Places, settings: Settings): Promise<Plan>;
   /** Start a run; `on` receives its messages until `imported` or `error`. Resolves to a function that stops listening.
    *  The app checks the consent again against a fresh plan before it starts. */
   /** `only`: just these nodes (and what they need); null runs the whole graph. */
-  run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, on: (m: PipelineMessage) => void): Promise<() => void>;
+  run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, settings: Settings, on: (m: PipelineMessage) => void): Promise<() => void>;
   /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. */
   cancel(run: string | null): Promise<void>;
   pickFolder(): Promise<string | null>;
@@ -105,18 +114,38 @@ export function blockers(plan: Plan, allow: Consent): string[] {
 
 export const runnable = (plan: Plan, allow: Consent) => !blockers(plan, allow).length;
 
-/** The steps that run when the user unticked `skipped`: a step is dropped when it is unticked or needs a dropped one
- *  (transitively). `only` is what to pass the CLI (null: the whole graph). */
-export function picked(plan: Plan, skipped: Set<string>): { chosen: string[]; dropped: string[]; only: string[] | null } {
-  const dropped = new Set(plan.nodes.filter((n) => skipped.has(n.id)).map((n) => n.id));
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const n of plan.nodes) {
-      if (!dropped.has(n.id) && (n.needs ?? []).some((u) => dropped.has(u))) { dropped.add(n.id); grew = true; }
-    }
-  }
-  const chosen = plan.nodes.filter((n) => !dropped.has(n.id)).map((n) => n.id);
-  return { chosen, dropped: plan.nodes.filter((n) => dropped.has(n.id)).map((n) => n.id), only: dropped.size ? chosen : null };
+/** The graph that holds every node: the app picks features from it (an older pipeline folder has none). */
+export const FULL_GRAPH = 'full.yaml';
+
+/** What runs when the user turned on `wanted`: those features and everything they need (transitively). `neededBy` says,
+ *  for each running step that other running steps need, which ones: it cannot be turned off while they run (turned
+ *  off, it would come straight back). `only` is what to pass the CLI (null: the whole graph). */
+export function picked(plan: Plan, wanted: Set<string>): { chosen: string[]; neededBy: Record<string, string[]>; only: string[] | null } {
+  const byId = new Map(plan.nodes.map((n) => [n.id, n]));
+  const on = new Set<string>();
+  const add = (id: string) => { if (on.has(id) || !byId.has(id)) return; on.add(id); (byId.get(id)!.needs ?? []).forEach(add); };
+  wanted.forEach(add);
+  const chosen = plan.nodes.filter((n) => on.has(n.id)).map((n) => n.id);
+  const neededBy = Object.fromEntries(chosen.map((id) => [id, chosen.filter((c) => (byId.get(c)!.needs ?? []).includes(id))]).filter(([, by]) => by.length));
+  return { chosen, neededBy, only: chosen.length === plan.nodes.length ? null : chosen };
+}
+
+/** The features on when a plan first shows: those that keep everything on this machine and cost nothing (a node that
+ *  sends data off or costs money is the user's choice). A plan that does not say what steps need runs whole. */
+export function defaultFeatures(plan: Plan): Set<string> {
+  if (!canPick(plan)) return new Set(plan.nodes.map((n) => n.id));
+  return new Set(plan.nodes.filter((n) => !n.uploads?.length && !n.cost_usd && !n.cost_note).map((n) => n.id));
+}
+
+/** A setting's choice as its menu shows it: with its price, when the cost depends on it. */
+export function choiceLabel(s: Setting, choice: string): string {
+  const usd = s.prices?.[choice];
+  return usd == null ? choice : `${choice}, $${usd < 0.01 ? usd.toFixed(3) : usd.toFixed(2)} per ${s.per}`;
+}
+
+/** The settings to send: only for steps that run (a setting for a node --only leaves out is a CLI error). */
+export function settingsFor(settings: Settings, chosen: string[]): Settings {
+  return Object.fromEntries(Object.entries(settings).filter(([node]) => chosen.includes(node)));
 }
 
 /** Can the user choose steps? Only when the plan says what each step needs (a CLI from before plans carried `needs`
@@ -198,10 +227,10 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     setFolder: (path) => invoke<Doctor>('set_pipeline_folder', { path }),
     doctor: () => invoke<Doctor>('pipeline_doctor'),
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
-    plan: (graph, video, places) => invoke<Plan>('pipeline_plan', { graph, video, places }),
-    async run(graph, video, allow, places, only, on) {
+    plan: (graph, video, places, settings) => invoke<Plan>('pipeline_plan', { graph, video, places, settings }),
+    async run(graph, video, allow, places, only, settings, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
-      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, allowUploads: allow.uploads, places, only }); }
+      try { await invoke('pipeline_run', { graph, video, allowDownloads: allow.downloads, allowUploads: allow.uploads, places, only, settings }); }
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },
