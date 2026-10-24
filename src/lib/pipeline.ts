@@ -15,6 +15,8 @@ export interface PlanNode {
   estimate_s?: number | null; estimate_basis?: string;
   /** The nodes whose outputs it takes (a stage picker's edges); absent from older CLIs. */
   needs?: string[];
+  /** Each of `options` -> its estimate, to compare places before choosing one; absent from older CLIs. */
+  estimates?: Record<string, { estimate_s: number | null; estimate_basis: string }>;
 }
 
 /** Where the user moved nodes: node id -> place. */
@@ -115,6 +117,17 @@ export function picked(plan: Plan, skipped: Set<string>): { chosen: string[]; dr
   }
   const chosen = plan.nodes.filter((n) => !dropped.has(n.id)).map((n) => n.id);
   return { chosen, dropped: plan.nodes.filter((n) => dropped.has(n.id)).map((n) => n.id), only: dropped.size ? chosen : null };
+}
+
+/** Can the user choose steps? Only when the plan says what each step needs (a CLI from before plans carried `needs`
+ *  would otherwise let a step be left out while what needs it still runs). */
+export const canPick = (plan: Plan) => plan.nodes.every((n) => Array.isArray(n.needs));
+
+/** A place as the menu shows it: with how long the step would take there, when the plan says. */
+export function placeLabel(n: PlanNode, place: string): string {
+  const e = n.estimates?.[place];
+  if (!e) return place;
+  return `${place} · ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}`;
 }
 
 /** The places to send: only for steps that run (a place for a node --only leaves out is a CLI error). */

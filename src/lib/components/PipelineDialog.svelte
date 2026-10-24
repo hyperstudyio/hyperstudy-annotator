@@ -3,7 +3,7 @@
   // `perception doctor`), a video, one of the pipeline's graphs, the plan (where each node runs, what is cached, what
   // must be downloaded, what it costs), then the run, node by node.
   import { latestOnly } from '../latest';
-  import { blockers, duration, foldRun, picked, placesFor, runnable, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
+  import { blockers, canPick, duration, foldRun, picked, placeLabel, placesFor, runnable, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -135,14 +135,14 @@
             {@const off = pick.dropped.includes(n.id)}
             <tr class:off>
               <td class="node">
-                {#if !started}<input type="checkbox" aria-label={`Run ${n.id}`} checked={!off} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}
+                {#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${n.id}`} checked={!off} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}
                 {n.id}
               </td>
               <td class="where">
                 {#if n.cached}cached
                 {:else if !started && (n.options?.length ?? 0) > 1}
                   <select aria-label={`Where ${n.id} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
-                    {#each n.options ?? [] as o (o)}<option value={o}>{o}</option>{/each}
+                    {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o)}</option>{/each}
                   </select>
                 {:else}{n.place ?? n.where ?? 'cannot run here'}{/if}
               </td>
@@ -213,7 +213,8 @@
   .uploads { color: var(--color-caution); font-size: 12px; }
   tr.off td { opacity: .5; }
   .node { font-weight: 600; white-space: nowrap; width: 18%; }
-  .where { white-space: nowrap; color: var(--color-text-secondary); width: 22%; }
+  .where { white-space: nowrap; color: var(--color-text-secondary); width: 34%; }
+  .where select { max-width: 100%; }   /* a menu is as wide as its longest option (with its estimate): keep it in its column */
   .state { font-size: 11px; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--color-border-strong); }
   .state.running, .state.retrying { color: var(--color-caution); border-color: var(--color-caution); }
   .state.succeeded, .state.cached { color: var(--color-primary); border-color: var(--color-primary); }

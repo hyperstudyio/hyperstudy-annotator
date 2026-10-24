@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, duration, foldRun, picked, placesFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
+import { blockers, canPick, duration, foldRun, picked, placeLabel, placesFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -86,4 +86,20 @@ test('unticking a step drops every step that needs it, and the rest is what runs
 
 test('places are sent only for the steps that run (the CLI refuses a place for a node --only left out)', () => {
   expect(placesFor({ faces: 'native:cpu', asr: 'native:cpu' }, ['decode', 'asr'])).toEqual({ asr: 'native:cpu' });
+});
+
+test('steps can be chosen only when the plan says what each needs (a CLI from before it did would run a step without its inputs)', () => {
+  const node = (id: string, needs?: string[]): PlanNode => ({ id, uses: 'x@1', where: 'native (cpu)', why_not: '', cached: false, downloads: [],
+    missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], ...(needs ? { needs } : {}) });
+  expect(canPick({ ok: true, estimated_usd: 0, nodes: [node('decode', []), node('faces', ['decode'])] })).toBe(true);
+  expect(canPick({ ok: true, estimated_usd: 0, nodes: [node('decode'), node('faces')] })).toBe(false);
+});
+
+test('each place in the menu says how long the step would take there, when the plan says', () => {
+  const node: PlanNode = { id: 'faces', uses: 'x@1', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [],
+    cost_usd: 0, cost_note: '', uploads: [], options: ['native:mps', 'native:cpu'],
+    estimates: { 'native:mps': { estimate_s: 96, estimate_basis: '' }, 'native:cpu': { estimate_s: null, estimate_basis: '' } } };
+  expect(placeLabel(node, 'native:mps')).toBe('native:mps · about 1 min 36 s');
+  expect(placeLabel(node, 'native:cpu')).toBe('native:cpu · no estimate yet');
+  expect(placeLabel({ ...node, estimates: undefined }, 'native:cpu')).toBe('native:cpu');   // an older CLI
 });
