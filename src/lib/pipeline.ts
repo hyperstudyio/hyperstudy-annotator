@@ -18,7 +18,7 @@ export interface PlanNode {
   /** Each of `options` -> its estimate, to compare places before choosing one; absent from older CLIs. */
   estimates?: Record<string, { estimate_s: number | null; estimate_basis: string }>;
   /** What it gives, in a few words ("Face tracks"), and the rest of what its details show; absent from older CLIs. */
-  title?: string; description?: string; outputs?: Record<string, string>;
+  title?: string; service?: string | null; description?: string; outputs?: Record<string, string>;
   models?: { id: string; source: string | null; licence_mode: string; size_gb: number | null }[];
   settings?: Setting[];
 }
@@ -98,21 +98,24 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
 
 export interface Consent { downloads: boolean; uploads: boolean }
 
-/** Why a run cannot start, one line per problem; empty when it can. The CLI's own rule (plan.ok): every node needs a
- *  place to run here (cached ones too: the CLI checks the whole graph), its secrets, and any download allowed. And the
- *  app's: data leaving this machine is allowed explicitly, like a download, and a plan that does not say what leaves
- *  (a CLI from before plans carried `uploads`) is not run. */
-export function blockers(plan: Plan, allow: Consent): string[] {
+/** What a run of these steps lets happen: its models download as part of running, and turning a feature on that sends
+ *  data to a cloud API is the choice to send it (such features start off, see defaultFeatures). The app re-checks the
+ *  uploads against a fresh plan before it starts, so a step that would send data the plan on screen did not show is
+ *  refused. */
+export const consentFor = (plan: Plan): Consent => ({ downloads: true, uploads: plan.nodes.some((n) => n.uploads?.length) });
+
+/** Why a run cannot start, one line per problem; empty when it can: every node needs a place to run here (cached ones
+ *  too: the CLI checks the whole graph) and its secrets, and a plan that does not say what leaves the machine (a CLI
+ *  from before plans carried `uploads`) is not run. */
+export function blockers(plan: Plan): string[] {
   return plan.nodes.flatMap((n) => [
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
-    ...(n.downloads.length && !allow.downloads ? [`${n.id} needs a model download (tick the box below the plan)`] : []),
-    ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]
-      : n.uploads.length && !allow.uploads ? [`${n.id} sends ${n.uploads.join(', ')} off this machine (tick the box below the plan)`] : []),
+    ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`] : []),
   ]);
 }
 
-export const runnable = (plan: Plan, allow: Consent) => !blockers(plan, allow).length;
+export const runnable = (plan: Plan) => !blockers(plan).length;
 
 /** The graph that holds every node: the app picks features from it (an older pipeline folder has none). */
 export const FULL_GRAPH = 'full.yaml';

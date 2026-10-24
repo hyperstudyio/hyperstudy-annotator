@@ -1,6 +1,6 @@
 // The Run pipeline dialog, against browser mode's scripted stand-in (?pipeline-demo): Tauri is absent here, and the
 // real path is tested in Rust against the real CLI.
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 /** The dialog with a pipeline folder and a video chosen, and its plan on screen: the full graph's features, or (a
  *  pipeline folder with no full graph) mvp-captions.yaml. */
@@ -14,22 +14,36 @@ async function planned(page: Page, url: string) {
   return dialog;
 }
 
-/** Tick everything in "Before it runs". */
-async function allowAll(dialog: Locator) {
-  for (const box of await dialog.getByRole('group', { name: 'Before it runs' }).getByRole('checkbox').all()) await box.check();
-}
-
-test('allowing a download is for the plan on screen: moving a step takes the permission back', async ({ page }) => {
+test('nothing to approve: what a step downloads or sends off is in its details, and the run can start', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await dialog.getByRole('checkbox', { name: /^Download/ }).check();
-  await dialog.getByRole('combobox', { name: 'Where faces runs' }).selectOption('native:cpu');   // a new plan
-  await expect(dialog.getByRole('checkbox', { name: /^Download/ })).not.toBeChecked();
-  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
+  await expect(dialog.getByRole('group', { name: 'Before it runs' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();   // the speech model downloads as part of running
+  const asr = dialog.getByRole('listitem', { name: 'asr' });
+  await expect(asr).not.toContainText('Downloads');                               // not on the row
+  await dialog.getByRole('button', { name: 'Speech transcript' }).click();
+  await expect(asr).toContainText('Downloads first');
+  await expect(asr).toContainText('mlx-community/parakeet-tdt-0.6b-v3 (2.3 GB)');
+  await dialog.getByRole('checkbox', { name: 'Run captions' }).check();           // turning it on is the choice to send
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+test('a step that runs on a cloud API says so, not this machine\'s CPU', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  const captions = dialog.getByRole('listitem', { name: 'captions' });
+  await expect(captions).toContainText('Anthropic API (cloud)');
+  await expect(captions).not.toContainText('CPU');
+  await dialog.getByRole('button', { name: 'Shot captions' }).click();
+  await expect(captions).toContainText('frames, faces and transcript, sent to the Anthropic API');
+});
+
+test('on a Mac a step runs on the Apple GPU with no CPU to choose instead', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('Apple GPU');
+  await expect(dialog.getByRole('combobox', { name: /^Where / })).toHaveCount(0);
 });
 
 test('a run the app refuses to start leaves the dialog usable, with the reason', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=reject-run');
-  await allowAll(dialog);
   await dialog.getByRole('button', { name: 'Start run' }).click();
   await expect(dialog.getByText('a pipeline run is already in progress')).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
@@ -44,44 +58,35 @@ test('the dialog takes the keyboard, and Escape closes it when no run is going',
   await expect(dialog).toHaveCount(0);
 });
 
-test('a feature that sends data off this machine or costs money is off until turned on, and then needs its own permission', async ({ page }) => {
+test('a feature that sends data off this machine or costs money is off until turned on', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  const captions = () => dialog.getByRole('listitem', { name: 'captions' });
-  await expect(captions()).toContainText('Off: it sends frames, faces and transcript off this machine and costs money');
-  await expect(dialog.getByRole('checkbox', { name: /^Send frames/ })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: 'Run captions' })).not.toBeChecked();
+  await expect(dialog.getByRole('heading', { name: /^2 steps to run, about 1 min 38 s$/ })).toBeVisible();   // no cost
   await dialog.getByRole('checkbox', { name: 'Run captions' }).check();
-  await expect(captions()).toContainText('Sends frames, faces and transcript off this machine');
-  await dialog.getByRole('checkbox', { name: /^Download/ }).check();
-  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();   // until the upload is allowed too
-  await dialog.getByRole('checkbox', { name: /^Send frames/ }).check();
-  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await expect(dialog.getByRole('heading', { name: /\$0\.16$/ })).toBeVisible();
 });
 
 test('a run can be stopped before the pipeline has named it (a slow first environment sync)', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=slow-start');
-  await allowAll(dialog);
   await dialog.getByRole('button', { name: 'Start run' }).click();
   await dialog.getByRole('button', { name: 'Cancel run' }).click();          // no run id yet
   await expect(dialog.getByText(/ended without finishing the run/)).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
 });
 
-test('choosing another pipeline folder takes back the features, the plan and every permission', async ({ page }) => {
+test('choosing another pipeline folder takes back the features and the plan', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
   await dialog.getByRole('checkbox', { name: 'Run captions' }).check();
-  await allowAll(dialog);
   await dialog.getByRole('button', { name: 'Change…' }).first().click();     // the pipeline folder
   await expect(dialog.getByRole('checkbox', { name: 'Run captions' })).not.toBeChecked();   // back to the defaults
-  await expect(dialog.getByRole('checkbox', { name: /^Download/ })).not.toBeChecked();
-  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
 });
 
 test('a node that can run in several places can be moved, and the plan says how long each step takes', async ({ page }) => {
-  const dialog = await planned(page, '/?pipeline-demo');
+  const dialog = await planned(page, '/?pipeline-demo=two-places');
   const faces = dialog.getByRole('listitem', { name: 'faces' });
   await expect(faces).toContainText('1 min 36 s');
   const menu = faces.getByRole('combobox', { name: 'Where faces runs' });
-  await expect(menu.getByRole('option')).toHaveText(['Apple GPU, about 1 min 36 s', 'CPU, no estimate yet']);   // compare before moving
+  await expect(menu.getByRole('option')).toHaveText(['NVIDIA GPU, about 1 min 36 s', 'CPU, no estimate yet']);   // compare before moving
   // a menu is as wide as its longest option: it stays inside its column, not over the estimate beside it
   const [box, cell] = await Promise.all([menu.boundingBox(), menu.locator('xpath=..').boundingBox()]);
   expect(box!.x + box!.width).toBeLessThanOrEqual(cell!.x + cell!.width);
@@ -110,7 +115,8 @@ test('a step\'s details say what it makes, uses and sends, and its settings chan
   await dialog.getByRole('button', { name: 'Shot captions' }).click();
   const captions = dialog.getByRole('listitem', { name: 'captions' });
   await expect(captions).toContainText('Leaves this machine');
-  await expect(captions).toContainText('frames, faces and transcript');
+  await expect(captions).toContainText('Runs on');
+  await expect(captions).toContainText('The Anthropic API, in the cloud');
   const model = captions.getByRole('combobox', { name: 'Model' });
   await expect(model.getByRole('option')).toHaveText(['claude-haiku-5-5, $0.003 per shot', 'claude-opus-5-5, $0.12 per shot']);
   await expect(dialog.getByRole('heading', { name: /\$0\.16$/ })).toBeVisible();
@@ -123,8 +129,7 @@ test('a pipeline that does not say what each step needs offers no choice of step
   const dialog = await planned(page, '/?pipeline-demo=no-needs');
   await expect(dialog.getByRole('listitem', { name: 'faces' })).toBeVisible();
   await expect(dialog.getByRole('checkbox', { name: /^Run / })).toHaveCount(0);
-  await expect(dialog.getByRole('checkbox', { name: /^Send frames/ })).toBeVisible();          // captions runs too
-  await expect(dialog.getByRole('combobox', { name: 'Where faces runs' })).toBeVisible();   // places can still be chosen
+  await expect(dialog.getByRole('heading', { name: /^3 steps to run/ })).toBeVisible();          // captions runs too
 });
 
 test('in a narrow window the plan fits without scrolling sideways', async ({ page }) => {
@@ -133,7 +138,6 @@ test('in a narrow window the plan fits without scrolling sideways', async ({ pag
   await dialog.getByRole('button', { name: 'Face tracks' }).click();
   const [scroll, client] = await dialog.evaluate((d) => [d.scrollWidth, d.clientWidth]);
   expect(scroll).toBeLessThanOrEqual(client);
-  await expect(dialog.getByRole('combobox', { name: 'Where faces runs' })).toBeVisible();
   await page.screenshot({ path: 'test-results/pipeline-narrow.png' });
 });
 
@@ -142,7 +146,6 @@ test('a pipeline from before plans named places or held a full graph offers its 
   await expect(dialog.getByRole('radio')).toHaveCount(2);
   await expect(dialog.getByText('Cannot run here')).toHaveCount(0);
   await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('native (mps)');
-  await allowAll(dialog);
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
 });
 
@@ -153,13 +156,22 @@ test('a step already done fills its whole bar', async ({ page }) => {
   expect(bar!.width).toBeCloseTo(track!.width, 0);
 });
 
-test('a run\'s progress is green: every step that finished has a green bar, and only the steps chosen run', async ({ page }) => {
+test('progress is one colour: a running step fills against its estimate, and a finished one is a full bar', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await allowAll(dialog);
+  const faces = dialog.getByRole('listitem', { name: 'faces' });
+  await expect(faces.locator('.bar')).toHaveCount(0);                          // nothing has run yet
   await dialog.getByRole('button', { name: 'Start run' }).click();
+  await expect(faces).toContainText('Running');
+  const [part, whole] = await Promise.all([faces.locator('.bar').boundingBox(), faces.locator('.track').boundingBox()]);
+  expect(part!.width).toBeLessThan(whole!.width / 2);                          // a few seconds into a 96 s estimate
   await expect(dialog.getByRole('heading', { name: 'Finished all 3 steps' })).toBeVisible({ timeout: 10_000 });
   for (const id of ['decode', 'asr', 'faces']) {
-    await expect(dialog.getByRole('listitem', { name: id }).locator('.bar')).toHaveCSS('background-color', 'rgb(76, 175, 80)');
+    const item = dialog.getByRole('listitem', { name: id });
+    await expect(item.locator('.bar')).toHaveCSS('background-color', 'rgb(76, 175, 80)');
+    await expect.poll(async () => {
+      const [bar, track] = await Promise.all([item.locator('.bar').boundingBox(), item.locator('.track').boundingBox()]);
+      return Math.round(track!.width - bar!.width);
+    }).toBe(0);
   }
-  await expect(dialog.getByRole('listitem', { name: 'captions' })).toHaveCount(0);
+  await expect(dialog.getByRole('listitem', { name: 'captions' })).toHaveCount(0);   // only the steps chosen run
 });

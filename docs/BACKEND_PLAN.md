@@ -168,8 +168,11 @@ Checked:
   title. Turning one on brings what it needs, held on while something needs it ("Needed by …"); a feature that sends
   data off the machine or costs money starts off. Each step opens to its details (what it makes, the models it uses
   and their licences, what leaves the machine, where it can run and how long each place takes) and its fixed-choice
-  settings (a model, with its price), sent as `--set`. Upload consent reaches the CLI as `--allow-uploads`. A
-  pipeline folder with no full graph offers its graphs instead.
+  settings (a model, with its price), sent as `--set`. Nothing asks for approval: a step's models download as part
+  of running, and turning on a feature that sends data to a cloud API (it starts off) is the choice to send it; the
+  app passes `--allow-uploads` then, after re-checking the uploads against a fresh plan. A step that runs on a hosted
+  API shows it ("Anthropic API (cloud)"). Progress is one colour: a running step fills against its estimate, a
+  finished one is full. A pipeline folder with no full graph offers its graphs instead.
 
 Not yet:
 - each choice's price, not only its duration: every place is local and free today, so this comes with the cloud
