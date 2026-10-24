@@ -265,7 +265,8 @@ export function machineCost(plan: Plan, n: PlanNode): number {
  *  CLI keeps the graph's own). */
 export function spendingCap(plan: Plan, chosen: string[]): number | null {
   if (plan.max_cost_usd == null) return null;
-  const machines = plan.nodes.filter((n) => chosen.includes(n.id) && !n.cached).reduce((a, n) => a + machineCost(plan, n), 0);
+  // cached steps too: a cache can be gone by the time the run starts (the upload gate counts them for the same reason)
+  const machines = plan.nodes.filter((n) => chosen.includes(n.id)).reduce((a, n) => a + machineCost(plan, n), 0);
   return Math.ceil((plan.max_cost_usd + machines) * 100 - 1e-9) / 100;   // up to the cent: never below a reservation
 }
 

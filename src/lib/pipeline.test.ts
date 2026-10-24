@@ -251,7 +251,7 @@ test('a run\'s spending cap covers the graph\'s APIs and each cloud machine a st
   const plan = planOf(decodeNode(), remoteNode('cloud:cuda'));
   expect(spendingCap(plan, ['decode', 'faces'])).toBe(0.99);                 // 0.50 + 0.4888, up to the cent
   expect(spendingCap(plan, ['decode'])).toBe(0.5);                            // faces does not run
-  expect(spendingCap(planOf(decodeNode(), remoteNode('cloud:cuda', { cached: true })), ['decode', 'faces'])).toBe(0.5);
+  expect(spendingCap(planOf(decodeNode(), remoteNode('cloud:cuda', { cached: true })), ['decode', 'faces'])).toBe(0.99);   // its cache may be gone
   expect(spendingCap({ ...plan, max_cost_usd: undefined }, ['decode', 'faces'])).toBeNull();   // the CLI keeps the graph's
   // an API step's price is its own cost, which the graph's cap limits: it never raises the cap, nor reads as a ceiling
   const captions: PlanNode = { ...decodeNode(), id: 'captions', service: 'Anthropic API', uploads: ['frames'], upload_to: 'Anthropic API', cost_usd: 4,
