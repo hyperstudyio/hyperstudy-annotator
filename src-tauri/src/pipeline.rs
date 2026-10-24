@@ -50,7 +50,7 @@ pub fn run_id(id: &str) -> Result<&str> {
 /// A pipeline folder must not be inside the app's own data (the library's bundle copies are made from files a bundle
 /// lists, so a bundle could otherwise supply the code this app runs with uv).
 pub fn check_folder(folder: &Path, data_dir: &Path) -> Result<()> {
-    let (f, d) = (folder.canonicalize()?, data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf()));
+    let (f, d) = (folder.canonicalize()?, data_dir.canonicalize()?);   // the data folder exists (made at start-up)
     if f.starts_with(&d) {
         return Err(Error::Bundle(format!("{} is inside the app's own data; choose your hyperstudy-perception folder", folder.display())));
     }
@@ -71,6 +71,23 @@ pub fn stop_process(pid: u32) -> Result<()> {
         Command::new("kill").args(["-TERM", &pid.to_string()]).status()?
     };
     if status.success() { Ok(()) } else { Err(Error::Bundle(format!("could not stop the pipeline process {pid}"))) }
+}
+
+/// The app's own check, against a fresh plan, that nothing leaves this machine without the user's consent. Every node
+/// counts, cached ones too (a cache can be gone by the time the run starts), and a plan that does not say what a node
+/// sends (a CLI from before plans carried `uploads`) is refused.
+pub fn upload_gate(plan: &Value, allowed: bool) -> Result<()> {
+    for n in plan["nodes"].as_array().into_iter().flatten() {
+        let id = n["id"].as_str().unwrap_or("?");
+        let Some(uploads) = n["uploads"].as_array() else {
+            return Err(Error::Bundle(format!("the pipeline does not say what {id} sends off this machine; update hyperstudy-perception")));
+        };
+        if !uploads.is_empty() && !allowed {
+            let kinds: Vec<&str> = uploads.iter().filter_map(|u| u.as_str()).collect();
+            return Err(Error::Bundle(format!("{id} sends {} off this machine, which was not allowed", kinds.join(", "))));
+        }
+    }
+    Ok(())
 }
 
 /// The problems of an `error` object, as one message.
@@ -318,6 +335,19 @@ mod tests {
         assert!(inside(&out.path().join("bundle"), out.path()).is_ok());
         let elsewhere = tempfile::tempdir().unwrap();
         assert!(inside(elsewhere.path(), out.path()).is_err());
+    }
+
+    #[test]
+    fn a_run_is_refused_when_data_would_leave_without_consent_or_the_plan_does_not_say() {
+        let plan = |uploads: Value| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
+            {"id": "decode", "cached": false, "uploads": []},
+            {"id": "captions", "cached": true, "uploads": uploads}]});
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), true).is_ok());
+        // a cached node can still run (its cache can be gone by then): consent covers it too
+        assert!(upload_gate(&plan(serde_json::json!(["frames"])), false).unwrap_err().to_string().contains("captions sends frames"));
+        assert!(upload_gate(&plan(serde_json::json!([])), false).is_ok());
+        let older = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [{"id": "captions", "cached": false}]});
+        assert!(upload_gate(&older, true).unwrap_err().to_string().contains("does not say what captions sends"));
     }
 
     /// A stand-in for uv that prints what the CLI would and ends as told (it ignores the arguments).

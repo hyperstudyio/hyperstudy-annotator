@@ -56,3 +56,12 @@ test('a run can be stopped before the pipeline has named it (a slow first enviro
   await expect(dialog.getByText(/ended without finishing the run/)).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
 });
+
+test('choosing another pipeline folder takes back the graph, the plan and every permission', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  for (const box of await dialog.getByRole('checkbox').all()) await box.check();
+  await dialog.getByRole('button', { name: 'Change…' }).first().click();     // the pipeline folder
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog.getByRole('radio', { checked: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Run', exact: true })).toBeDisabled();
+});

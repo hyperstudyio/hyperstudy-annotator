@@ -54,3 +54,8 @@ test('data leaving this machine needs the same consent as a download, and a plan
   delete older.nodes[0].uploads;   // a CLI from before plans said what leaves the machine
   expect(blockers(older, ALL)).toEqual(['the pipeline does not say what captions sends off this machine (update hyperstudy-perception)']);
 });
+
+test('consent to upload covers cached nodes too (a cache can be gone by the time the run starts)', () => {
+  const node: PlanNode = { id: 'captions', uses: 'x@1', where: 'native (cpu)', why_not: '', cached: true, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: ['frames'] };
+  expect(blockers({ ok: true, estimated_usd: 0, nodes: [node] }, NONE)).toEqual(['captions sends frames off this machine (tick the box below the plan)']);
+});

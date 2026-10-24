@@ -25,7 +25,7 @@
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
   const downloads = $derived(plan?.nodes.flatMap((n) => n.downloads) ?? []);
   const downloadGb = $derived(downloads.reduce((a, d) => a + (d.size_gb ?? 0), 0));
-  const uploading = $derived(plan?.nodes.filter((n) => n.uploads?.length && !n.cached) ?? []);
+  const uploading = $derived(plan?.nodes.filter((n) => n.uploads?.length) ?? []);   // cached ones too: a cache can go
   const consent = $derived({ downloads: allowDownloads, uploads: allowUploads });
   const canRun = $derived(!!plan && runnable(plan, consent) && !started);
   const why = $derived(plan && !started ? blockers(plan, consent) : []);
@@ -49,6 +49,8 @@
     if (!path) return;
     doctor = await api.setFolder(path);
     folder = path;
+    // another pipeline: its graphs are not the old ones, and no plan or permission carries over
+    graph = null; plan = null; allowDownloads = false; allowUploads = false;
     graphs = await api.graphs();
   });
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; await makePlan(); } };
@@ -64,7 +66,7 @@
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = [];
-    try { stop = await api.run(graph!, video!, allowDownloads, (m) => { msgs = [...msgs, m]; }); }
+    try { stop = await api.run(graph!, video!, consent, (m) => { msgs = [...msgs, m]; }); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped

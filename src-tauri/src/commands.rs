@@ -225,7 +225,8 @@ pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: Str
 /// Start a run. Its objects arrive as `pipeline` events; when it succeeds, the bundle is exported, imported into the
 /// library and its video recorded, then an `imported` event carries the bundle's summary.
 #[tauri::command]
-pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool) -> Result<()> {
+pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool,
+                    allow_uploads: bool) -> Result<()> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
     {
@@ -237,7 +238,7 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     }
     std::thread::spawn(move || {
         let _clear = ClearRun(app.clone());   // even if this thread panics, the next run is not refused forever
-        let last = match run_and_import(&app, &p, &g, &video, allow_downloads) {
+        let last = match run_and_import(&app, &p, &g, &video, allow_downloads, allow_uploads) {
             Ok(last) => last,
             Err(e) => Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})),
         };
@@ -266,10 +267,13 @@ pub fn check_cancel(running: Option<&str>, run: &str) -> Result<()> {
 }
 
 /// The run, then its import; the final `imported` event, for the caller to send once the run is no longer in progress.
-fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool) -> Result<Option<Value>> {
+fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool,
+                  allow_uploads: bool) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
     let input = format!("video={video}");
     let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
+    // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
+    pipeline::upload_gate(&p.one(&["plan", graph, "--input", &input], "plan")?, allow_uploads)?;
     let mut args = vec!["run", graph, "--input", &input];
     if allow_downloads {
         args.push("--allow-downloads");
