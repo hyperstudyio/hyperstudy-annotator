@@ -219,6 +219,8 @@ test('a step on another machine sends its inputs there even when they hold none 
   // older plans: the API's service is where kinds go
   expect(dest({ ...decodeNode(), upload_to: undefined, uploads: ['frames'], service: 'Anthropic API' })).toBe('Anthropic API');
   expect(sends({ ...decodeNode(), upload_to: undefined })).toBe(false);
+  // kinds with no destination still go to the API: never shown, or agreed, as going nowhere
+  expect(dest({ ...decodeNode(), upload_to: null, uploads: ['frames'], service: 'Anthropic API' })).toBe('Anthropic API');
 });
 
 test('the agreement a chosen place gave stands while the place does, for a step held on for another feature too', () => {

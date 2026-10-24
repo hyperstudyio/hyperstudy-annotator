@@ -107,6 +107,8 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
         }
         // where to: `upload_to` (perception #15), else the API's `service` for a node that sends kinds
         let to = match n.get("upload_to") {
+            // kinds that leave for nowhere: a plan that contradicts itself is refused, not read as sending nothing
+            Some(Value::Null) if !kinds.is_empty() => return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data"))),
             Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.as_str()),
             Some(_) => return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data"))),
@@ -564,6 +566,11 @@ mod tests {
         assert!(upload_gate(&on(serde_json::json!("lab (SSH)"), serde_json::json!(["video", "audio"])), &agreed_to("lab (SSH)", &["video"])).is_err());
         // nothing leaves: no agreement needed; an answer that is not a place is refused (fail closed)
         assert!(upload_gate(&on(Value::Null, serde_json::json!([])), &Uploads::new()).is_ok());
+        // kinds that go nowhere: refused, whatever was agreed (it would hide the API's destination)
+        let api = serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": [
+            {"id": "captions", "cached": false, "uploads": ["frames"], "upload_to": null, "service": "Anthropic API"}]});
+        let none: Uploads = [("captions".to_string(), Agreed { kinds: vec!["frames".into()], service: None })].into_iter().collect();
+        assert!(upload_gate(&api, &none).unwrap_err().to_string().contains("plainly"));
         assert!(upload_gate(&on(serde_json::json!({"host": "lab"}), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).unwrap_err().to_string().contains("plainly"));
     }
 

@@ -116,7 +116,7 @@ export type Ticked = Record<string, { kinds: string[]; service: string | null }>
 
 /** Where `n` sends data, or null when nothing leaves this machine: its API, or the other machine it runs on. */
 export const dest = (n: PlanNode): string | null =>
-  n.upload_to !== undefined ? n.upload_to : n.uploads?.length ? n.service ?? null : null;
+  n.upload_to ?? (n.uploads?.length ? n.service ?? null : null);   // kinds always go somewhere (the gate refuses a plan saying otherwise)
 /** Does `n` send anything off this machine where it would run? (On another machine it always does: its inputs.) */
 export const sends = (n: PlanNode) => dest(n) !== null || !!n.uploads?.length;
 
