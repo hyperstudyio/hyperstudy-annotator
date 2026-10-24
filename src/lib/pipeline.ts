@@ -250,7 +250,14 @@ export function placeName(place: string, places?: Record<string, PlaceInfo>): st
 export function placeLabel(n: PlanNode, place: string, places?: Record<string, PlaceInfo>): string {
   const e = n.estimates?.[place];
   if (!e) return placeName(place, places);
-  return `${placeName(place, places)}, ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}${e.cost_usd ? `, up to $${e.cost_usd.toFixed(2)}` : ''}`;
+  const machine = e.cost_usd && !n.service && places?.[place]?.remote ? `, up to $${e.cost_usd.toFixed(2)}` : '';   // another machine's price
+  return `${placeName(place, places)}, ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}${machine}`;
+}
+
+/** What the machine a step runs on costs at most (a cloud GPU for its whole deadline), or 0: only another machine's
+ *  price, never an API's (that is the step's own cost, which the graph's cap limits). */
+export function machineCost(plan: Plan, n: PlanNode): number {
+  return n.place && !n.service && plan.places?.[n.place]?.remote ? n.estimates?.[n.place]?.cost_usd ?? 0 : 0;
 }
 
 /** The run's spending cap: the graph's (it covers the APIs its steps call), raised by what each step that runs on a
@@ -258,8 +265,7 @@ export function placeLabel(n: PlanNode, place: string, places?: Record<string, P
  *  CLI keeps the graph's own). */
 export function spendingCap(plan: Plan, chosen: string[]): number | null {
   if (plan.max_cost_usd == null) return null;
-  const machines = plan.nodes.filter((n) => chosen.includes(n.id) && !n.cached && n.place)
-    .reduce((a, n) => a + (n.estimates?.[n.place!]?.cost_usd ?? 0), 0);
+  const machines = plan.nodes.filter((n) => chosen.includes(n.id) && !n.cached).reduce((a, n) => a + machineCost(plan, n), 0);
   return Math.ceil((plan.max_cost_usd + machines) * 100 - 1e-9) / 100;   // up to the cent: never below a reservation
 }
 

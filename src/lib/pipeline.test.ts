@@ -251,4 +251,12 @@ test('a run\'s spending cap covers the graph\'s APIs and each cloud machine a st
   expect(spendingCap(plan, ['decode'])).toBe(0.5);                            // faces does not run
   expect(spendingCap(planOf(decodeNode(), remoteNode('cloud:cuda', { cached: true })), ['decode', 'faces'])).toBe(0.5);
   expect(spendingCap({ ...plan, max_cost_usd: undefined }, ['decode', 'faces'])).toBeNull();   // the CLI keeps the graph's
+  // an API step's price is its own cost, which the graph's cap limits: it never raises the cap, nor reads as a ceiling
+  const captions: PlanNode = { ...decodeNode(), id: 'captions', service: 'Anthropic API', uploads: ['frames'], upload_to: 'Anthropic API', cost_usd: 4,
+    estimates: { 'native:cpu': { estimate_s: null, estimate_basis: '', cost_usd: 4, uploads: ['frames'], upload_to: 'Anthropic API' } } };
+  expect(spendingCap(planOf(decodeNode(), captions), ['decode', 'captions'])).toBe(0.5);
+  expect(placeLabel(captions, 'native:cpu', PLACES)).toBe('CPU, no estimate yet');
+  // nor does a price for a place on this machine
+  const here = decodeNode({ estimates: { 'native:cpu': { estimate_s: null, estimate_basis: '', cost_usd: 2, uploads: [], upload_to: null } } });
+  expect(spendingCap({ ...planOf(here), places: { ...PLACES, 'native:cpu': { title: 'This machine', remote: false, accelerator: 'cpu' } } }, ['decode'])).toBe(0.5);
 });
