@@ -181,6 +181,8 @@ export function blockers(plan: Plan): string[] {
   const unsaid = (n: PlanNode) => !!plan.places && !!n.place && plan.places[n.place]?.remote !== false && typeof n.upload_to !== 'string';
   return plan.nodes.flatMap((n) => [
     ...(unsaid(n) ? [`the pipeline does not say where ${n.id} sends its inputs on ${n.place} (update hyperstudy-perception)`] : []),
+    // kinds that leave for nowhere: the upload gate refuses that plan, so the run is not offered either
+    ...(n.upload_to === null && n.uploads?.length ? [`the pipeline does not say where ${n.id} sends ${n.uploads.join(', ')} (update hyperstudy-perception)`] : []),
     ...(n.where ? [] : [`${n.id} cannot run here${n.why_not ? `: ${n.why_not}` : ''}`]),
     ...n.missing_secrets.map((k) => `${n.id} needs ${k}`),
     ...(n.uploads === undefined ? [`the pipeline does not say what ${n.id} sends off this machine (update hyperstudy-perception)`]

@@ -243,6 +243,9 @@ test('a plan that puts a step on another machine without saying where its inputs
   expect(blockers(planOf(decodeNode(), unsaid))).toEqual(['the pipeline does not say where faces sends its inputs on ssh-lab:cuda (update hyperstudy-perception)']);
   expect(blockers(planOf(decodeNode(), remoteNode('ssh-lab:cuda')))).toEqual([]);
   expect(blockers(planOf(decodeNode(), remoteNode('native:mps')))).toEqual([]);
+  // kinds sent to nowhere: the gate refuses this plan, so the dialog does not offer the run
+  const nowhere = { ...decodeNode(), id: 'captions', uploads: ['frames'], upload_to: null, service: 'Anthropic API' };
+  expect(blockers(planOf(decodeNode(), nowhere))).toEqual(['the pipeline does not say where captions sends frames (update hyperstudy-perception)']);
 });
 
 test('places read as the plan names them, with what each would take and cost', () => {
