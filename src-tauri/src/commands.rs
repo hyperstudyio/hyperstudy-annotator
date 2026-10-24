@@ -3,18 +3,23 @@
 
 use crate::error::{Error, Result};
 use crate::library::{self, BundleSummary, Carryover};
+use crate::pipeline::{self, GraphPreset, Pipeline};
 use crate::bundle;
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub data_dir: PathBuf,
+    /// a pipeline run in progress (one at a time: GPU nodes are exclusive); its run id once the CLI has said it
+    pub running: Mutex<Option<String>>,
 }
+
+const PIPELINE_FOLDER: &str = "pipeline_folder";
 
 #[derive(Serialize)]
 pub struct OpenedBundle {
@@ -167,4 +172,118 @@ pub fn decline_carryover(state: State<'_, AppState>, id: String, from: String) -
 #[tauri::command]
 pub fn dismiss_unmatched(state: State<'_, AppState>, id: String, index: u64) -> Result<Carryover> {
     library::dismiss_unmatched(&state.db.lock().unwrap(), &id, index)
+}
+
+// --- running the perception pipeline (pipeline.rs) ---
+
+fn pipeline_at(folder: &str) -> Result<Pipeline> {
+    Pipeline::new(std::path::Path::new(folder), pipeline::bundled_uv(&std::env::current_exe()?)?)
+}
+
+fn pipeline(state: &AppState) -> Result<Pipeline> {
+    let folder = library::get_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER)?
+        .ok_or_else(|| Error::NotFound("choose the hyperstudy-perception folder first".into()))?;
+    pipeline_at(&folder)
+}
+
+#[tauri::command]
+pub fn get_pipeline_folder(state: State<'_, AppState>) -> Result<Option<String>> {
+    library::get_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER)
+}
+
+/// Check a folder with `perception doctor` and remember it; returns what the doctor found.
+#[tauri::command]
+pub async fn set_pipeline_folder(state: State<'_, AppState>, path: String) -> Result<Value> {
+    let folder = path.clone();
+    let doctor = blocking(move || pipeline_at(&folder)?.one(&["doctor"], "doctor")).await?;
+    library::set_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER, &path)?;
+    Ok(doctor)
+}
+
+#[tauri::command]
+pub async fn pipeline_doctor(state: State<'_, AppState>) -> Result<Value> {
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&["doctor"], "doctor")).await
+}
+
+#[tauri::command]
+pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
+    pipeline(&state)?.graphs()
+}
+
+/// What a run of `graph` on `video` would do: placement, cache, downloads, missing secrets and cost per node.
+#[tauri::command]
+pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: String) -> Result<Value> {
+    let p = pipeline(&state)?;
+    let g = p.graph(&graph)?;
+    blocking(move || p.one(&["plan", &g.to_string_lossy(), "--input", &format!("video={video}")], "plan")).await
+}
+
+/// Start a run. Its objects arrive as `pipeline` events; when it succeeds, the bundle is exported, imported into the
+/// library and its video recorded, then an `imported` event carries the bundle's summary.
+#[tauri::command]
+pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, allow_downloads: bool) -> Result<()> {
+    let p = pipeline(&state)?;
+    let g = p.graph(&graph)?;
+    {
+        let mut running = state.running.lock().unwrap();
+        if running.is_some() {
+            return Err(Error::Bundle("a pipeline run is already in progress".into()));
+        }
+        *running = Some(String::new());
+    }
+    std::thread::spawn(move || {
+        if let Err(e) = run_and_import(&app, &p, &g, &video, allow_downloads) {
+            let _ = app.emit("pipeline", serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]}));
+        }
+        *app.state::<AppState>().running.lock().unwrap() = None;
+    });
+    Ok(())
+}
+
+fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str, allow_downloads: bool) -> Result<()> {
+    let state = app.state::<AppState>();
+    let input = format!("video={video}");
+    let mut args = vec!["run", graph.to_str().unwrap_or_default(), "--input", &input];
+    if allow_downloads {
+        args.push("--allow-downloads");
+    }
+    let mut child = p.spawn(&args)?;
+    let (mut run, mut status) = (None::<String>, None::<String>);
+    let read = pipeline::lines(&mut child, |o| {
+        match o["type"].as_str() {
+            Some("run.created") => {
+                run = o["run"].as_str().map(String::from);
+                *state.running.lock().unwrap() = run.clone();
+            }
+            Some("run.finished") => status = o["status"].as_str().map(String::from),
+            _ => {}
+        }
+        let _ = app.emit("pipeline", &o);
+    });
+    child.wait()?;
+    read?;
+    let (Some(run), Some("succeeded")) = (run, status.as_deref()) else { return Ok(()) };   // the events said why
+
+    let out = state.data_dir.join("exports").join(&run);
+    let exported = p.one(&["export", &run, "--output", &out.to_string_lossy()], "exported")?;
+    let bundle_dir = PathBuf::from(exported["path"].as_str().unwrap_or_default());
+    let (id, manifest, dst) = library::prepare_import(&bundle_dir, &state.data_dir)?;
+    let summary = {
+        let conn = state.db.lock().unwrap();
+        library::record_import(&conn, &bundle_dir, &id, &manifest, &dst)?
+    };
+    std::fs::remove_dir_all(&out)?;   // the library holds its own copy
+    library::check_video(&summary.video_sha256, std::path::Path::new(video))?;   // the bundle names the video it was made from
+    let conn = state.db.lock().unwrap();
+    library::record_video(&conn, &summary.video_sha256, video)?;
+    let summary = library::get(&conn, &id)?;
+    let _ = app.emit("pipeline", serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary}));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pipeline_cancel(state: State<'_, AppState>, run: String) -> Result<()> {
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await
 }

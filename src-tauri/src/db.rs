@@ -60,6 +60,16 @@ const MIGRATIONS: &[Migration] = &[Migration {
             created_at     TEXT NOT NULL
         );
     "#,
+}, Migration {
+    version: 3,
+    name: "settings",
+    sql: r#"
+        -- App settings (the pipeline folder, for now). Secrets never go here: they belong in the OS keychain.
+        CREATE TABLE settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    "#,
 }];
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {

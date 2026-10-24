@@ -124,11 +124,38 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
   each op's author (needs a user identity in Settings) and base version (implicit in which log holds it, today).
   Importing a file into a re-run follows the rule above (2026-10-24).
 
+**Step 2 (2026-10-24): running the pipeline from the app, first part.** The library's *Run pipeline…* opens a
+dialog (`PipelineDialog.svelte`) that goes in order:
+- **Pipeline folder.** The hyperstudy-perception folder (a setting, migration 3), checked with `perception doctor`.
+- **Video and graph.** A video, and one of the pipeline's `graphs/*.yaml`.
+- **Plan.** Placement, cache hits, model downloads (allowed explicitly), missing secrets and cost per node.
+- **Run.** Node by node as it happens. On success the bundle is exported, imported into the library, its video's
+  sha256 checked and its location recorded, and the dialog offers to open it.
+
+How it is built:
+- `src-tauri/src/pipeline.rs` runs `perception --json` (protocol 1, `docs/cli-json.md` there) with **the uv the app
+  bundles**. `scripts/fetch-uv.sh` fetches a pinned uv release (0.12.15), checks it against the published sha256, and
+  puts it in `src-tauri/binaries/` before `tauri dev` and `tauri build` (`bundle.externalBin`). The app never uses a
+  uv found on the machine. uv is MIT OR Apache-2.0.
+- One run at a time, since GPU nodes are exclusive.
+
+Checked:
+- Rust tests, including the real CLI end to end through the bundled uv (set `PERCEPTION_REPO`): a synthetic clip
+  decoded, exported and imported.
+- The dialog in Chrome against a scripted stand-in (`?pipeline-demo` in browser mode, where Tauri is absent).
+
+Not yet:
+- choosing nodes and where each runs (the dialog runs a graph as its manifests place it);
+- duration estimates from measured runs;
+- the SSH backend;
+- the native window checked by hand.
+
 ## Also to sort out
 
 - Long films: per-frame samples in a binary sidecar (Parquet) instead of JSON (2 minutes of faces is ~14 MB of
   JSON); timeline performance at 2 hours.
 - Playback: webview codec support differs by platform; a re-encoded H.264 proxy when a video does not play.
 - Licences: academic-only layers carry a warning when exported or shared.
-- Distribution: macOS signing and notarisation, Windows build, auto-update, bundle schema migrations.
+- Distribution: macOS signing and notarisation (the bundled uv is signed with the app), Windows build (fetch-uv.sh
+  does not fetch the Windows .zip yet), auto-update, bundle schema migrations, packaging the pipeline itself.
 - Several annotators on one video: merging op logs, agreement statistics.

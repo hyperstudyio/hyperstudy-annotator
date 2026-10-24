@@ -241,6 +241,18 @@ fn count_corrections(conn: &Connection, bundle_id: &str) -> Result<usize> {
     Ok(n as usize)
 }
 
+// --- settings ---
+
+pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get(0)).optional()?)
+}
+
+pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute("INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 params![key, value])?;
+    Ok(())
+}
+
 // --- versions of one video, and carrying corrections over to a re-run ---
 
 /// When a bundle was made, as an instant: its manifest's created_at, or when it was imported if the manifest has
@@ -598,5 +610,15 @@ mod tests {
         assert_eq!(find_version(&conn, &v2, &v1_sha).unwrap().map(|b| b.id), Some(v1.clone()));
         assert!(find_version(&conn, &other, &v1_sha).unwrap().is_none());       // another video's bundle is not a run of it
         assert!(find_version(&conn, &v1, &v1_sha).unwrap().is_none());          // nor is the bundle itself
+    }
+
+    #[test]
+    fn a_setting_is_kept_and_replaced() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        assert_eq!(get_setting(&conn, "pipeline_folder").unwrap(), None);
+        set_setting(&conn, "pipeline_folder", "/a").unwrap();
+        set_setting(&conn, "pipeline_folder", "/b").unwrap();
+        assert_eq!(get_setting(&conn, "pipeline_folder").unwrap().as_deref(), Some("/b"));
     }
 }
