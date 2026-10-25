@@ -42,8 +42,9 @@ jobs:
 
           To run the perception pipeline from the app, clone hyperstudy-perception and choose its folder in Run pipeline.
           EOF
-          prerelease=$(case "$TAG" in *-*) echo --prerelease;; esac)
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag $prerelease \
+          flags=(--draft --verify-tag)
+          case "$TAG" in *-*) flags+=(--prerelease);; esac   # v0.1.0-beta.1 and the like
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
             --title "HyperStudy Annotator $TAG" --notes-file notes.md --generate-notes
 
   macos:

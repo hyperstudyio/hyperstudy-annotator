@@ -122,7 +122,7 @@ jobs:
           name: dmg-aarch64-apple-darwin
       - name: Stapled, accepted by Gatekeeper, and the app starts
         run: |
-          dmg=$(ls *.dmg)
+          dmg=$(ls ./*.dmg)
           xcrun stapler validate "$dmg"
           mount=$(hdiutil attach -nobrowse -readonly "$dmg" | tail -1 | cut -f3-)
           app="$mount/HyperStudy Annotator.app"
