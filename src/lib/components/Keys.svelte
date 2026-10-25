@@ -4,8 +4,10 @@
   // command line already finds (a private file, its own keychain entry) is said so and need not be entered again.
   import { keyRows, type CliKeys, type KeyStatus, type PipelineApi } from '../pipeline';
 
-  let { api, keys, cli, disabled = false, onchange }: {
+  let { api, keys, cli, disabled = false, onchange, onbusy }: {
     api: PipelineApi; keys: KeyStatus[]; cli: CliKeys | null; disabled?: boolean;
+    /** a key is being saved or removed (Start run waits: a run started now would race the key) */
+    onbusy: (busy: boolean) => void;
     /** the keys after an action, as the app answered (the plan's missing keys change with them) */
     onchange: (now: KeyStatus[]) => void;
   } = $props();
@@ -16,8 +18,8 @@
   const rows = $derived(keyRows(keys, cli));
 
   const act = async (label: string, f: () => Promise<KeyStatus[]>) => {
-    busy = label; error = null;
-    try { onchange(await f()); } catch (e) { error = String(e); } finally { busy = null; }
+    busy = label; error = null; onbusy(true);
+    try { onchange(await f()); } catch (e) { error = String(e); } finally { busy = null; onbusy(false); }
   };
   const save = (name: string, label: string) => {
     const value = drafts[name] ?? '';

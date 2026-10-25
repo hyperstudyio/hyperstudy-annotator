@@ -123,8 +123,6 @@ pub struct Keys {
     cache: Mutex<Option<std::result::Result<BTreeMap<String, String>, String>>>,
 }
 
-type Cache<'a> = std::sync::MutexGuard<'a, Option<std::result::Result<BTreeMap<String, String>, String>>>;
-
 impl Keys {
     pub fn new(store: Box<dyn Store>) -> Self {
         Keys { store, cache: Mutex::new(None) }
@@ -142,41 +140,52 @@ impl Keys {
 
     /// The cache, read on first use; `again`: also when the last read failed (the user is looking at the keys, and may
     /// have unlocked the keychain since). Commands do not read again: each read of a locked keychain would prompt.
-    fn loaded(&self, again: bool) -> Cache<'_> {
-        let mut cache = self.cache.lock().unwrap();
-        if cache.is_none() || (again && matches!(*cache, Some(Err(_)))) {
-            *cache = Some(self.read_all());
+    /// The keychain is read with the lock let go: a command never waits on it behind a save or a prompt.
+    fn loaded(&self, again: bool) -> std::result::Result<BTreeMap<String, String>, String> {
+        {
+            let cache = self.cache.lock().unwrap();
+            match cache.as_ref() {
+                Some(Ok(values)) => return Ok(values.clone()),
+                Some(Err(e)) if !again => return Err(e.clone()),
+                _ => {}
+            }
         }
-        cache
+        let read = self.read_all();
+        let mut cache = self.cache.lock().unwrap();
+        if !matches!(cache.as_ref(), Some(Ok(_))) {   // a save that finished meanwhile is kept
+            *cache = Some(read);
+        }
+        cache.as_ref().unwrap().clone()
     }
 
     pub fn status(&self) -> Result<Vec<KeyStatus>> {
-        let cache = self.loaded(true);
-        let values = cache.as_ref().unwrap().as_ref().map_err(|e| Error::Bundle(e.clone()))?;
+        let values = self.loaded(true).map_err(Error::Bundle)?;
         Ok(KNOWN.iter().map(|k| KeyStatus { name: k.name, label: k.label, purpose: k.purpose, url: k.url,
                                              stored: values.contains_key(k.name) }).collect())
     }
 
-    /// Store a key (one line, as pasted: surrounding space trimmed).
+    /// Store a key (one line, as pasted: surrounding space trimmed). The keychain is asked with no lock held.
     pub fn set(&self, name: &str, value: &str) -> Result<()> {
         let k = known(name)?;
         let value = value.trim();
         if value.is_empty() || value.lines().count() != 1 || value.chars().any(char::is_control) || value.len() > 4096 {
             return Err(Error::Bundle(format!("a {} key is one line of text", k.label)));
         }
-        let mut cache = self.loaded(true);
-        let values = cache.as_mut().unwrap().as_mut().map_err(|e| Error::Bundle(e.clone()))?;
+        self.loaded(true).map_err(Error::Bundle)?;
         self.store.set(name, value)?;
-        values.insert(name.to_string(), value.to_string());
+        if let Some(Ok(values)) = self.cache.lock().unwrap().as_mut() {
+            values.insert(name.to_string(), value.to_string());
+        }
         Ok(())
     }
 
     pub fn remove(&self, name: &str) -> Result<()> {
         known(name)?;
-        let mut cache = self.loaded(true);
-        let values = cache.as_mut().unwrap().as_mut().map_err(|e| Error::Bundle(e.clone()))?;
+        self.loaded(true).map_err(Error::Bundle)?;
         self.store.delete(name)?;
-        values.remove(name);
+        if let Some(Ok(values)) = self.cache.lock().unwrap().as_mut() {
+            values.remove(name);
+        }
         Ok(())
     }
 
@@ -184,8 +193,8 @@ impl Keys {
     /// optional (the CLI also finds keys in files and the environment, and the plan names any a step lacks), and the
     /// Keys row says why (`status`), so the pipeline runs on rather than every command failing.
     pub fn for_cli(&self) -> Secrets {
-        match self.loaded(false).as_ref().unwrap() {
-            Ok(values) => Secrets(values.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        match self.loaded(false) {
+            Ok(values) => Secrets(values.into_iter().collect()),
             Err(_) => Secrets::default(),
         }
     }
@@ -290,6 +299,29 @@ mod tests {
         assert_eq!(*store.0.lock().unwrap(), 1);   // one try (a locked keychain would prompt each time)
         let _ = keys.status();
         assert_eq!(*store.0.lock().unwrap(), 2);   // looking at the keys tries again (the user may have unlocked it)
+    }
+
+    #[test]
+    fn a_save_waiting_on_the_keychain_does_not_hold_up_a_command() {
+        // the keychain's answer held back (an unlock prompt the user has not answered yet)
+        struct Slow(Mutex<std::sync::mpsc::Receiver<()>>);
+        impl Store for Slow {
+            fn get(&self, _: &str) -> Result<Option<String>> { Ok(None) }
+            fn set(&self, _: &str, _: &str) -> Result<()> { self.0.lock().unwrap().recv().ok(); Ok(()) }
+            fn delete(&self, _: &str) -> Result<()> { Ok(()) }
+        }
+        let (release, held) = std::sync::mpsc::channel();
+        let keys = std::sync::Arc::new(Keys::new(Box::new(Slow(Mutex::new(held)))));
+        keys.for_cli();   // read once
+        let saving = { let keys = keys.clone(); std::thread::spawn(move || keys.set("HF_TOKEN", SECRET)) };
+        std::thread::sleep(std::time::Duration::from_millis(100));   // the save is waiting on the keychain now
+        let (done, answer) = std::sync::mpsc::channel();
+        { let keys = keys.clone(); std::thread::spawn(move || { done.send(keys.for_cli().0.len()).ok(); }); }
+        let got = answer.recv_timeout(std::time::Duration::from_secs(2));
+        release.send(()).unwrap();
+        saving.join().unwrap().unwrap();
+        assert_eq!(got, Ok(0), "a command waited on the keychain behind a save");
+        assert_eq!(keys.for_cli().0.len(), 1);   // and the saved key is there once the keychain answered
     }
 
     /// The real keychain, under a service of its own (never the app's): `cargo test -- --ignored real_keychain`. Not run

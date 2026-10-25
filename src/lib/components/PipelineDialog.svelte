@@ -21,6 +21,7 @@
   let machinesError = $state<string | null>(null);
   let olderPipeline = $state(false);   // it does not know `hosts` or `cloud`
   let machinesBusy = $state(false);    // a machine action under way: Start run waits for it
+  let keysBusy = $state(false);        // a key being saved or removed: Start run waits for it (the run would race the key)
   // the keys the app keeps (in the keychain: whether each is stored, never its value), and where the CLI finds keys on
   // its own (null: a pipeline from before `perception keys`)
   let keys = $state<KeyStatus[]>([]);
@@ -62,7 +63,7 @@
   const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy && !keysBusy);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -286,7 +287,7 @@
         {#if keys.length}<button onclick={() => (manageKeys = !manageKeys)} aria-expanded={manageKeys} aria-controls="keys" aria-label={manageKeys ? 'Done with keys' : 'Manage keys'} disabled={started}>{manageKeys ? 'Done' : 'Manage…'}</button>{/if}
       </div>
       {#if manageKeys}
-        <div class="machines-row" id="keys"><Keys {api} {keys} cli={cliKeys} disabled={started} onchange={keysChanged} /></div>
+        <div class="machines-row" id="keys"><Keys {api} {keys} cli={cliKeys} disabled={started} onchange={keysChanged} onbusy={(b) => (keysBusy = b)} /></div>
       {/if}
       {/if}
       {#if graph !== FULL_GRAPH}

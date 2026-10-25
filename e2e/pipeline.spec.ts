@@ -435,3 +435,20 @@ test('a pipeline from before `perception keys` has the app\'s keys and says noth
   await expect(dialog.getByText('Not set: RunPod, Anthropic, Hugging Face')).toBeVisible();
   await expect(dialog.getByText(/the pipeline's keys/)).toHaveCount(0);
 });
+
+
+test('a run cannot start while a key is being saved', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await page.evaluate(() => { const g = globalThis as { __holdKey?: Promise<void>; __releaseKey?: () => void };
+    g.__holdKey = new Promise((r) => { g.__releaseKey = r; }); });
+  await dialog.getByRole('button', { name: 'Manage keys' }).click();
+  const runpod = dialog.getByRole('region', { name: 'Keys' }).getByRole('listitem', { name: 'RunPod' });
+  await runpod.getByRole('textbox', { name: 'RunPod key' }).fill('rp-test-0123456789');
+  await runpod.getByRole('button', { name: 'Save' }).click();
+  await expect(dialog.getByText('Saving the RunPod key…')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();   // a run now would race the key
+  await page.evaluate(() => (globalThis as { __releaseKey?: () => void }).__releaseKey!());
+  await expect(runpod).toContainText('Stored in the keychain');
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
