@@ -5,13 +5,21 @@
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
+  import Machines from './Machines.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    settingsFor, spendingCap, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
+    settingsFor, spendingCap, totalEstimate, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
   let folder = $state<string | null>(null);
   let doctor = $state<Doctor | null>(null);
+  // other machines steps can run on (null: this pipeline predates them, perception #15/#16)
+  let hosts = $state<Host[] | null>(null);
+  let cloud = $state<CloudStatus | null>(null);
+  let manage = $state(false);
+  let machinesError = $state<string | null>(null);
+  let olderPipeline = $state(false);   // it does not know `hosts` or `cloud`
+  let machinesBusy = $state(false);    // a machine action under way: Start run waits for it
   let graphs = $state<GraphPreset[]>([]);
   let graph = $state<string | null>(null);
   let video = $state<string | null>(null);
@@ -47,7 +55,7 @@
   const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -84,6 +92,7 @@
     folder = await api.folder();
     if (!folder) return;
     [doctor, graphs] = await Promise.all([api.doctor(), api.graphs()]);
+    await loadMachines();
     if (graphs.some((g) => g.file === FULL_GRAPH)) graph = FULL_GRAPH;   // features are picked from it
   });
   $effect(() => { loadFolder(); return () => stop?.(); });
@@ -93,6 +102,7 @@
     if (!path) return;
     doctor = await api.setFolder(path);
     folder = path;
+    await loadMachines();
     // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
     // flight from the old one is superseded too)
     graph = null; plan = null; places = {}; wanted = null; ticked = {}; settings = {}; open = null;
@@ -100,6 +110,47 @@
     graphs = await api.graphs();
     if (graphs.some((g) => g.file === FULL_GRAPH)) await chooseGraph(FULL_GRAPH);
   });
+  // a pipeline from before other machines does not know the commands (argparse: invalid choice): the row says so; any
+  // other failure is said on the row as it is, with the machines last known kept
+  const loadMachines = async () => {
+    machinesError = null; olderPipeline = false;
+    const [h, c] = await Promise.allSettled([api.hosts(), api.cloud()]);
+    const older = (r: PromiseSettledResult<unknown>, cmd: string) => r.status === 'rejected' && new RegExp(`invalid choice: '${cmd}'`).test(String(r.reason));
+    // each on its own: a pipeline can have lab servers (perception #15) before the cloud (#16)
+    if (h.status === 'fulfilled') hosts = h.value;
+    else if (older(h, 'hosts')) { hosts = null; manage = false; olderPipeline = true; }
+    if (c.status === 'fulfilled') cloud = c.value;
+    else if (older(c, 'cloud')) cloud = null;
+    machinesError = [h, c].filter((r) => r.status === 'rejected' && !older(r, 'hosts') && !older(r, 'cloud'))
+      .map((r) => String((r as PromiseRejectedResult).reason)).join('; ') || null;
+  };
+  // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps). A
+  // step placed on a machine that is gone, or is now another machine (a name given a new address or folder), goes back
+  // to this machine, and the agreement its place gave goes with it: choosing the machine again is a new choice.
+  const machineId = (h: Host) => `${h.dest} ${h.root}`;
+  const machinesChanged = async (now: { hosts?: Host[]; cloud?: CloudStatus }) => {
+    const before = new Map((hosts ?? []).map((h) => [`ssh-${h.name}`, machineId(h)]));
+    if (now.hosts) hosts = now.hosts;
+    if (now.cloud) cloud = now.cloud;
+    if (started) return;   // a run has its places already
+    // each place still offered: the same machine, with that accelerator (a check may find a GPU gone)
+    const offered = (place: string) => {
+      const [backend, accelerator] = place.split(':');
+      if (backend === 'native' || backend === 'self') return true;
+      if (backend === 'cloud') return !!cloud?.enabled;
+      const h = (hosts ?? []).find((x) => `ssh-${x.name}` === backend);
+      return !!h && before.get(backend) === machineId(h) && h.caps.accelerators.includes(accelerator);
+    };
+    const gone = Object.entries(places).filter(([, p]) => !offered(p)).map(([n]) => n);
+    if (gone.length) {
+      places = Object.fromEntries(Object.entries(places).filter(([n]) => !gone.includes(n)));
+      ticked = Object.fromEntries(Object.entries(ticked).filter(([n]) => !gone.includes(n)));
+    }
+    await makePlan(true);
+  };
+  const machinesText = $derived(olderPipeline ? 'This machine only (this pipeline cannot run steps elsewhere: update hyperstudy-perception)'
+    : [doctor?.platform.startsWith('darwin') ? 'This Mac' : 'This machine', ...(hosts ?? []).map((h) => `${h.name} (SSH)`),
+       cloud?.enabled ? 'Cloud GPU' : null].filter(Boolean).join(', '));
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
@@ -194,6 +245,15 @@
         {#if video}<span class="file" title={video}>{name(video)}</span>{:else}<span class="muted">None chosen</span>{/if}
         <button onclick={chooseVideo} disabled={started}>{video ? 'Change…' : 'Choose…'}</button>
       </div>
+      <span class="label">Machines</span>
+      <div class="value">
+        <span>{machinesText}</span>
+        {#if machinesError}<span class="error">{machinesError}</span>{/if}
+        {#if hosts !== null}<button onclick={() => (manage = !manage)} aria-expanded={manage} aria-controls="machines" disabled={started}>{manage ? 'Done' : 'Manage…'}</button>{/if}
+      </div>
+      {#if manage && hosts !== null}
+        <div class="machines-row" id="machines"><Machines {api} {hosts} {cloud} disabled={started} onchange={machinesChanged} onbusy={(b) => (machinesBusy = b)} /></div>
+      {/if}
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
       <div class="value graphs">
@@ -339,6 +399,7 @@
   /* setup: what goes in (a video, a graph), label and value side by side */
   .setup { display: grid; grid-template-columns: 64px 1fr; gap: 12px 14px; align-items: baseline; padding: 4px 20px 18px; }
   .label { color: var(--color-text-muted); }
+  .machines-row { grid-column: 1 / -1; }
   .value { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .file { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .graphs { flex-direction: column; align-items: flex-start; gap: 6px; }

@@ -250,3 +250,154 @@ test('moving a step back to this machine sends nothing', async ({ page }) => {
   const [ran] = await runs(page);
   expect(ran.allow.uploads).toEqual({});
 });
+
+// --- managing the other machines from the app ------------------------------------------------------------------------
+
+test('the machines steps can run on are listed, and adding a lab server adds its place to the step menus', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await expect(dialog.getByText('This Mac, lab (SSH), Cloud GPU')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await expect(machines.getByRole('listitem', { name: 'lab' })).toContainText('Linux, 32 cores, 252 GB, NVIDIA GPU (48 GB)');
+  await machines.getByLabel('Name').fill('gpu2');
+  await machines.getByLabel('SSH destination').fill('you@gpu2.example.edu');
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByRole('listitem', { name: 'gpu2' })).toBeVisible();
+  await expect(dialog.getByText('This Mac, lab (SSH), gpu2 (SSH), Cloud GPU')).toBeVisible();
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await expect(menu.getByRole('option', { name: /NVIDIA GPU on gpu2 \(SSH\)/ })).toHaveCount(1);
+  await expect(machines.getByLabel('Name')).toHaveValue('');          // the form is ready for the next one
+});
+
+test('removing a lab server or turning the cloud off takes its place out of the menus', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove' }).click();
+  await expect(menu.getByRole('option', { name: /on lab/ })).toHaveCount(0);
+  await expect(machines.getByText(/^On: AWS g6\.2xlarge, NVIDIA L4, \$0\.98 an hour/)).toBeVisible();
+  await machines.getByRole('button', { name: 'Turn off' }).click();
+  await expect(menu.getByRole('option', { name: /Cloud GPU/ })).toHaveCount(0);
+  await expect(dialog.getByText('This Mac', { exact: true })).toBeVisible();
+  await expect(machines.getByRole('button', { name: 'Turn on' })).toBeVisible();
+});
+
+test('a step on a lab server that is then removed goes back to this machine, and nothing is agreed for it', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove' }).click();
+  await expect(menu).toHaveValue('native:mps');
+  // added again under the same name (perhaps another machine): choosing it is a new choice, not the old one
+  await machines.getByLabel('Name').fill('lab');
+  await machines.getByLabel('SSH destination').fill('you@another-lab.example.edu');
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByRole('listitem', { name: 'lab' })).toBeVisible();
+  await expect(menu).toHaveValue('native:mps');
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.places).toEqual({});
+  expect(ran.allow.uploads).toEqual({});
+});
+
+test('a lab server name already listed cannot be added over: another machine under that name is a new choice', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByLabel('Name').fill('lab');
+  await machines.getByLabel('SSH destination').fill('you@another-lab.example.edu');
+  await expect(machines.getByRole('button', { name: 'Add' })).toBeDisabled();
+  await expect(machines.getByText(/lab is already a lab server here: remove it first/)).toBeVisible();
+});
+
+test('a step on a lab server whose name now leads to another machine goes back to this machine', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await page.evaluate(() => { (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere = true; });   // re-added with the CLI
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Check' }).click();
+  await expect(machines.getByRole('listitem', { name: 'lab' })).toContainText('you@another-lab.example.edu');
+  await expect(menu).toHaveValue('native:mps');                      // the name is the same; the machine is not
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.places).toEqual({});
+  expect(ran.allow.uploads).toEqual({});
+});
+
+test('a run cannot start while a machine is being cleaned or removed', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' }).selectOption('ssh-lab:cuda');
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await page.evaluate(() => { const g = globalThis as { __holdHost?: Promise<void>; __release?: () => void };
+    g.__holdHost = new Promise((r) => { g.__release = r; }); });
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Clean lab' }).click();
+  await expect(dialog.getByText('Cleaning lab…')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
+  await page.evaluate(() => (globalThis as { __release?: () => void }).__release!());
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+test('a step on a lab server found without its GPU goes back to this machine', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await menu.selectOption('ssh-lab:cuda');
+  await page.evaluate(() => { (globalThis as { __gpuGone?: boolean }).__gpuGone = true; });
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Check lab' }).click();
+  await expect(dialog.getByRole('listitem', { name: 'lab' })).toContainText('no GPU');
+  await expect(menu).toHaveValue('native:mps');                      // the plan still stands, on this machine
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+test('a lab server that cannot be reached is not added, and says why', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByLabel('Name').fill('far');
+  await machines.getByLabel('SSH destination').fill('you@unreachable.example.edu');
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByText(/could not reach you@unreachable\.example\.edu/)).toBeVisible();
+  await expect(machines.getByRole('listitem', { name: 'far' })).toHaveCount(0);
+  await expect(machines.getByLabel('Name')).toHaveValue('far');       // kept, to correct
+});
+
+test('a pipeline from before other machines says so and offers nothing to manage', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=old-cli');
+  await expect(dialog.getByText(/This machine only \(this pipeline cannot run steps elsewhere/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Manage…' })).toHaveCount(0);
+});
+
+test('a failure listing the machines is said as it is, not taken for an older pipeline', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=machines-error');
+  await expect(dialog.getByText(/PermissionError: hosts\.json/)).toBeVisible();
+  await expect(dialog.getByText(/cannot run steps elsewhere/)).toHaveCount(0);
+});
+
+test('lab servers are offered by a pipeline that cannot start cloud machines yet', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=no-cloud');
+  await expect(dialog.getByText('This Mac', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await expect(dialog.getByText(/cannot start cloud machines yet/)).toBeVisible();
+  await expect(dialog.getByRole('region', { name: 'Machines' }).getByLabel('SSH destination')).toBeVisible();
+});
+
+test('in a narrow window the machines fit without scrolling sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 420, height: 900 });
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByLabel('Name').fill('gpu17');
+  await machines.getByLabel('SSH destination').fill('firstname.lastname@gpu-node-17.psych.example.edu');   // a long one
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByRole('listitem', { name: 'gpu17' })).toBeVisible();
+  const overflow = await dialog.evaluate((d) => d.scrollWidth - d.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+});

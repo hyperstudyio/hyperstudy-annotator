@@ -1,6 +1,6 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
-import type { Doctor, GraphPreset, Plan, PipelineApi, PipelineMessage } from './pipeline';
+import type { CloudStatus, Doctor, GraphPreset, Host, Plan, PipelineApi, PipelineMessage } from './pipeline';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,
@@ -61,15 +61,19 @@ const twoPlaces = (faces: Plan['nodes'][number], cpu: boolean) => ({ ...faces, o
 const LAB = 'lab (SSH)', CLOUD = 'Cloud GPU (AWS L4)';
 const remotePlaces = { 'native:mps': { title: 'This machine', remote: false, accelerator: 'mps' }, 'native:cpu': { title: 'This machine', remote: false, accelerator: 'cpu' },
   'ssh-lab:cuda': { title: LAB, remote: true, accelerator: 'cuda' }, 'cloud:cuda': { title: CLOUD, remote: true, accelerator: 'cuda' } };
-function remote(n: Plan['nodes'][number], place: string | undefined): Plan['nodes'][number] {
+const labHost = (name: string, dest: string): Host => ({ name, dest, root: `/home/you/.cache/hyperstudy-perception`, probed_at: 1792800000,
+  caps: { platform: 'linux/amd64', cpu_cores: 32, memory_gb: 251.6, accelerators: ['cpu', 'cuda'], vram_gb: 47.5, tools: { uv: '/home/you/.local/bin/uv', ffmpeg: '/usr/bin/ffmpeg', ffprobe: '/usr/bin/ffprobe' } } });
+function remote(n: Plan['nodes'][number], place: string | undefined, hosts: Host[] = [labHost('lab', 'you@lab')], cloudOn = true): Plan['nodes'][number] {
   if (n.id !== 'faces') return { ...n, upload_to: n.service ?? null, estimates: n.estimates ?? Object.fromEntries((n.options ?? []).map((o) => [o, { estimate_s: n.estimate_s ?? null, estimate_basis: n.estimate_basis ?? '', cost_usd: 0, uploads: n.uploads, upload_to: n.service ?? null }])) };
   const sent = ['faces', 'transcript', 'video'];
-  const estimates = {
+  const estimates: Record<string, { estimate_s: number | null; estimate_basis: string; cost_usd: number; uploads: string[]; upload_to: string | null }> = {
     'native:mps': { estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here', cost_usd: 0, uploads: [], upload_to: null },
-    'ssh-lab:cuda': { estimate_s: null, estimate_basis: 'no runs of vision.face-track@1.0.0 on ssh-lab:cuda here yet', cost_usd: 0, uploads: sent, upload_to: LAB },
-    'cloud:cuda': { estimate_s: null, estimate_basis: 'no runs of vision.face-track@1.0.0 on cloud:cuda here yet', cost_usd: 0.4888, uploads: sent, upload_to: CLOUD },
+    ...Object.fromEntries(hosts.map((h) => [`ssh-${h.name}:cuda`, { estimate_s: null, estimate_basis: `no runs of vision.face-track@1.0.0 on ssh-${h.name}:cuda here yet`, cost_usd: 0, uploads: sent, upload_to: `${h.name} (SSH)` }])),
+    ...(cloudOn ? { 'cloud:cuda': { estimate_s: null, estimate_basis: 'no runs of vision.face-track@1.0.0 on cloud:cuda here yet', cost_usd: 0.4888, uploads: sent, upload_to: CLOUD } } : {}),
   };
-  const at = place && place in estimates ? place as keyof typeof estimates : 'native:mps';
+  // a place it cannot run (a machine since removed) is refused, as the CLI refuses it
+  if (place && !(place in estimates)) throw new Error(`the pipeline cannot plan this: ${place} is not one of the places faces can run`);
+  const at = place ?? 'native:mps';
   const e = estimates[at];
   return { ...n, options: Object.keys(estimates), place: at, where: at.replace(':', ' (') + ')', estimates, estimate_s: e.estimate_s, estimate_basis: e.estimate_basis,
     cost_usd: e.cost_usd, uploads: e.uploads, upload_to: e.upload_to };
@@ -97,10 +101,14 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `runs` records each run's arguments, for tests. */
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false } = {},
+ *  server or a cloud GPU (perception #15/#16). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `runs` records each run's arguments, for tests. */
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
   let folder: string | null = null;
+  // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
+  let hosts: Host[] = remote_ ? [labHost('lab', 'you@lab')] : [];
+  const cloud: CloudStatus = { enabled: remote_, machine: 'AWS g6.2xlarge, NVIDIA L4', region: 'us-east-1', hourly_usd: 0.9776 };
+  const older = (cmd = 'hosts') => { if (oldCli || (cmd === 'cloud' && noCloud)) throw new Error(`the pipeline failed: perception: error: argument cmd: invalid choice: '${cmd}'`); };
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
   return {
@@ -114,10 +122,10 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       const nodes = plan.nodes.map((n) => n.id === 'captions' ? { ...n, cost_usd: opus ? 6.24 : 0.156,
         settings: n.settings!.map((x) => x.key === 'model' ? { ...x, value: opus ? 'claude-opus-5-5' : 'claude-haiku-5-5' } : x) }
         : n.id === 'faces' && twoPlaces_ ? twoPlaces(n, places.faces === 'native:cpu') : n)
-        .map((n) => remote_ ? remote(n, places[n.id]) : n);
+        .map((n) => remote_ ? remote(n, places[n.id], hosts, cloud.enabled) : n);
       const all = summary ? [...nodes, { id: 'summary', needs: ['captions'], title: 'Summary', uses: 'test.summary@1.0.0', where: 'native (cpu)', why_not: '', cached: false,
         downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:cpu', options: ['native:cpu'], estimate_s: 3, estimate_basis: '' }] : nodes;
-      const extra = remote_ ? { places: remotePlaces, max_cost_usd: 0.5, estimated_usd: all.reduce((a, n) => a + (n.cached ? 0 : n.cost_usd), 0) } : {};
+      const extra = remote_ ? { places: { ...remotePlaces, ...Object.fromEntries(hosts.map((h) => [`ssh-${h.name}:cuda`, { title: `${h.name} (SSH)`, remote: true, accelerator: 'cuda' }])) }, max_cost_usd: 0.5, estimated_usd: all.reduce((a, n) => a + (n.cached ? 0 : n.cost_usd), 0) } : {};
       return { ...plan, ...extra, nodes: noNeeds ? all.map(({ needs: _, ...n }) => n) : all };
     },
     async run(_graph, _video, allow, places, only, _settings, maxCostUsd, on) {
@@ -134,6 +142,23 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       listener?.(run ? { v: 1, type: 'run.finished', run, status: 'canceled' }
         : { v: 1, type: 'error', problems: ['the pipeline ended without finishing the run (stopped)'] });
     },
+    async hosts() { older(); if (machinesError) throw new Error('the pipeline failed: PermissionError: hosts.json'); return hosts; },
+    async host(action, name, dest) {
+      older();
+      // a test can hold an action open (a clean or a check over a slow link)
+      await (globalThis as { __holdHost?: Promise<void> }).__holdHost;
+      if (action === 'add') {
+        if (!dest || dest.includes('unreachable')) throw new Error(`could not reach ${dest} (ssh exit 255): ssh: connect to host ${dest} port 22: Operation timed out`);
+        hosts = [...hosts.filter((h) => h.name !== name), labHost(name, dest)];   // as the CLI does: an existing name is replaced
+      } else if (action === 'remove') hosts = hosts.filter((h) => h.name !== name);
+      // a test can have the host re-added elsewhere under the same name (with the CLI), which a check then finds
+      else if (action === 'check' && (globalThis as { __gpuGone?: boolean }).__gpuGone)
+        hosts = hosts.map((h) => h.name === name ? { ...h, caps: { ...h.caps, accelerators: ['cpu'], vram_gb: 0 } } : h);
+      else if (action === 'check' && (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere)
+        hosts = hosts.map((h) => h.name === name ? labHost(name, 'you@another-lab.example.edu') : h);
+      return hosts;
+    },
+    async cloud(on) { older('cloud'); if (on !== undefined) cloud.enabled = on; return { ...cloud }; },
     pickFolder: async () => '/Users/you/Github/hyperstudy-perception',
     pickVideo: async () => '/videos/clip.mp4',
   };
