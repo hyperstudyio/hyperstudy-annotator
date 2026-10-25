@@ -5,9 +5,10 @@
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
+  import Keys from './Keys.svelte';
   import Machines from './Machines.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    settingsFor, spendingCap, totalEstimate, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
+    settingsFor, spendingCap, totalEstimate, keyRows, keysText, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
@@ -20,6 +21,13 @@
   let machinesError = $state<string | null>(null);
   let olderPipeline = $state(false);   // it does not know `hosts` or `cloud`
   let machinesBusy = $state(false);    // a machine action under way: Start run waits for it
+  let keysBusy = $state(false);        // a key being saved or removed: Start run waits for it (the run would race the key)
+  // the keys the app keeps (in the keychain: whether each is stored, never its value), and where the CLI finds keys on
+  // its own (null: a pipeline from before `perception keys`)
+  let keys = $state<KeyStatus[]>([]);
+  let cliKeys = $state<CliKeys | null>(null);
+  let manageKeys = $state(false);
+  let keysError = $state<string | null>(null);
   let graphs = $state<GraphPreset[]>([]);
   let graph = $state<string | null>(null);
   let video = $state<string | null>(null);
@@ -55,7 +63,7 @@
   const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy && !keysBusy);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -92,7 +100,7 @@
     folder = await api.folder();
     if (!folder) return;
     [doctor, graphs] = await Promise.all([api.doctor(), api.graphs()]);
-    await loadMachines();
+    await Promise.all([loadMachines(), loadKeys()]);
     if (graphs.some((g) => g.file === FULL_GRAPH)) graph = FULL_GRAPH;   // features are picked from it
   });
   $effect(() => { loadFolder(); return () => stop?.(); });
@@ -102,7 +110,7 @@
     if (!path) return;
     doctor = await api.setFolder(path);
     folder = path;
-    await loadMachines();
+    await Promise.all([loadMachines(), loadKeys()]);
     // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
     // flight from the old one is superseded too)
     graph = null; plan = null; places = {}; wanted = null; ticked = {}; settings = {}; open = null;
@@ -123,6 +131,23 @@
     else if (older(c, 'cloud')) cloud = null;
     machinesError = [h, c].filter((r) => r.status === 'rejected' && !older(r, 'hosts') && !older(r, 'cloud'))
       .map((r) => String((r as PromiseRejectedResult).reason)).join('; ') || null;
+  };
+  // the keychain's answer and the CLI's, each on its own. A pipeline from before `perception keys` does not know the
+  // command (argparse: invalid choice), and has only the app's keys; any other failure is said on the row as it is
+  const loadKeys = async () => {
+    keysError = null;
+    const [k, c] = await Promise.allSettled([api.keys(), api.cliKeys()]);
+    if (k.status === 'fulfilled') keys = k.value;
+    const olderCli = c.status === 'rejected' && /invalid choice: 'keys'/.test(String(c.reason));
+    cliKeys = c.status === 'fulfilled' ? c.value : null;
+    keysError = [k.status === 'rejected' ? `the keychain: ${k.reason}` : null,
+                 c.status === 'rejected' && !olderCli ? `the pipeline's keys: ${c.reason}` : null].filter(Boolean).join('; ') || null;
+  };
+  const keysText_ = $derived(keysText(keyRows(keys, cliKeys)));
+  // a key stored or removed: what steps are missing changes, so plan again (keeping the choices)
+  const keysChanged = async (now: KeyStatus[]) => {
+    keys = now;
+    if (plan && !started) await makePlan(true);
   };
   // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps). A
   // step placed on a machine that is gone, or is now another machine (a name given a new address or folder), goes back
@@ -249,10 +274,21 @@
       <div class="value">
         <span>{machinesText}</span>
         {#if machinesError}<span class="error">{machinesError}</span>{/if}
-        {#if hosts !== null}<button onclick={() => (manage = !manage)} aria-expanded={manage} aria-controls="machines" disabled={started}>{manage ? 'Done' : 'Manage…'}</button>{/if}
+        {#if hosts !== null}<button onclick={() => (manage = !manage)} aria-expanded={manage} aria-controls="machines" aria-label={manage ? 'Done with machines' : 'Manage machines'} disabled={started}>{manage ? 'Done' : 'Manage…'}</button>{/if}
       </div>
       {#if manage && hosts !== null}
         <div class="machines-row" id="machines"><Machines {api} {hosts} {cloud} disabled={started} onchange={machinesChanged} onbusy={(b) => (machinesBusy = b)} /></div>
+      {/if}
+      {#if keys.length || keysError}
+      <span class="label">Keys</span>
+      <div class="value">
+        <span>{keysText_}</span>
+        {#if keysError}<span class="error">{keysError}</span>{/if}
+        {#if keys.length}<button onclick={() => (manageKeys = !manageKeys)} aria-expanded={manageKeys} aria-controls="keys" aria-label={manageKeys ? 'Done with keys' : 'Manage keys'} disabled={started}>{manageKeys ? 'Done' : 'Manage…'}</button>{/if}
+      </div>
+      {#if manageKeys}
+        <div class="machines-row" id="keys"><Keys {api} {keys} cli={cliKeys} disabled={started} onchange={keysChanged} onbusy={(b) => (keysBusy = b)} /></div>
+      {/if}
       {/if}
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>

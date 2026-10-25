@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, type Plan, type PlanNode, type PipelineMessage, type Setting, type Ticked } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysText, type Plan, type PlanNode, type PipelineMessage, type Setting, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -271,4 +271,15 @@ test('a run\'s spending cap covers the graph\'s APIs and each cloud machine a st
   // nor does a price for a place on this machine
   const here = decodeNode({ estimates: { 'native:cpu': { estimate_s: null, estimate_basis: '', cost_usd: 2, uploads: [], upload_to: null } } });
   expect(spendingCap(planOf(here), ['decode'])).toBe(0.5);
+});
+
+
+test('a key the command line already finds is said so, and one the app holds needs nothing more', () => {
+  const k = (name: string, label: string, stored: boolean) => ({ name, label, purpose: '', url: '', stored });
+  const keys = [k('RUNPOD_API_KEY', 'RunPod', true), k('ANTHROPIC_API_KEY', 'Anthropic', false), k('HF_TOKEN', 'Hugging Face', false)];
+  const cli = { keys: [{ name: 'HF_TOKEN', source: '~/.config/hyperstudy/hf.env' }, { name: 'RUNPOD_API_KEY', source: 'environment' }], problems: [] };
+  const rows = keyRows(keys, cli);
+  expect(rows.map((r) => r.elsewhere)).toEqual([null, null, '~/.config/hyperstudy/hf.env']);   // the app's own wins
+  expect(keysText(rows)).toBe('Set: RunPod, Hugging Face. Not set: Anthropic');
+  expect(keysText(keyRows(keys, null))).toBe('Set: RunPod. Not set: Anthropic, Hugging Face');   // a pipeline from before `keys`
 });

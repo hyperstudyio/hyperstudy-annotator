@@ -48,6 +48,12 @@ export interface Host {
 }
 /** Whether a cloud GPU is offered to nodes that can use one (`perception cloud`), the machine and its price. */
 export interface CloudStatus { enabled: boolean; machine: string; region: string; hourly_usd: number }
+/** A key the app keeps for the pipeline (in the system keychain): what it is for and whether one is stored. The app
+ *  never sends a key's value to this page. */
+export interface KeyStatus { name: string; label: string; purpose: string; url: string; stored: boolean }
+/** Where the CLI finds keys without the app's (`perception keys list`: names and sources, never values), and the key
+ *  files it refused. */
+export interface CliKeys { keys: { name: string; source: string }[]; problems: string[] }
 export type HostAction = 'add' | 'check' | 'remove' | 'clean';
 export interface Doctor {
   platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number;
@@ -75,6 +81,12 @@ export interface PipelineApi {
   host(action: HostAction, name: string, dest?: string, root?: string): Promise<Host[]>;
   /** The cloud GPU's status, or (with `on`) turn it on or off (perception #16). */
   cloud(on?: boolean): Promise<CloudStatus>;
+  /** The keys the app keeps, stored or not (never their values); store one, or remove it. */
+  keys(): Promise<KeyStatus[]>;
+  setKey(name: string, value: string): Promise<KeyStatus[]>;
+  removeKey(name: string): Promise<KeyStatus[]>;
+  /** Where the CLI finds keys on its own (perception #24); a pipeline from before it rejects this. */
+  cliKeys(): Promise<CliKeys>;
   plan(graph: string, video: string, places: Places, settings: Settings): Promise<Plan>;
   /** Start a run; `on` receives its messages until `imported` or `error`. Resolves to a function that stops listening.
    *  The app checks the consent again against a fresh plan before it starts. */
@@ -349,6 +361,19 @@ export function totalEstimate(plan: Plan): { seconds: number; fastest: number; u
            unknown: running.filter((n) => n.estimate_s == null).map((n) => n.id) };
 }
 
+/** Each key the app keeps, with where the CLI would find it otherwise (a file, the environment, its own keychain
+ *  entry) when the app holds none: a key already set up for the command line need not be entered again. */
+export function keyRows(keys: KeyStatus[], cli: CliKeys | null): (KeyStatus & { elsewhere: string | null })[] {
+  return keys.map((k) => ({ ...k, elsewhere: k.stored ? null : cli?.keys.find((c) => c.name === k.name)?.source ?? null }));
+}
+
+/** The Keys row's line: which keys the pipeline has (from the app or elsewhere), and which it has none of. */
+export function keysText(rows: ReturnType<typeof keyRows>): string {
+  const have = rows.filter((r) => r.stored || r.elsewhere).map((r) => r.label);
+  const missing = rows.filter((r) => !r.stored && !r.elsewhere).map((r) => r.label);
+  return [have.length ? `Set: ${have.join(', ')}` : null, missing.length ? `Not set: ${missing.join(', ')}` : null].filter(Boolean).join('. ');
+}
+
 export async function tauriPipeline(): Promise<PipelineApi> {
   const { invoke } = await import('@tauri-apps/api/core');
   const { listen } = await import('@tauri-apps/api/event');
@@ -361,6 +386,10 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     hosts: async () => (await invoke<{ hosts: Host[] }>('pipeline_hosts')).hosts,
     host: async (action, name, dest, root) => (await invoke<{ hosts: Host[] }>('pipeline_host', { action, name, dest, root })).hosts,
     cloud: (on) => invoke<CloudStatus>('pipeline_cloud', { on }),
+    keys: () => invoke<KeyStatus[]>('keys_status'),
+    setKey: (name, value) => invoke<KeyStatus[]>('key_set', { name, value }),
+    removeKey: (name) => invoke<KeyStatus[]>('key_remove', { name }),
+    cliKeys: () => invoke<CliKeys>('pipeline_keys'),
     plan: (graph, video, places, settings) => invoke<Plan>('pipeline_plan', { graph, video, places, settings }),
     async run(graph, video, allow, places, only, settings, maxCostUsd, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed

@@ -1,6 +1,6 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
-import type { CloudStatus, Doctor, GraphPreset, Host, Plan, PipelineApi, PipelineMessage } from './pipeline';
+import type { CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage } from './pipeline';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,
@@ -101,12 +101,20 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `runs` records each run's arguments, for tests. */
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false } = {},
+ *  server or a cloud GPU (perception #15/#16). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `runs` records each run's arguments, for tests. */
+const KEYS = [
+  { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods (Machines)', url: 'https://console.runpod.io/user/settings' },
+  { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
+  { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
+];
+
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
   let folder: string | null = null;
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
   let hosts: Host[] = remote_ ? [labHost('lab', 'you@lab')] : [];
+  const stored = new Map<string, string>();
+  const keyStatus = (): KeyStatus[] => KEYS.map((k) => ({ ...k, stored: stored.has(k.name) }));
   const cloud: CloudStatus = { enabled: remote_, machine: 'AWS g6.2xlarge, NVIDIA L4', region: 'us-east-1', hourly_usd: 0.9776 };
   const older = (cmd = 'hosts') => { if (oldCli || (cmd === 'cloud' && noCloud)) throw new Error(`the pipeline failed: perception: error: argument cmd: invalid choice: '${cmd}'`); };
   let listener: ((m: PipelineMessage) => void) | null = null;
@@ -159,6 +167,17 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       return hosts;
     },
     async cloud(on) { older('cloud'); if (on !== undefined) cloud.enabled = on; return { ...cloud }; },
+    // the app's keychain: names and whether stored (values are kept here only to check none reaches the page)
+    async keys() { return keyStatus(); },
+    async setKey(name, value) {
+      if (!KEYS.some((k) => k.name === name)) throw new Error(`not a key the app keeps: "${name}"`);
+      if (!value.trim()) throw new Error('a key is one line of text');
+      await (globalThis as { __holdKey?: Promise<void> }).__holdKey;   // tests: the keychain's answer held back
+      stored.set(name, value.trim());
+      return keyStatus();
+    },
+    async removeKey(name) { stored.delete(name); return keyStatus(); },
+    async cliKeys() { older('keys'); if (keysError) throw new Error('the pipeline failed: PermissionError: keys.json'); return { keys: [{ name: 'HF_TOKEN', source: '~/.config/hyperstudy/bakeoff.env' }], problems: [] }; },
     pickFolder: async () => '/Users/you/Github/hyperstudy-perception',
     pickVideo: async () => '/videos/clip.mp4',
   };
