@@ -1,5 +1,5 @@
-# Signed, notarized macOS DMGs of the annotator, for Apple silicon and Intel: called by release.yml for a tag, or run by
-# hand on any branch to try a release without publishing anything (upload off).
+# Signed, notarized macOS DMGs of the annotator, for Apple silicon and Intel: called by release.yml for a tag. Run by
+# hand, or on a pull request that changes how releases are made, it does all of it without publishing anything.
 #
 # Secrets (the same as hyperstudy-bridge's): APPLE_CERTIFICATE (the Developer ID Application certificate and key, a
 # base64 .p12), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY ("Developer ID Application: ..."), APPLE_ID,
@@ -7,11 +7,18 @@
 name: macOS release
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/release*.yml
+      - scripts/notarize-dmg.sh
+      - scripts/fetch-uv.sh
+      - src-tauri/tauri.macos.conf.json
+      - src-tauri/entitlements.plist
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version, as in tauri.conf.json with a v (e.g. v0.0.1)'
-        required: true
+        description: 'Version, as in tauri.conf.json with a v (e.g. v0.0.1); empty: that version'
+        required: false
         type: string
   workflow_call:
     inputs:
@@ -37,7 +44,7 @@ jobs:
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     env:
-      VERSION: ${{ inputs.version }}
+      VERSION: ${{ inputs.version }}   # empty on a pull request: the app's own (below)
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
@@ -45,9 +52,11 @@ jobs:
           persist-credentials: false
       - name: The version is the app's
         run: |
-          printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version: $VERSION" >&2; exit 1; }
           app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          VERSION=${VERSION:-v$app}
+          printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version: $VERSION" >&2; exit 1; }
           [ "v$app" = "$VERSION" ] || { echo "tauri.conf.json says $app, not ${VERSION#v}: bump it first" >&2; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -103,7 +112,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dmg-${{ matrix.target }}
-          path: HyperStudy-Annotator-${{ inputs.version }}-${{ matrix.target }}.dmg
+          path: HyperStudy-Annotator-*-${{ matrix.target }}.dmg
           if-no-files-found: error
           retention-days: 14
 
