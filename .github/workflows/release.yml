@@ -1,0 +1,55 @@
+# A release of the annotator: pushing a tag vX.Y.Z (the version in tauri.conf.json) makes a draft GitHub release and
+# attaches signed, notarized macOS DMGs to it (release-macos.yml). The draft is published by hand once checked.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    name: Draft the release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version tag: $TAG" >&2; exit 1; }
+          app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          [ "v$app" = "$TAG" ] || { echo "tauri.conf.json says $app, not ${TAG#v}" >&2; exit 1; }
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+      - name: A draft release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          ## Install (macOS 12 or later)
+
+          - Apple silicon: \`HyperStudy-Annotator-$TAG-aarch64-apple-darwin.dmg\`
+          - Intel: \`HyperStudy-Annotator-$TAG-x86_64-apple-darwin.dmg\`
+
+          Open the DMG and drag HyperStudy Annotator to Applications. Signed with a Developer ID and notarized by Apple.
+
+          To run the perception pipeline from the app, clone hyperstudy-perception and choose its folder in Run pipeline.
+          EOF
+          prerelease=$(case "$TAG" in *-*) echo --prerelease;; esac)
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag $prerelease \
+            --title "HyperStudy Annotator $TAG" --notes-file notes.md --generate-notes
+
+  macos:
+    needs: draft
+    uses: ./.github/workflows/release-macos.yml
+    with:
+      version: ${{ needs.draft.outputs.version }}
+      upload: true
+    secrets: inherit

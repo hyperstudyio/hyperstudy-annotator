@@ -1,0 +1,155 @@
+# Signed, notarized macOS DMGs of the annotator, for Apple silicon and Intel: called by release.yml for a tag, or run by
+# hand on any branch to try a release without publishing anything (upload off).
+#
+# Secrets (the same as hyperstudy-bridge's): APPLE_CERTIFICATE (the Developer ID Application certificate and key, a
+# base64 .p12), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY ("Developer ID Application: ..."), APPLE_ID,
+# APPLE_ID_PASSWORD (an app-specific password) and APPLE_TEAM_ID.
+name: macOS release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, as in tauri.conf.json with a v (e.g. v0.0.1)'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      upload:
+        description: 'Attach the DMGs to the release named by version (release.yml made it)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, sign and notarize (${{ matrix.target }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      VERSION: ${{ inputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The version is the app's
+        run: |
+          printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version: $VERSION" >&2; exit 1; }
+          app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          [ "v$app" = "$VERSION" ] || { echo "tauri.conf.json says $app, not ${VERSION#v}: bump it first" >&2; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: rustup target add "$TARGET"
+      - run: npm ci
+      - name: The uv the app bundles, for this target (pinned, checked by sha256)
+        run: TAURI_ENV_TARGET_TRIPLE="$TARGET" bash scripts/fetch-uv.sh
+
+      - name: The signing certificate, in a keychain of this run's own
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          [ -n "$APPLE_CERTIFICATE" ] || { echo "the APPLE_CERTIFICATE secret is not set on this repository" >&2; exit 1; }
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain"
+          rm "$RUNNER_TEMP/certificate.p12"
+
+      - name: Build (signed by tauri, hardened runtime, the bundled uv with it)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: npx tauri build --target "$TARGET" --bundles app,dmg
+
+      - name: The app and its bundled uv are signed, with the hardened runtime
+        run: |
+          app=$(find "src-tauri/target/$TARGET/release/bundle/macos" -maxdepth 1 -name '*.app' | head -1)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          for bin in "$app/Contents/MacOS/"*; do
+            codesign --verify --strict "$bin"
+            codesign --display --verbose=2 "$bin" 2>&1 | grep -q 'flags=.*runtime' || { echo "$bin is not signed with the hardened runtime" >&2; exit 1; }
+          done
+
+      - name: Notarize and staple the DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          dmg=$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -name '*.dmg' | head -1)
+          name="HyperStudy-Annotator-$VERSION-$TARGET.dmg"
+          cp "$dmg" "$name"
+          scripts/notarize-dmg.sh "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.target }}
+          path: HyperStudy-Annotator-${{ inputs.version }}-${{ matrix.target }}.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+  check:
+    name: Opens as a user's Mac would open it (Apple silicon)
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dmg-aarch64-apple-darwin
+      - name: Stapled, accepted by Gatekeeper, and the app starts
+        run: |
+          dmg=$(ls *.dmg)
+          xcrun stapler validate "$dmg"
+          mount=$(hdiutil attach -nobrowse -readonly "$dmg" | tail -1 | cut -f3-)
+          app="$mount/HyperStudy Annotator.app"
+          [ -d "$app" ] || { echo "no HyperStudy Annotator.app in the DMG" >&2; exit 1; }
+          spctl --assess --type execute --verbose=2 "$app"
+          exe="$app/Contents/MacOS/$(defaults read "$app/Contents/Info" CFBundleExecutable)"
+          "$exe" > app.log 2>&1 &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2> /dev/null; then echo "the app exited within 15 s:" >&2; cat app.log >&2; exit 1; fi
+          kill "$pid"
+          hdiutil detach "$mount"
+
+  upload:
+    name: Attach to the release
+    needs: [build, check]
+    if: inputs.upload
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dmg-*
+          merge-multiple: true
+      - name: Attach the DMGs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh release upload "$VERSION" HyperStudy-Annotator-*.dmg --repo "$GITHUB_REPOSITORY" --clobber
