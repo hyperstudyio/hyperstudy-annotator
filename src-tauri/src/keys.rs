@@ -239,14 +239,23 @@ mod tests {
             fn set(&self, n: &str, v: &str) -> Result<()> { self.0.set(n, v) }
             fn delete(&self, n: &str) -> Result<()> { self.0.delete(n) }
         }
-        let store = Counting(Memory::default(), Mutex::new(0));
+        let store = std::sync::Arc::new(Counting(Memory::default(), Mutex::new(0)));
         store.0.set("HF_TOKEN", SECRET).unwrap();
-        let keys = Keys::new(Box::new(store));
+        struct Shared(std::sync::Arc<Counting>);
+        impl Store for Shared {
+            fn get(&self, n: &str) -> Result<Option<String>> { self.0.get(n) }
+            fn set(&self, n: &str, v: &str) -> Result<()> { self.0.set(n, v) }
+            fn delete(&self, n: &str) -> Result<()> { self.0.delete(n) }
+        }
+        let keys = Keys::new(Box::new(Shared(store.clone())));
         for _ in 0..3 {
             assert_eq!(keys.for_cli().0.len(), 1);
+            let _ = keys.status();
         }
+        assert_eq!(*store.1.lock().unwrap(), KNOWN.len());   // one read of each key, however many commands
         keys.set("ANTHROPIC_API_KEY", SECRET).unwrap();
         assert_eq!(keys.for_cli().0.len(), 2);
+        assert_eq!(*store.1.lock().unwrap(), KNOWN.len());   // kept up to date without reading again
     }
 
     #[test]
@@ -304,17 +313,22 @@ mod tests {
     #[test]
     fn a_save_waiting_on_the_keychain_does_not_hold_up_a_command() {
         // the keychain's answer held back (an unlock prompt the user has not answered yet)
-        struct Slow(Mutex<std::sync::mpsc::Receiver<()>>);
+        struct Slow(Mutex<std::sync::mpsc::Receiver<()>>, Mutex<std::sync::mpsc::Sender<()>>);
         impl Store for Slow {
             fn get(&self, _: &str) -> Result<Option<String>> { Ok(None) }
-            fn set(&self, _: &str, _: &str) -> Result<()> { self.0.lock().unwrap().recv().ok(); Ok(()) }
+            fn set(&self, _: &str, _: &str) -> Result<()> {
+                self.1.lock().unwrap().send(()).ok();   // the save has reached the keychain
+                self.0.lock().unwrap().recv().ok();
+                Ok(())
+            }
             fn delete(&self, _: &str) -> Result<()> { Ok(()) }
         }
         let (release, held) = std::sync::mpsc::channel();
-        let keys = std::sync::Arc::new(Keys::new(Box::new(Slow(Mutex::new(held)))));
+        let (reached, waiting) = std::sync::mpsc::channel();
+        let keys = std::sync::Arc::new(Keys::new(Box::new(Slow(Mutex::new(held), Mutex::new(reached)))));
         keys.for_cli();   // read once
         let saving = { let keys = keys.clone(); std::thread::spawn(move || keys.set("HF_TOKEN", SECRET)) };
-        std::thread::sleep(std::time::Duration::from_millis(100));   // the save is waiting on the keychain now
+        waiting.recv().unwrap();   // the save is waiting on the keychain now
         let (done, answer) = std::sync::mpsc::channel();
         { let keys = keys.clone(); std::thread::spawn(move || { done.send(keys.for_cli().0.len()).ok(); }); }
         let got = answer.recv_timeout(std::time::Duration::from_secs(2));
