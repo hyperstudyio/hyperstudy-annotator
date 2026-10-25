@@ -266,7 +266,10 @@ pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str
     let name_ok = !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !["native", "self", "cloud", "local"].contains(&name);
-    if !name_ok || !["add", "check", "remove", "clean"].contains(&action) {
+    if !["add", "check", "remove", "clean"].contains(&action) {
+        return Err(Error::Bundle(format!("not something to do with a host: {action:?}")));
+    }
+    if !name_ok {
         return Err(Error::Bundle(format!("not a host's name: {name:?} (lower-case letters, digits and -)")));
     }
     let mut out = vec!["hosts".to_string(), action.to_string()];
@@ -637,7 +640,7 @@ mod tests {
                                    ("lab", "lab;rm", ""), ("lab", "", ""), ("lab", "lab", "../etc"), ("lab", "lab", "-x"), ("lab", "lab", "a b")] {
             assert!(host_args("add", name, Some(dest), Some(root)).is_err(), "{name} {dest} {root}");
         }
-        assert!(host_args("delete-everything", "lab", None, None).is_err());
+        assert!(host_args("delete-everything", "lab", None, None).unwrap_err().to_string().contains("not something to do"));
     }
 
     #[test]

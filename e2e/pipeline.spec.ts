@@ -283,6 +283,27 @@ test('removing a lab server or turning the cloud off takes its place out of the 
   await expect(machines.getByRole('button', { name: 'Turn on' })).toBeVisible();
 });
 
+test('a step on a lab server that is then removed goes back to this machine, and nothing is agreed for it', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove' }).click();
+  await expect(menu).toHaveValue('native:mps');
+  // added again under the same name (perhaps another machine): choosing it is a new choice, not the old one
+  await machines.getByLabel('Name').fill('lab');
+  await machines.getByLabel('SSH destination').fill('you@another-lab.example.edu');
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByRole('listitem', { name: 'lab' })).toBeVisible();
+  await expect(menu).toHaveValue('native:mps');
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.places).toEqual({});
+  expect(ran.allow.uploads).toEqual({});
+});
+
 test('a lab server that cannot be reached is not added, and says why', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   await dialog.getByRole('button', { name: 'Manage…' }).click();
@@ -299,6 +320,12 @@ test('a pipeline from before other machines says so and offers nothing to manage
   const dialog = await planned(page, '/?pipeline-demo=old-cli');
   await expect(dialog.getByText(/This machine only \(this pipeline cannot run steps elsewhere/)).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Manage…' })).toHaveCount(0);
+});
+
+test('a failure listing the machines is said as it is, not taken for an older pipeline', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=machines-error');
+  await expect(dialog.getByText(/PermissionError: hosts\.json/)).toBeVisible();
+  await expect(dialog.getByText(/cannot run steps elsewhere/)).toHaveCount(0);
 });
 
 test('in a narrow window the machines fit without scrolling sideways', async ({ page }) => {

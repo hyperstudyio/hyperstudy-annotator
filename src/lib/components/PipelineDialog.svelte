@@ -17,6 +17,8 @@
   let hosts = $state<Host[] | null>(null);
   let cloud = $state<CloudStatus | null>(null);
   let manage = $state(false);
+  let machinesError = $state<string | null>(null);
+  let olderPipeline = $state(false);   // it does not know `hosts` or `cloud`
   let graphs = $state<GraphPreset[]>([]);
   let graph = $state<string | null>(null);
   let video = $state<string | null>(null);
@@ -107,17 +109,34 @@
     graphs = await api.graphs();
     if (graphs.some((g) => g.file === FULL_GRAPH)) await chooseGraph(FULL_GRAPH);
   });
+  // a pipeline from before other machines does not know the commands (argparse: invalid choice): the row says so; any
+  // other failure is said on the row as it is, with the machines last known kept
+  const loadMachines = async () => {
+    machinesError = null; olderPipeline = false;
+    try { [hosts, cloud] = await Promise.all([api.hosts(), api.cloud()]); }
+    catch (e) {
+      if (/invalid choice: '(hosts|cloud)'/.test(String(e))) { hosts = null; cloud = null; manage = false; olderPipeline = true; }
+      else machinesError = String(e);
+    }
+  };
+  // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps). A
+  // step placed on a machine that is gone goes back to this machine, and the agreement its place gave goes with it: a
+  // machine added again under that name is another machine, and choosing it is a new choice.
+  const machinesChanged = async () => {
+    await loadMachines();
+    const there = new Set([...(hosts ?? []).map((h) => `ssh-${h.name}`), ...(cloud?.enabled ? ['cloud'] : [])]);
+    const gone = Object.entries(places).filter(([, p]) => !['native', 'self'].includes(p.split(':')[0]) && !there.has(p.split(':')[0])).map(([n]) => n);
+    if (gone.length) {
+      places = Object.fromEntries(Object.entries(places).filter(([n]) => !gone.includes(n)));
+      ticked = Object.fromEntries(Object.entries(ticked).filter(([n]) => !gone.includes(n)));
+    }
+    await makePlan(true);
+  };
+  const machinesText = $derived(olderPipeline ? 'This machine only (this pipeline cannot run steps elsewhere: update hyperstudy-perception)'
+    : [doctor?.platform.startsWith('darwin') ? 'This Mac' : 'This machine', ...(hosts ?? []).map((h) => `${h.name} (SSH)`),
+       cloud?.enabled ? 'Cloud GPU' : null].filter(Boolean).join(', '));
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
-  // a pipeline from before other machines answers neither: the row then says so
-  const loadMachines = async () => {
-    try { [hosts, cloud] = await Promise.all([api.hosts(), api.cloud()]); } catch { hosts = null; cloud = null; manage = false; }
-  };
-  // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps)
-  const machinesChanged = async () => { await loadMachines(); await makePlan(true); };
-  const machinesText = $derived(hosts === null ? 'This machine only (this pipeline cannot run steps elsewhere: update hyperstudy-perception)'
-    : [doctor?.platform.startsWith('darwin') ? 'This Mac' : 'This machine', ...hosts.map((h) => `${h.name} (SSH)`),
-       cloud?.enabled ? 'Cloud GPU' : null].filter(Boolean).join(', '));
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
   const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; open = null; await makePlan(); };
   // choosing another machine is the choice to send this step's inputs there (what the plan says it would send)
@@ -213,6 +232,7 @@
       <span class="label">Machines</span>
       <div class="value">
         <span>{machinesText}</span>
+        {#if machinesError}<span class="error">{machinesError}</span>{/if}
         {#if hosts !== null}<button onclick={() => (manage = !manage)} aria-expanded={manage} aria-controls="machines" disabled={started}>{manage ? 'Done' : 'Manage…'}</button>{/if}
       </div>
       {#if manage && hosts !== null}

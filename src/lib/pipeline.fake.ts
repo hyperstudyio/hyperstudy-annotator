@@ -71,7 +71,9 @@ function remote(n: Plan['nodes'][number], place: string | undefined, hosts: Host
     ...Object.fromEntries(hosts.map((h) => [`ssh-${h.name}:cuda`, { estimate_s: null, estimate_basis: `no runs of vision.face-track@1.0.0 on ssh-${h.name}:cuda here yet`, cost_usd: 0, uploads: sent, upload_to: `${h.name} (SSH)` }])),
     ...(cloudOn ? { 'cloud:cuda': { estimate_s: null, estimate_basis: 'no runs of vision.face-track@1.0.0 on cloud:cuda here yet', cost_usd: 0.4888, uploads: sent, upload_to: CLOUD } } : {}),
   };
-  const at = place && place in estimates ? place : 'native:mps';
+  // a place it cannot run (a machine since removed) is refused, as the CLI refuses it
+  if (place && !(place in estimates)) throw new Error(`the pipeline cannot plan this: ${place} is not one of the places faces can run`);
+  const at = place ?? 'native:mps';
   const e = estimates[at];
   return { ...n, options: Object.keys(estimates), place: at, where: at.replace(':', ' (') + ')', estimates, estimate_s: e.estimate_s, estimate_basis: e.estimate_basis,
     cost_usd: e.cost_usd, uploads: e.uploads, upload_to: e.upload_to };
@@ -99,8 +101,8 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `runs` records each run's arguments, for tests. */
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false } = {},
+ *  server or a cloud GPU (perception #15/#16). `machinesError`: listing the machines fails (not an older pipeline). `runs` records each run's arguments, for tests. */
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
   let folder: string | null = null;
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
@@ -140,7 +142,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       listener?.(run ? { v: 1, type: 'run.finished', run, status: 'canceled' }
         : { v: 1, type: 'error', problems: ['the pipeline ended without finishing the run (stopped)'] });
     },
-    async hosts() { older(); return hosts; },
+    async hosts() { older(); if (machinesError) throw new Error('the pipeline failed: PermissionError: hosts.json'); return hosts; },
     async host(action, name, dest) {
       older();
       if (action === 'add') {
