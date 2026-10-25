@@ -304,6 +304,33 @@ test('a step on a lab server that is then removed goes back to this machine, and
   expect(ran.allow.uploads).toEqual({});
 });
 
+test('a lab server name already listed cannot be added over: another machine under that name is a new choice', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByLabel('Name').fill('lab');
+  await machines.getByLabel('SSH destination').fill('you@another-lab.example.edu');
+  await expect(machines.getByRole('button', { name: 'Add' })).toBeDisabled();
+  await expect(machines.getByText(/lab is already a lab server here: remove it first/)).toBeVisible();
+});
+
+test('a step on a lab server whose name now leads to another machine goes back to this machine', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await page.evaluate(() => { (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere = true; });   // re-added with the CLI
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Check' }).click();
+  await expect(machines.getByRole('listitem', { name: 'lab' })).toContainText('you@another-lab.example.edu');
+  await expect(menu).toHaveValue('native:mps');                      // the name is the same; the machine is not
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.places).toEqual({});
+  expect(ran.allow.uploads).toEqual({});
+});
+
 test('a lab server that cannot be reached is not added, and says why', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   await dialog.getByRole('button', { name: 'Manage…' }).click();

@@ -147,8 +147,11 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       older();
       if (action === 'add') {
         if (!dest || dest.includes('unreachable')) throw new Error(`could not reach ${dest} (ssh exit 255): ssh: connect to host ${dest} port 22: Operation timed out`);
-        hosts = [...hosts.filter((h) => h.name !== name), labHost(name, dest)];
+        hosts = [...hosts.filter((h) => h.name !== name), labHost(name, dest)];   // as the CLI does: an existing name is replaced
       } else if (action === 'remove') hosts = hosts.filter((h) => h.name !== name);
+      // a test can have the host re-added elsewhere under the same name (with the CLI), which a check then finds
+      else if (action === 'check' && (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere)
+        hosts = hosts.map((h) => h.name === name ? labHost(name, 'you@another-lab.example.edu') : h);
       return hosts;
     },
     async cloud(on) { older(); if (on !== undefined) cloud.enabled = on; return { ...cloud }; },

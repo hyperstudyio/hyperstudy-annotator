@@ -120,12 +120,16 @@
     }
   };
   // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps). A
-  // step placed on a machine that is gone goes back to this machine, and the agreement its place gave goes with it: a
-  // machine added again under that name is another machine, and choosing it is a new choice.
-  const machinesChanged = async () => {
-    await loadMachines();
-    const there = new Set([...(hosts ?? []).map((h) => `ssh-${h.name}`), ...(cloud?.enabled ? ['cloud'] : [])]);
-    const gone = Object.entries(places).filter(([, p]) => !['native', 'self'].includes(p.split(':')[0]) && !there.has(p.split(':')[0])).map(([n]) => n);
+  // step placed on a machine that is gone, or is now another machine (a name given a new address or folder), goes back
+  // to this machine, and the agreement its place gave goes with it: choosing the machine again is a new choice.
+  const machineId = (h: Host) => `${h.dest} ${h.root}`;
+  const machinesChanged = async (now: { hosts?: Host[]; cloud?: CloudStatus }) => {
+    const before = new Map((hosts ?? []).map((h) => [`ssh-${h.name}`, machineId(h)]));
+    if (now.hosts) hosts = now.hosts;
+    if (now.cloud) cloud = now.cloud;
+    const same = new Set([...(hosts ?? []).filter((h) => before.get(`ssh-${h.name}`) === machineId(h)).map((h) => `ssh-${h.name}`),
+                          ...(cloud?.enabled ? ['cloud'] : [])]);
+    const gone = Object.entries(places).filter(([, p]) => !['native', 'self'].includes(p.split(':')[0]) && !same.has(p.split(':')[0])).map(([n]) => n);
     if (gone.length) {
       places = Object.fromEntries(Object.entries(places).filter(([n]) => !gone.includes(n)));
       ticked = Object.fromEntries(Object.entries(ticked).filter(([n]) => !gone.includes(n)));

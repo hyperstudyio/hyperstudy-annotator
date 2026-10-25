@@ -5,7 +5,9 @@
   import { hostSummary, type CloudStatus, type Host, type HostAction, type PipelineApi } from '../pipeline';
 
   let { api, hosts, cloud, disabled = false, onchange }: {
-    api: PipelineApi; hosts: Host[]; cloud: CloudStatus | null; disabled?: boolean; onchange: () => void;
+    api: PipelineApi; hosts: Host[]; cloud: CloudStatus | null; disabled?: boolean;
+    /** what the action left, as the CLI answered it (no second listing that could fail or be stale) */
+    onchange: (now: { hosts?: Host[]; cloud?: CloudStatus }) => void;
   } = $props();
 
   let name = $state('');
@@ -14,13 +16,20 @@
   let busy = $state<string | null>(null);
   let error = $state<string | null>(null);
 
-  const act = async (label: string, f: () => Promise<unknown>) => {
+  const act = async (label: string, f: () => Promise<{ hosts?: Host[]; cloud?: CloudStatus }>) => {
     busy = label; error = null;
-    try { await f(); onchange(); } catch (e) { error = String(e); } finally { busy = null; }
+    try { onchange(await f()); } catch (e) { error = String(e); } finally { busy = null; }
   };
-  const host = (action: HostAction, n: string) => act(`${action === 'check' ? 'Checking' : action === 'clean' ? 'Cleaning' : 'Removing'} ${n}…`, () => api.host(action, n));
-  const add = () => act(`Reaching ${dest}…`, async () => { await api.host('add', name.trim(), dest.trim(), root.trim() || undefined); name = dest = root = ''; });
-  const setCloud = (on: boolean) => act(on ? 'Checking AWS…' : 'Turning the cloud GPU off…', () => api.cloud(on));
+  const host = (action: HostAction, n: string) => act(`${action === 'check' ? 'Checking' : action === 'clean' ? 'Cleaning' : 'Removing'} ${n}…`,
+    async () => ({ hosts: await api.host(action, n) }));
+  // a name already listed is another machine's: adding over it would change where a step placed there sends its inputs
+  const taken = $derived(hosts.some((h) => h.name === name.trim()));
+  const add = () => act(`Reaching ${dest}…`, async () => {
+    const now = await api.host('add', name.trim(), dest.trim(), root.trim() || undefined);
+    name = dest = root = '';
+    return { hosts: now };
+  });
+  const setCloud = (on: boolean) => act(on ? 'Checking AWS…' : 'Turning the cloud GPU off…', async () => ({ cloud: await api.cloud(on) }));
   const when = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 </script>
 
@@ -48,8 +57,9 @@
     <label>Name <input bind:value={name} placeholder="gpu1" autocomplete="off" spellcheck="false" required /></label>
     <label>SSH destination <input bind:value={dest} placeholder="you@gpu1.example.edu" autocomplete="off" spellcheck="false" required /></label>
     <label>Folder there <input bind:value={root} placeholder=".cache/hyperstudy-perception" autocomplete="off" spellcheck="false" /></label>
-    <button type="submit" disabled={disabled || !!busy || !name.trim() || !dest.trim()}>Add</button>
+    <button type="submit" disabled={disabled || !!busy || !name.trim() || !dest.trim() || taken}>Add</button>
   </form>
+  {#if taken}<p class="note error">{name.trim()} is already a lab server here: remove it first to add another machine under that name.</p>{/if}
   <p class="note muted">It is reached with your own SSH keys and ~/.ssh/config; nothing asks for a password.</p>
 
   <h4>Cloud GPU</h4>
