@@ -2,6 +2,7 @@ mod bundle;
 mod commands;
 mod db;
 mod error;
+mod keys;
 mod library;
 mod pipeline;
 
@@ -15,7 +16,8 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(data_dir.join("bundles"))?;
             let conn = db::open(&data_dir.join("annotator.db"))?;
-            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), control: Default::default() });
+            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), control: Default::default(),
+                                            keys: keys::Keys::new(Box::new(keys::Keychain)) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -49,6 +51,10 @@ pub fn run() {
             commands::pipeline_plan,
             commands::pipeline_run,
             commands::pipeline_cancel,
+            commands::keys_status,
+            commands::key_set,
+            commands::key_remove,
+            commands::pipeline_keys,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the annotator");

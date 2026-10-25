@@ -328,6 +328,8 @@ pub struct Pipeline {
     pub repo: PathBuf,
     /// the store the CLI uses (PERCEPTION_HOME); None: its default, shared with command-line use
     pub home: Option<PathBuf>,
+    /// the keys the user stored in the app (keys.rs), for the CLI's environment, where it looks first
+    pub secrets: crate::keys::Secrets,
 }
 
 impl Pipeline {
@@ -335,7 +337,7 @@ impl Pipeline {
         if !repo.join("orchestrator").join("pyproject.toml").is_file() {
             return Err(Error::Bundle(format!("{} is not a hyperstudy-perception folder (no orchestrator/pyproject.toml)", repo.display())));
         }
-        Ok(Pipeline { uv, repo: repo.to_path_buf(), home: None })
+        Ok(Pipeline { uv, repo: repo.to_path_buf(), home: None, secrets: Default::default() })
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -353,6 +355,7 @@ impl Pipeline {
         if let Some(home) = &self.home {
             c.env("PERCEPTION_HOME", home);
         }
+        c.envs(self.secrets.0.iter().map(|(k, v)| (k, v)));
         c
     }
 
@@ -781,6 +784,19 @@ mod tests {
         let err = p.run_to_end(&["run", "g.yaml"], |_| seen += 1).unwrap_err().to_string();
         assert!(err.contains("ended without finishing the run") && err.contains("uv could not sync"), "{err}");
         assert_eq!(seen, 1);
+    }
+
+    #[test]
+    fn the_keys_stored_in_the_app_reach_the_cli_in_its_environment_and_only_there() {
+        let dir = repo();
+        // the CLI stand-in says whether it got the key, and checks the value without printing it
+        let uv = executable(dir.path(), "fake-uv", "#!/bin/sh\n[ \"$RUNPOD_API_KEY\" = sk-test-rp ] && got=true || got=false\n\
+            printf '{\"v\": 1, \"type\": \"doctor\", \"got\": %s}\\n' \"$got\"\n");
+        let mut p = Pipeline::new(dir.path(), uv).unwrap();
+        assert_eq!(p.one(&["doctor"], "doctor").unwrap()["got"], false);
+        p.secrets = crate::keys::Secrets(vec![("RUNPOD_API_KEY".into(), "sk-test-rp".into())]);
+        assert_eq!(p.one(&["doctor"], "doctor").unwrap()["got"], true);
+        assert!(!format!("{p:?}").contains("sk-test-rp"));   // a Pipeline in an error or a log shows names only
     }
 
     #[test]

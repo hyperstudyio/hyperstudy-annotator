@@ -256,7 +256,7 @@ test('moving a step back to this machine sends nothing', async ({ page }) => {
 test('the machines steps can run on are listed, and adding a lab server adds its place to the step menus', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   await expect(dialog.getByText('This Mac, lab (SSH), Cloud GPU')).toBeVisible();
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   const machines = dialog.getByRole('region', { name: 'Machines' });
   await expect(machines.getByRole('listitem', { name: 'lab' })).toContainText('Linux, 32 cores, 252 GB, NVIDIA GPU (48 GB)');
   await machines.getByLabel('Name').fill('gpu2');
@@ -271,7 +271,7 @@ test('the machines steps can run on are listed, and adding a lab server adds its
 
 test('removing a lab server or turning the cloud off takes its place out of the menus', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   const machines = dialog.getByRole('region', { name: 'Machines' });
   const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
   await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove' }).click();
@@ -288,7 +288,7 @@ test('a step on a lab server that is then removed goes back to this machine, and
   const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
   await menu.selectOption('ssh-lab:cuda');
   await expect(menu).toHaveValue('ssh-lab:cuda');
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   const machines = dialog.getByRole('region', { name: 'Machines' });
   await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove' }).click();
   await expect(menu).toHaveValue('native:mps');
@@ -306,7 +306,7 @@ test('a step on a lab server that is then removed goes back to this machine, and
 
 test('a lab server name already listed cannot be added over: another machine under that name is a new choice', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   const machines = dialog.getByRole('region', { name: 'Machines' });
   await machines.getByLabel('Name').fill('lab');
   await machines.getByLabel('SSH destination').fill('you@another-lab.example.edu');
@@ -320,7 +320,7 @@ test('a step on a lab server whose name now leads to another machine goes back t
   await menu.selectOption('ssh-lab:cuda');
   await expect(menu).toHaveValue('ssh-lab:cuda');
   await page.evaluate(() => { (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere = true; });   // re-added with the CLI
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   const machines = dialog.getByRole('region', { name: 'Machines' });
   await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Check' }).click();
   await expect(machines.getByRole('listitem', { name: 'lab' })).toContainText('you@another-lab.example.edu');
@@ -337,7 +337,7 @@ test('a run cannot start while a machine is being cleaned or removed', async ({ 
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
   await page.evaluate(() => { const g = globalThis as { __holdHost?: Promise<void>; __release?: () => void };
     g.__holdHost = new Promise((r) => { g.__release = r; }); });
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   await dialog.getByRole('button', { name: 'Clean lab' }).click();
   await expect(dialog.getByText('Cleaning lab…')).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
@@ -350,7 +350,7 @@ test('a step on a lab server found without its GPU goes back to this machine', a
   const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
   await menu.selectOption('ssh-lab:cuda');
   await page.evaluate(() => { (globalThis as { __gpuGone?: boolean }).__gpuGone = true; });
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   await dialog.getByRole('button', { name: 'Check lab' }).click();
   await expect(dialog.getByRole('listitem', { name: 'lab' })).toContainText('no GPU');
   await expect(menu).toHaveValue('native:mps');                      // the plan still stands, on this machine
@@ -359,7 +359,7 @@ test('a step on a lab server found without its GPU goes back to this machine', a
 
 test('a lab server that cannot be reached is not added, and says why', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   const machines = dialog.getByRole('region', { name: 'Machines' });
   await machines.getByLabel('Name').fill('far');
   await machines.getByLabel('SSH destination').fill('you@unreachable.example.edu');
@@ -372,7 +372,7 @@ test('a lab server that cannot be reached is not added, and says why', async ({ 
 test('a pipeline from before other machines says so and offers nothing to manage', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=old-cli');
   await expect(dialog.getByText(/This machine only \(this pipeline cannot run steps elsewhere/)).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Manage…' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Manage machines' })).toHaveCount(0);
 });
 
 test('a failure listing the machines is said as it is, not taken for an older pipeline', async ({ page }) => {
@@ -384,7 +384,7 @@ test('a failure listing the machines is said as it is, not taken for an older pi
 test('lab servers are offered by a pipeline that cannot start cloud machines yet', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=no-cloud');
   await expect(dialog.getByText('This Mac', { exact: true })).toBeVisible();
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   await expect(dialog.getByText(/cannot start cloud machines yet/)).toBeVisible();
   await expect(dialog.getByRole('region', { name: 'Machines' }).getByLabel('SSH destination')).toBeVisible();
 });
@@ -392,7 +392,7 @@ test('lab servers are offered by a pipeline that cannot start cloud machines yet
 test('in a narrow window the machines fit without scrolling sideways', async ({ page }) => {
   await page.setViewportSize({ width: 420, height: 900 });
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Manage machines' }).click();
   const machines = dialog.getByRole('region', { name: 'Machines' });
   await machines.getByLabel('Name').fill('gpu17');
   await machines.getByLabel('SSH destination').fill('firstname.lastname@gpu-node-17.psych.example.edu');   // a long one
@@ -400,4 +400,25 @@ test('in a narrow window the machines fit without scrolling sideways', async ({ 
   await expect(machines.getByRole('listitem', { name: 'gpu17' })).toBeVisible();
   const overflow = await dialog.evaluate((d) => d.scrollWidth - d.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
+});
+
+
+test('a key is saved to the keychain from the dialog, leaves the page at once, and can be removed', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo');
+  await expect(dialog.getByText('Set: Hugging Face. Not set: RunPod, Anthropic')).toBeVisible();   // HF from a file the CLI reads
+  await dialog.getByRole('button', { name: 'Manage keys' }).click();
+  const keys = dialog.getByRole('region', { name: 'Keys' });
+  await expect(keys.getByRole('listitem', { name: 'Hugging Face' })).toContainText('Found in ~/.config/hyperstudy/bakeoff.env');
+  const runpod = keys.getByRole('listitem', { name: 'RunPod' });
+  await expect(runpod).toContainText('Not set. Make one at https://console.runpod.io/user/settings');
+  const field = runpod.getByRole('textbox', { name: 'RunPod key' });
+  await expect(field).toHaveAttribute('type', 'password');
+  await field.fill('rp-test-0123456789');
+  await runpod.getByRole('button', { name: 'Save' }).click();
+  await expect(runpod).toContainText('Stored in the keychain');
+  await expect(field).toHaveValue('');                                                   // not kept in the page
+  expect(await page.content()).not.toContain('rp-test-0123456789');
+  await expect(dialog.getByText('Set: RunPod, Hugging Face. Not set: Anthropic')).toBeVisible();
+  await runpod.getByRole('button', { name: 'Remove the RunPod key' }).click();
+  await expect(runpod).toContainText('Not set');
 });
