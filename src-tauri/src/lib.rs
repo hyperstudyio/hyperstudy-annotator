@@ -17,7 +17,7 @@ pub fn run() {
             std::fs::create_dir_all(data_dir.join("bundles"))?;
             let conn = db::open(&data_dir.join("annotator.db"))?;
             app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), control: Default::default(),
-                                            keys: keys::Keys::new(Box::new(keys::Keychain)) });
+                                            keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

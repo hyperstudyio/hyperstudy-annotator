@@ -422,3 +422,16 @@ test('a key is saved to the keychain from the dialog, leaves the page at once, a
   await runpod.getByRole('button', { name: 'Remove the RunPod key' }).click();
   await expect(runpod).toContainText('Not set');
 });
+
+
+test('a failure listing the pipeline\'s keys is said as it is, not taken for an older pipeline', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=keys-error');
+  await expect(dialog.getByText(/the pipeline's keys: .*PermissionError: keys.json/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Manage keys' })).toBeVisible();   // the app's own keys still work
+});
+
+test('a pipeline from before `perception keys` has the app\'s keys and says nothing is wrong', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=old-cli');
+  await expect(dialog.getByText('Not set: RunPod, Anthropic, Hugging Face')).toBeVisible();
+  await expect(dialog.getByText(/the pipeline's keys/)).toHaveCount(0);
+});

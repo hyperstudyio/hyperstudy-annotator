@@ -19,8 +19,9 @@ pub struct AppState {
     pub running: Mutex<Option<String>>,
     /// that run's CLI process, and a cancel that came before it started (stops it before it has named the run)
     pub control: pipeline::RunControl,
-    /// the user's keys, in the system keychain; the CLI gets them in its environment
-    pub keys: crate::keys::Keys,
+    /// the user's keys, in the system keychain; the CLI gets them in its environment (shared with the threads that read
+    /// and write the keychain: never the main one, where an unlock prompt would freeze the window)
+    pub keys: std::sync::Arc<crate::keys::Keys>,
 }
 
 const PIPELINE_FOLDER: &str = "pipeline_folder";
@@ -195,7 +196,7 @@ fn pipeline_alone(state: &AppState) -> Result<Pipeline> {
 /// The pipeline every command runs: with the keys stored in the app in its environment.
 fn pipeline(state: &AppState) -> Result<Pipeline> {
     let mut p = pipeline_alone(state)?;
-    p.secrets = state.keys.secrets()?;
+    p.secrets = state.keys.for_cli();   // none if the keychain cannot be read: the Keys row says why
     Ok(p)
 }
 
@@ -248,20 +249,21 @@ pub async fn pipeline_cloud(state: State<'_, AppState>, on: Option<bool>) -> Res
 // --- the user's keys (keys.rs): stored in the keychain; the web view learns only whether each is ---
 
 #[tauri::command]
-pub fn keys_status(state: State<'_, AppState>) -> Result<Vec<crate::keys::KeyStatus>> {
-    state.keys.status()
+pub async fn keys_status(state: State<'_, AppState>) -> Result<Vec<crate::keys::KeyStatus>> {
+    let keys = state.keys.clone();
+    blocking(move || keys.status()).await
 }
 
 #[tauri::command]
-pub fn key_set(state: State<'_, AppState>, name: String, value: String) -> Result<Vec<crate::keys::KeyStatus>> {
-    state.keys.set(&name, &value)?;
-    state.keys.status()
+pub async fn key_set(state: State<'_, AppState>, name: String, value: String) -> Result<Vec<crate::keys::KeyStatus>> {
+    let keys = state.keys.clone();
+    blocking(move || { keys.set(&name, &value)?; keys.status() }).await
 }
 
 #[tauri::command]
-pub fn key_remove(state: State<'_, AppState>, name: String) -> Result<Vec<crate::keys::KeyStatus>> {
-    state.keys.remove(&name)?;
-    state.keys.status()
+pub async fn key_remove(state: State<'_, AppState>, name: String) -> Result<Vec<crate::keys::KeyStatus>> {
+    let keys = state.keys.clone();
+    blocking(move || { keys.remove(&name)?; keys.status() }).await
 }
 
 /// Where the CLI finds keys on its own, without the app's (`perception keys list`: names and sources, never values),
@@ -274,7 +276,7 @@ pub async fn pipeline_keys(state: State<'_, AppState>) -> Result<Value> {
 
 #[tauri::command]
 pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
-    pipeline(&state)?.graphs()
+    pipeline_alone(&state)?.graphs()   // files in the pipeline folder: no CLI, so no keys (and no keychain read here)
 }
 
 /// The settings the user chose: node -> key -> value (`--set`).

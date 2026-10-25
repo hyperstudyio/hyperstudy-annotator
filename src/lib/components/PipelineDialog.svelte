@@ -131,13 +131,16 @@
     machinesError = [h, c].filter((r) => r.status === 'rejected' && !older(r, 'hosts') && !older(r, 'cloud'))
       .map((r) => String((r as PromiseRejectedResult).reason)).join('; ') || null;
   };
-  // the keychain's answer and the CLI's, each on its own: a pipeline from before `perception keys` still has the app's
+  // the keychain's answer and the CLI's, each on its own. A pipeline from before `perception keys` does not know the
+  // command (argparse: invalid choice), and has only the app's keys; any other failure is said on the row as it is
   const loadKeys = async () => {
     keysError = null;
     const [k, c] = await Promise.allSettled([api.keys(), api.cliKeys()]);
     if (k.status === 'fulfilled') keys = k.value;
-    else keysError = String(k.reason);
+    const olderCli = c.status === 'rejected' && /invalid choice: 'keys'/.test(String(c.reason));
     cliKeys = c.status === 'fulfilled' ? c.value : null;
+    keysError = [k.status === 'rejected' ? `the keychain: ${k.reason}` : null,
+                 c.status === 'rejected' && !olderCli ? `the pipeline's keys: ${c.reason}` : null].filter(Boolean).join('; ') || null;
   };
   const keysText_ = $derived(keysText(keyRows(keys, cliKeys)));
   // a key stored or removed: what steps are missing changes, so plan again (keeping the choices)

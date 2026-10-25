@@ -41,7 +41,8 @@ pub trait Store: Send + Sync {
     fn delete(&self, name: &str) -> Result<()>;
 }
 
-pub struct Keychain;
+/// The system keychain, under a service name (SERVICE; tests that reach the real keychain use one of their own).
+pub struct Keychain(pub &'static str);
 
 fn keychain_error(what: &str, name: &str, e: keyring::Error) -> Error {
     Error::Bundle(match e {
@@ -53,7 +54,7 @@ fn keychain_error(what: &str, name: &str, e: keyring::Error) -> Error {
 
 impl Store for Keychain {
     fn get(&self, name: &str) -> Result<Option<String>> {
-        let entry = keyring::Entry::new(SERVICE, name).map_err(|e| keychain_error("read", name, e))?;
+        let entry = keyring::Entry::new(self.0, name).map_err(|e| keychain_error("read", name, e))?;
         match entry.get_password() {
             Ok(v) => Ok(Some(v)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -62,12 +63,12 @@ impl Store for Keychain {
     }
 
     fn set(&self, name: &str, value: &str) -> Result<()> {
-        let entry = keyring::Entry::new(SERVICE, name).map_err(|e| keychain_error("store", name, e))?;
+        let entry = keyring::Entry::new(self.0, name).map_err(|e| keychain_error("store", name, e))?;
         entry.set_password(value).map_err(|e| keychain_error("store", name, e))
     }
 
     fn delete(&self, name: &str) -> Result<()> {
-        let entry = keyring::Entry::new(SERVICE, name).map_err(|e| keychain_error("remove", name, e))?;
+        let entry = keyring::Entry::new(self.0, name).map_err(|e| keychain_error("remove", name, e))?;
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(keychain_error("remove", name, e)),
@@ -117,32 +118,41 @@ impl std::fmt::Debug for Secrets {
 
 pub struct Keys {
     store: Box<dyn Store>,
-    /// what the keychain held, read once (each read can ask the user on some systems), kept up to date by set/remove
-    cache: Mutex<Option<BTreeMap<String, String>>>,
+    /// what the keychain held, read once (a locked keychain prompts on each read), kept up to date by set/remove; or
+    /// why it could not be read
+    cache: Mutex<Option<std::result::Result<BTreeMap<String, String>, String>>>,
 }
+
+type Cache<'a> = std::sync::MutexGuard<'a, Option<std::result::Result<BTreeMap<String, String>, String>>>;
 
 impl Keys {
     pub fn new(store: Box<dyn Store>) -> Self {
         Keys { store, cache: Mutex::new(None) }
     }
 
-    fn loaded(&self) -> Result<std::sync::MutexGuard<'_, Option<BTreeMap<String, String>>>> {
-        let mut cache = self.cache.lock().unwrap();
-        if cache.is_none() {
-            let mut values = BTreeMap::new();
-            for k in KNOWN {
-                if let Some(v) = self.store.get(k.name)? {
-                    values.insert(k.name.to_string(), v);
-                }
+    fn read_all(&self) -> std::result::Result<BTreeMap<String, String>, String> {
+        let mut values = BTreeMap::new();
+        for k in KNOWN {
+            if let Some(v) = self.store.get(k.name).map_err(|e| e.to_string())? {
+                values.insert(k.name.to_string(), v);
             }
-            *cache = Some(values);
         }
-        Ok(cache)
+        Ok(values)
+    }
+
+    /// The cache, read on first use; `again`: also when the last read failed (the user is looking at the keys, and may
+    /// have unlocked the keychain since). Commands do not read again: each read of a locked keychain would prompt.
+    fn loaded(&self, again: bool) -> Cache<'_> {
+        let mut cache = self.cache.lock().unwrap();
+        if cache.is_none() || (again && matches!(*cache, Some(Err(_)))) {
+            *cache = Some(self.read_all());
+        }
+        cache
     }
 
     pub fn status(&self) -> Result<Vec<KeyStatus>> {
-        let cache = self.loaded()?;
-        let values = cache.as_ref().unwrap();
+        let cache = self.loaded(true);
+        let values = cache.as_ref().unwrap().as_ref().map_err(|e| Error::Bundle(e.clone()))?;
         Ok(KNOWN.iter().map(|k| KeyStatus { name: k.name, label: k.label, purpose: k.purpose, url: k.url,
                                              stored: values.contains_key(k.name) }).collect())
     }
@@ -154,24 +164,30 @@ impl Keys {
         if value.is_empty() || value.lines().count() != 1 || value.chars().any(char::is_control) || value.len() > 4096 {
             return Err(Error::Bundle(format!("a {} key is one line of text", k.label)));
         }
-        let mut cache = self.loaded()?;
+        let mut cache = self.loaded(true);
+        let values = cache.as_mut().unwrap().as_mut().map_err(|e| Error::Bundle(e.clone()))?;
         self.store.set(name, value)?;
-        cache.as_mut().unwrap().insert(name.to_string(), value.to_string());
+        values.insert(name.to_string(), value.to_string());
         Ok(())
     }
 
     pub fn remove(&self, name: &str) -> Result<()> {
         known(name)?;
-        let mut cache = self.loaded()?;
+        let mut cache = self.loaded(true);
+        let values = cache.as_mut().unwrap().as_mut().map_err(|e| Error::Bundle(e.clone()))?;
         self.store.delete(name)?;
-        cache.as_mut().unwrap().remove(name);
+        values.remove(name);
         Ok(())
     }
 
-    /// The stored keys, for the CLI's environment.
-    pub fn secrets(&self) -> Result<Secrets> {
-        let cache = self.loaded()?;
-        Ok(Secrets(cache.as_ref().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+    /// The stored keys, for the CLI's environment. None when the keychain could not be read: the app's keys are
+    /// optional (the CLI also finds keys in files and the environment, and the plan names any a step lacks), and the
+    /// Keys row says why (`status`), so the pipeline runs on rather than every command failing.
+    pub fn for_cli(&self) -> Secrets {
+        match self.loaded(false).as_ref().unwrap() {
+            Ok(values) => Secrets(values.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+            Err(_) => Secrets::default(),
+        }
     }
 }
 
@@ -189,9 +205,9 @@ mod tests {
         let status = keys.status().unwrap();
         assert!(status.iter().find(|s| s.name == "RUNPOD_API_KEY").unwrap().stored);
         assert!(!serde_json::to_string(&status).unwrap().contains(SECRET));   // what the web view gets
-        assert_eq!(keys.secrets().unwrap().0, vec![("RUNPOD_API_KEY".to_string(), SECRET.to_string())]);   // trimmed
+        assert_eq!(keys.for_cli().0, vec![("RUNPOD_API_KEY".to_string(), SECRET.to_string())]);   // trimmed
         keys.remove("RUNPOD_API_KEY").unwrap();
-        assert!(keys.secrets().unwrap().0.is_empty() && !keys.status().unwrap().iter().any(|s| s.stored));
+        assert!(keys.for_cli().0.is_empty() && !keys.status().unwrap().iter().any(|s| s.stored));
     }
 
     #[test]
@@ -203,7 +219,7 @@ mod tests {
         for bad in ["", "   ", "a\nb", "a\rOTHER=x", "a\u{85}b", "a\tb"] {
             assert!(keys.set("HF_TOKEN", bad).is_err(), "{bad:?}");
         }
-        assert!(keys.secrets().unwrap().0.is_empty());
+        assert!(keys.for_cli().0.is_empty());
     }
 
     #[test]
@@ -218,10 +234,10 @@ mod tests {
         store.0.set("HF_TOKEN", SECRET).unwrap();
         let keys = Keys::new(Box::new(store));
         for _ in 0..3 {
-            assert_eq!(keys.secrets().unwrap().0.len(), 1);
+            assert_eq!(keys.for_cli().0.len(), 1);
         }
         keys.set("ANTHROPIC_API_KEY", SECRET).unwrap();
-        assert_eq!(keys.secrets().unwrap().0.len(), 2);
+        assert_eq!(keys.for_cli().0.len(), 2);
     }
 
     #[test]
@@ -234,7 +250,60 @@ mod tests {
         }
         let keys = Keys::new(Box::new(Refusing));
         assert!(keys.set("HF_TOKEN", SECRET).is_err());
-        assert!(keys.secrets().unwrap().0.is_empty());   // not cached as stored when the keychain refused
+        assert!(keys.for_cli().0.is_empty());   // not cached as stored when the keychain refused
+    }
+
+    struct Unreadable(Mutex<usize>);
+    impl Store for Unreadable {
+        fn get(&self, _: &str) -> Result<Option<String>> {
+            *self.0.lock().unwrap() += 1;
+            Err(Error::Bundle("this computer has no keychain the app can use".into()))
+        }
+        fn set(&self, _: &str, _: &str) -> Result<()> { Err(Error::Bundle("no keychain".into())) }
+        fn delete(&self, _: &str) -> Result<()> { Err(Error::Bundle("no keychain".into())) }
+    }
+
+    #[test]
+    fn an_unreadable_keychain_gives_the_cli_no_keys_asks_once_and_is_said_where_keys_are_shown() {
+        let keys = Keys::new(Box::new(Unreadable(Mutex::new(0))));
+        // the pipeline runs on (the CLI finds keys in files and the environment too): the app's keys are optional
+        for _ in 0..3 {
+            assert!(keys.for_cli().0.is_empty());
+        }
+        let err = keys.status().unwrap_err().to_string();   // the Keys row says why
+        assert!(err.contains("no keychain"), "{err}");
+    }
+
+    #[test]
+    fn a_failed_read_is_not_asked_again_by_every_command_but_is_when_the_keys_are_looked_at() {
+        let store = std::sync::Arc::new(Unreadable(Mutex::new(0)));
+        struct Shared(std::sync::Arc<Unreadable>);
+        impl Store for Shared {
+            fn get(&self, n: &str) -> Result<Option<String>> { self.0.get(n) }
+            fn set(&self, n: &str, v: &str) -> Result<()> { self.0.set(n, v) }
+            fn delete(&self, n: &str) -> Result<()> { self.0.delete(n) }
+        }
+        let keys = Keys::new(Box::new(Shared(store.clone())));
+        for _ in 0..5 {
+            keys.for_cli();
+        }
+        assert_eq!(*store.0.lock().unwrap(), 1);   // one try (a locked keychain would prompt each time)
+        let _ = keys.status();
+        assert_eq!(*store.0.lock().unwrap(), 2);   // looking at the keys tries again (the user may have unlocked it)
+    }
+
+    /// The real keychain, under a service of its own (never the app's): `cargo test -- --ignored real_keychain`. Not run
+    /// in CI (no keychain there); run on a Mac before a change to how keys are stored.
+    #[test]
+    #[ignore]
+    fn the_real_keychain_stores_reads_and_removes_a_key() {
+        let store = Keychain("hyperstudy-annotator-test");
+        store.delete("HF_TOKEN").unwrap();   // from an earlier run that stopped halfway
+        assert_eq!(store.get("HF_TOKEN").unwrap(), None);
+        store.set("HF_TOKEN", SECRET).unwrap();
+        assert_eq!(store.get("HF_TOKEN").unwrap().as_deref(), Some(SECRET));
+        store.delete("HF_TOKEN").unwrap();
+        assert_eq!(store.get("HF_TOKEN").unwrap(), None);
     }
 
     #[test]

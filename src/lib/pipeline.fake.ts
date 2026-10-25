@@ -101,14 +101,14 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `runs` records each run's arguments, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `runs` records each run's arguments, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods (Machines)', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false } = {},
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
   let folder: string | null = null;
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
@@ -176,7 +176,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       return keyStatus();
     },
     async removeKey(name) { stored.delete(name); return keyStatus(); },
-    async cliKeys() { older('keys'); return { keys: [{ name: 'HF_TOKEN', source: '~/.config/hyperstudy/bakeoff.env' }], problems: [] }; },
+    async cliKeys() { older('keys'); if (keysError) throw new Error('the pipeline failed: PermissionError: keys.json'); return { keys: [{ name: 'HF_TOKEN', source: '~/.config/hyperstudy/bakeoff.env' }], problems: [] }; },
     pickFolder: async () => '/Users/you/Github/hyperstudy-perception',
     pickVideo: async () => '/videos/clip.mp4',
   };
