@@ -4,8 +4,10 @@
   // menus (onchange: the dialog plans again); choosing one there is still what sends a step's inputs to it.
   import { hostSummary, type CloudStatus, type Host, type HostAction, type PipelineApi } from '../pipeline';
 
-  let { api, hosts, cloud, disabled = false, onchange }: {
+  let { api, hosts, cloud, disabled = false, onchange, onbusy }: {
     api: PipelineApi; hosts: Host[]; cloud: CloudStatus | null; disabled?: boolean;
+    /** an action is under way (Start run waits: a machine being cleaned or removed must not take a step meanwhile) */
+    onbusy: (busy: boolean) => void;
     /** what the action left, as the CLI answered it (no second listing that could fail or be stale) */
     onchange: (now: { hosts?: Host[]; cloud?: CloudStatus }) => void;
   } = $props();
@@ -17,8 +19,8 @@
   let error = $state<string | null>(null);
 
   const act = async (label: string, f: () => Promise<{ hosts?: Host[]; cloud?: CloudStatus }>) => {
-    busy = label; error = null;
-    try { onchange(await f()); } catch (e) { error = String(e); } finally { busy = null; }
+    busy = label; error = null; onbusy(true);
+    try { onchange(await f()); } catch (e) { error = String(e); } finally { busy = null; onbusy(false); }
   };
   const host = (action: HostAction, n: string) => act(`${action === 'check' ? 'Checking' : action === 'clean' ? 'Cleaning' : 'Removing'} ${n}…`,
     async () => ({ hosts: await api.host(action, n) }));
@@ -42,9 +44,9 @@
           <div class="host"><strong>{h.name}</strong> <span class="muted">{h.dest}</span></div>
           <div class="caps">{hostSummary(h)} <span class="muted">(checked {when(h.probed_at)})</span></div>
           <div class="actions">
-            <button onclick={() => host('check', h.name)} disabled={disabled || !!busy}>Check</button>
-            <button onclick={() => host('clean', h.name)} disabled={disabled || !!busy} title="Remove the videos and code kept on it between runs">Clean</button>
-            <button onclick={() => host('remove', h.name)} disabled={disabled || !!busy}>Remove</button>
+            <button onclick={() => host('check', h.name)} disabled={disabled || !!busy} aria-label={`Check ${h.name}`}>Check</button>
+            <button onclick={() => host('clean', h.name)} disabled={disabled || !!busy} aria-label={`Clean ${h.name}`} title="Remove the videos and code kept on it between runs">Clean</button>
+            <button onclick={() => host('remove', h.name)} disabled={disabled || !!busy} aria-label={`Remove ${h.name}`}>Remove</button>
           </div>
         </li>
       {/each}

@@ -145,11 +145,15 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     async hosts() { older(); if (machinesError) throw new Error('the pipeline failed: PermissionError: hosts.json'); return hosts; },
     async host(action, name, dest) {
       older();
+      // a test can hold an action open (a clean or a check over a slow link)
+      await (globalThis as { __holdHost?: Promise<void> }).__holdHost;
       if (action === 'add') {
         if (!dest || dest.includes('unreachable')) throw new Error(`could not reach ${dest} (ssh exit 255): ssh: connect to host ${dest} port 22: Operation timed out`);
         hosts = [...hosts.filter((h) => h.name !== name), labHost(name, dest)];   // as the CLI does: an existing name is replaced
       } else if (action === 'remove') hosts = hosts.filter((h) => h.name !== name);
       // a test can have the host re-added elsewhere under the same name (with the CLI), which a check then finds
+      else if (action === 'check' && (globalThis as { __gpuGone?: boolean }).__gpuGone)
+        hosts = hosts.map((h) => h.name === name ? { ...h, caps: { ...h.caps, accelerators: ['cpu'], vram_gb: 0 } } : h);
       else if (action === 'check' && (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere)
         hosts = hosts.map((h) => h.name === name ? labHost(name, 'you@another-lab.example.edu') : h);
       return hosts;

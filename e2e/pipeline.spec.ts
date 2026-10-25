@@ -331,6 +331,32 @@ test('a step on a lab server whose name now leads to another machine goes back t
   expect(ran.allow.uploads).toEqual({});
 });
 
+test('a run cannot start while a machine is being cleaned or removed', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' }).selectOption('ssh-lab:cuda');
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await page.evaluate(() => { const g = globalThis as { __holdHost?: Promise<void>; __release?: () => void };
+    g.__holdHost = new Promise((r) => { g.__release = r; }); });
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Clean lab' }).click();
+  await expect(dialog.getByText('Cleaning lab…')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
+  await page.evaluate(() => (globalThis as { __release?: () => void }).__release!());
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+test('a step on a lab server found without its GPU goes back to this machine', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await menu.selectOption('ssh-lab:cuda');
+  await page.evaluate(() => { (globalThis as { __gpuGone?: boolean }).__gpuGone = true; });
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await dialog.getByRole('button', { name: 'Check lab' }).click();
+  await expect(dialog.getByRole('listitem', { name: 'lab' })).toContainText('no GPU');
+  await expect(menu).toHaveValue('native:mps');                      // the plan still stands, on this machine
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
 test('a lab server that cannot be reached is not added, and says why', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   await dialog.getByRole('button', { name: 'Manage…' }).click();

@@ -19,6 +19,7 @@
   let manage = $state(false);
   let machinesError = $state<string | null>(null);
   let olderPipeline = $state(false);   // it does not know `hosts` or `cloud`
+  let machinesBusy = $state(false);    // a machine action under way: Start run waits for it
   let graphs = $state<GraphPreset[]>([]);
   let graph = $state<string | null>(null);
   let video = $state<string | null>(null);
@@ -54,7 +55,7 @@
   const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -127,9 +128,16 @@
     const before = new Map((hosts ?? []).map((h) => [`ssh-${h.name}`, machineId(h)]));
     if (now.hosts) hosts = now.hosts;
     if (now.cloud) cloud = now.cloud;
-    const same = new Set([...(hosts ?? []).filter((h) => before.get(`ssh-${h.name}`) === machineId(h)).map((h) => `ssh-${h.name}`),
-                          ...(cloud?.enabled ? ['cloud'] : [])]);
-    const gone = Object.entries(places).filter(([, p]) => !['native', 'self'].includes(p.split(':')[0]) && !same.has(p.split(':')[0])).map(([n]) => n);
+    if (started) return;   // a run has its places already
+    // each place still offered: the same machine, with that accelerator (a check may find a GPU gone)
+    const offered = (place: string) => {
+      const [backend, accelerator] = place.split(':');
+      if (backend === 'native' || backend === 'self') return true;
+      if (backend === 'cloud') return !!cloud?.enabled;
+      const h = (hosts ?? []).find((x) => `ssh-${x.name}` === backend);
+      return !!h && before.get(backend) === machineId(h) && h.caps.accelerators.includes(accelerator);
+    };
+    const gone = Object.entries(places).filter(([, p]) => !offered(p)).map(([n]) => n);
     if (gone.length) {
       places = Object.fromEntries(Object.entries(places).filter(([n]) => !gone.includes(n)));
       ticked = Object.fromEntries(Object.entries(ticked).filter(([n]) => !gone.includes(n)));
@@ -240,7 +248,7 @@
         {#if hosts !== null}<button onclick={() => (manage = !manage)} aria-expanded={manage} aria-controls="machines" disabled={started}>{manage ? 'Done' : 'Manage…'}</button>{/if}
       </div>
       {#if manage && hosts !== null}
-        <div class="machines-row" id="machines"><Machines {api} {hosts} {cloud} disabled={started} onchange={machinesChanged} /></div>
+        <div class="machines-row" id="machines"><Machines {api} {hosts} {cloud} disabled={started} onchange={machinesChanged} onbusy={(b) => (machinesBusy = b)} /></div>
       {/if}
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
