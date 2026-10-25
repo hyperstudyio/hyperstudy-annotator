@@ -114,11 +114,15 @@
   // other failure is said on the row as it is, with the machines last known kept
   const loadMachines = async () => {
     machinesError = null; olderPipeline = false;
-    try { [hosts, cloud] = await Promise.all([api.hosts(), api.cloud()]); }
-    catch (e) {
-      if (/invalid choice: '(hosts|cloud)'/.test(String(e))) { hosts = null; cloud = null; manage = false; olderPipeline = true; }
-      else machinesError = String(e);
-    }
+    const [h, c] = await Promise.allSettled([api.hosts(), api.cloud()]);
+    const older = (r: PromiseSettledResult<unknown>, cmd: string) => r.status === 'rejected' && new RegExp(`invalid choice: '${cmd}'`).test(String(r.reason));
+    // each on its own: a pipeline can have lab servers (perception #15) before the cloud (#16)
+    if (h.status === 'fulfilled') hosts = h.value;
+    else if (older(h, 'hosts')) { hosts = null; manage = false; olderPipeline = true; }
+    if (c.status === 'fulfilled') cloud = c.value;
+    else if (older(c, 'cloud')) cloud = null;
+    machinesError = [h, c].filter((r) => r.status === 'rejected' && !older(r, 'hosts') && !older(r, 'cloud'))
+      .map((r) => String((r as PromiseRejectedResult).reason)).join('; ') || null;
   };
   // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps). A
   // step placed on a machine that is gone, or is now another machine (a name given a new address or folder), goes back

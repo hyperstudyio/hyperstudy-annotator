@@ -65,6 +65,7 @@
   <p class="note muted">It is reached with your own SSH keys and ~/.ssh/config; nothing asks for a password.</p>
 
   <h4>Cloud GPU</h4>
+  {#if !cloud}<p class="note muted">This pipeline cannot start cloud machines yet (update hyperstudy-perception).</p>{/if}
   {#if cloud}
     <div class="cloud">
       <span>{cloud.enabled ? 'On' : 'Off'}: {cloud.machine}, ${cloud.hourly_usd.toFixed(2)} an hour, started for a step and deleted after it</span>
@@ -84,7 +85,8 @@
   h4 { margin: 4px 0 0; font-size: 13px; font-weight: 600; }
   h5 { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--color-text-secondary); }
   ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-  li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
+  li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; }
+  .host, .caps { min-width: 0; overflow-wrap: anywhere; }   /* a long ssh destination wraps, not the dialog */
   .caps { grid-column: 1; font-size: 12px; }
   .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 6px; align-items: center; }
   .add { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }

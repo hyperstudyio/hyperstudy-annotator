@@ -381,11 +381,23 @@ test('a failure listing the machines is said as it is, not taken for an older pi
   await expect(dialog.getByText(/cannot run steps elsewhere/)).toHaveCount(0);
 });
 
+test('lab servers are offered by a pipeline that cannot start cloud machines yet', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=no-cloud');
+  await expect(dialog.getByText('This Mac', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await expect(dialog.getByText(/cannot start cloud machines yet/)).toBeVisible();
+  await expect(dialog.getByRole('region', { name: 'Machines' }).getByLabel('SSH destination')).toBeVisible();
+});
+
 test('in a narrow window the machines fit without scrolling sideways', async ({ page }) => {
   await page.setViewportSize({ width: 420, height: 900 });
   const dialog = await planned(page, '/?pipeline-demo=remote');
   await dialog.getByRole('button', { name: 'Manage…' }).click();
-  await expect(dialog.getByRole('region', { name: 'Machines' })).toBeVisible();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByLabel('Name').fill('gpu17');
+  await machines.getByLabel('SSH destination').fill('firstname.lastname@gpu-node-17.psych.example.edu');   // a long one
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByRole('listitem', { name: 'gpu17' })).toBeVisible();
   const overflow = await dialog.evaluate((d) => d.scrollWidth - d.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });

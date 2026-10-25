@@ -274,8 +274,12 @@ pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str
     }
     let mut out = vec!["hosts".to_string(), action.to_string()];
     if let Some(root) = root.filter(|r| !r.is_empty()) {
+        // as the CLI checks it (hosts.check_names): plain characters, `~` only as a leading `~/`, no `..`, and a folder of
+        // its own below / or the home (not `/`, `~` or `.`): `hosts clean` empties it
+        let rest = root.strip_prefix("~/").unwrap_or(root);
+        let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty() && *p != ".").collect();
         let plain = root.chars().all(|c| c.is_ascii_alphanumeric() || "_./~-".contains(c)) && !root.starts_with('-')
-            && !root.split('/').any(|p| p == "..");
+            && !rest.contains('~') && !parts.is_empty() && !parts.contains(&"..");
         if !plain {
             return Err(Error::Bundle(format!("not a plain folder: {root:?}")));
         }
@@ -636,8 +640,11 @@ mod tests {
         assert_eq!(host_args("add", "gpu-2", Some("gpu2"), Some("scratch/perception")).unwrap(),
                    vec!["hosts", "add", "--root", "scratch/perception", "--", "gpu-2", "gpu2"]);
         assert_eq!(host_args("remove", "lab", None, None).unwrap(), vec!["hosts", "remove", "--", "lab"]);
+        assert!(host_args("add", "lab", Some("lab"), Some("~/scratch/perception")).is_ok());
+        assert!(host_args("add", "lab", Some("lab"), Some("/scratch/me/perception")).is_ok());   // its marker guards what clean empties
         for (name, dest, root) in [("Lab", "lab", ""), ("cloud", "lab", ""), ("-x", "lab", ""), ("lab", "-oProxyCommand=x", ""),
-                                   ("lab", "lab;rm", ""), ("lab", "", ""), ("lab", "lab", "../etc"), ("lab", "lab", "-x"), ("lab", "lab", "a b")] {
+                                   ("lab", "lab;rm", ""), ("lab", "", ""), ("lab", "lab", "../etc"), ("lab", "lab", "-x"), ("lab", "lab", "a b"),
+                                   ("lab", "lab", "/"), ("lab", "lab", "~"), ("lab", "lab", "."), ("lab", "lab", "~/"), ("lab", "lab", "a/~b")] {
             assert!(host_args("add", name, Some(dest), Some(root)).is_err(), "{name} {dest} {root}");
         }
         assert!(host_args("delete-everything", "lab", None, None).unwrap_err().to_string().contains("not something to do"));
