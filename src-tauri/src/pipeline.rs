@@ -259,6 +259,38 @@ pub fn set_args(settings: &std::collections::BTreeMap<String, std::collections::
     Ok(out)
 }
 
+/// `hosts ACTION` for a lab server, checked as the CLI checks them (hosts.py) before they reach it: a name of lower-case
+/// letters, digits and `-` (and not a word the CLI keeps for itself), an ssh destination that cannot be an option, and a
+/// plain folder. The positional words follow `--`, so none can be read as a flag.
+pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str>) -> Result<Vec<String>> {
+    let name_ok = !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !["native", "self", "cloud", "local"].contains(&name);
+    if !name_ok || !["add", "check", "remove", "clean"].contains(&action) {
+        return Err(Error::Bundle(format!("not a host's name: {name:?} (lower-case letters, digits and -)")));
+    }
+    let mut out = vec!["hosts".to_string(), action.to_string()];
+    if let Some(root) = root.filter(|r| !r.is_empty()) {
+        let plain = root.chars().all(|c| c.is_ascii_alphanumeric() || "_./~-".contains(c)) && !root.starts_with('-')
+            && !root.split('/').any(|p| p == "..");
+        if !plain {
+            return Err(Error::Bundle(format!("not a plain folder: {root:?}")));
+        }
+        out.extend(["--root".to_string(), root.to_string()]);
+    }
+    out.extend(["--".to_string(), name.to_string()]);
+    if action == "add" {
+        let dest = dest.unwrap_or_default();
+        let ok = dest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            && dest.chars().all(|c| c.is_ascii_alphanumeric() || "_.@%+:[]-".contains(c));
+        if !ok {
+            return Err(Error::Bundle(format!("not an ssh destination: {dest:?} (user@host, or a name from ~/.ssh/config)")));
+        }
+        out.push(dest.to_string());
+    }
+    Ok(out)
+}
+
 /// `--only` for the steps the user picked (empty: the whole graph). Node ids only, in the CLI's own form.
 pub fn only_args(nodes: &[String]) -> Result<Vec<String>> {
     let ok = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
@@ -592,6 +624,20 @@ mod tests {
         assert!(upload_gate(&placed("native:mps", None), &other).is_ok());
         assert!(upload_gate(&placed("ssh-lab:cuda", Some(serde_json::json!("lab (SSH)"))), &agreed_to("lab (SSH)", &[])).is_ok());   // said, and agreed
         assert!(upload_gate(&on(serde_json::json!({"host": "lab"}), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).unwrap_err().to_string().contains("plainly"));
+    }
+
+    #[test]
+    fn a_hosts_name_destination_and_folder_are_checked_before_the_cli_sees_them() {
+        assert_eq!(host_args("add", "lab", Some("me@lab.example.edu"), None).unwrap(),
+                   vec!["hosts", "add", "--", "lab", "me@lab.example.edu"]);
+        assert_eq!(host_args("add", "gpu-2", Some("gpu2"), Some("scratch/perception")).unwrap(),
+                   vec!["hosts", "add", "--root", "scratch/perception", "--", "gpu-2", "gpu2"]);
+        assert_eq!(host_args("remove", "lab", None, None).unwrap(), vec!["hosts", "remove", "--", "lab"]);
+        for (name, dest, root) in [("Lab", "lab", ""), ("cloud", "lab", ""), ("-x", "lab", ""), ("lab", "-oProxyCommand=x", ""),
+                                   ("lab", "lab;rm", ""), ("lab", "", ""), ("lab", "lab", "../etc"), ("lab", "lab", "-x"), ("lab", "lab", "a b")] {
+            assert!(host_args("add", name, Some(dest), Some(root)).is_err(), "{name} {dest} {root}");
+        }
+        assert!(host_args("delete-everything", "lab", None, None).is_err());
     }
 
     #[test]

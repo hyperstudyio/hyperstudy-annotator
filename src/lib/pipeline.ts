@@ -41,6 +41,14 @@ export interface PlaceInfo { title: string; remote: boolean; accelerator: string
 /** `places` and `max_cost_usd` (the graph's cap on a run's spend) are absent from CLIs before perception #15/#16. */
 export interface Plan { ok: boolean; estimated_usd: number; nodes: PlanNode[]; places?: Record<string, PlaceInfo>; max_cost_usd?: number }
 export interface GraphPreset { file: string; pipeline: string; description: string }
+/** A lab server nodes can run on (`perception hosts`): what it had when it was added or last checked. */
+export interface Host {
+  name: string; dest: string; root: string; probed_at: number;
+  caps: { platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number; tools: Record<string, string | null> };
+}
+/** Whether a cloud GPU is offered to nodes that can use one (`perception cloud`), the machine and its price. */
+export interface CloudStatus { enabled: boolean; machine: string; region: string; hourly_usd: number }
+export type HostAction = 'add' | 'check' | 'remove' | 'clean';
 export interface Doctor {
   platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number;
   nodes: { ref: string; stage: string; description: string; where: string | null; why_not: string }[];
@@ -61,6 +69,12 @@ export interface PipelineApi {
   setFolder(path: string): Promise<Doctor>;
   doctor(): Promise<Doctor>;
   graphs(): Promise<GraphPreset[]>;
+  /** Lab servers (perception #15); a pipeline from before them rejects these. */
+  hosts(): Promise<Host[]>;
+  /** Add (`dest`, optional `root`), check, clean or remove a lab server; the hosts after it. */
+  host(action: HostAction, name: string, dest?: string, root?: string): Promise<Host[]>;
+  /** The cloud GPU's status, or (with `on`) turn it on or off (perception #16). */
+  cloud(on?: boolean): Promise<CloudStatus>;
   plan(graph: string, video: string, places: Places, settings: Settings): Promise<Plan>;
   /** Start a run; `on` receives its messages until `imported` or `error`. Resolves to a function that stops listening.
    *  The app checks the consent again against a fresh plan before it starts. */
@@ -240,6 +254,15 @@ export function settingsFor(settings: Settings, chosen: string[]): Settings {
 export const canPick = (plan: Plan) => plan.nodes.every((n) => Array.isArray(n.needs));
 
 const ACCELERATORS: Record<string, string> = { mps: 'Apple GPU', cuda: 'NVIDIA GPU', cpu: 'CPU' };
+/** A machine as the Machines list says it: its platform, cores, memory and GPU, and a tool nodes need that it lacks. */
+export function hostSummary(h: Host): string {
+  const c = h.caps;
+  const os = c.platform.startsWith('darwin') ? 'Mac' : c.platform.startsWith('linux') ? 'Linux' : c.platform;
+  const gpu = c.accelerators.includes('cuda') ? `, NVIDIA GPU (${Math.round(c.vram_gb)} GB)` : c.accelerators.includes('mps') ? ', Apple GPU' : ', no GPU';
+  const missing = Object.entries(c.tools).filter(([, path]) => !path).map(([tool]) => tool);
+  return `${os}, ${c.cpu_cores} cores, ${Math.round(c.memory_gb)} GB${gpu}${missing.length ? `; needs ${missing.join(', ')}` : ''}`;
+}
+
 /** A place (backend:accelerator) as people say it: "Apple GPU" here, "NVIDIA GPU on lab (SSH)" on a lab server, the
  *  plan's title for a cloud machine ("Cloud GPU (AWS L4)"). */
 export function placeName(place: string, places?: Record<string, PlaceInfo>): string {
@@ -335,6 +358,9 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     setFolder: (path) => invoke<Doctor>('set_pipeline_folder', { path }),
     doctor: () => invoke<Doctor>('pipeline_doctor'),
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
+    hosts: async () => (await invoke<{ hosts: Host[] }>('pipeline_hosts')).hosts,
+    host: async (action, name, dest, root) => (await invoke<{ hosts: Host[] }>('pipeline_host', { action, name, dest, root })).hosts,
+    cloud: (on) => invoke<CloudStatus>('pipeline_cloud', { on }),
     plan: (graph, video, places, settings) => invoke<Plan>('pipeline_plan', { graph, video, places, settings }),
     async run(graph, video, allow, places, only, settings, maxCostUsd, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed

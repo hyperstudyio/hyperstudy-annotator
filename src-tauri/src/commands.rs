@@ -209,6 +209,32 @@ pub async fn pipeline_doctor(state: State<'_, AppState>) -> Result<Value> {
     blocking(move || p.one(&["doctor"], "doctor")).await
 }
 
+/// The lab servers nodes can run on (`perception hosts list`): what each had when it was added or last checked.
+#[tauri::command]
+pub async fn pipeline_hosts(state: State<'_, AppState>) -> Result<Value> {
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&["hosts", "list"], "hosts")).await
+}
+
+/// Add, check, clean or remove a lab server (`perception hosts ACTION`); the hosts after it. Adding and checking reach
+/// the machine over ssh with the user's own keys (batch mode: nothing asks for a password).
+#[tauri::command]
+pub async fn pipeline_host(state: State<'_, AppState>, action: String, name: String, dest: Option<String>,
+                           root: Option<String>) -> Result<Value> {
+    let p = pipeline(&state)?;
+    let args = pipeline::host_args(&action, &name, dest.as_deref(), root.as_deref())?;
+    blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "hosts")).await
+}
+
+/// Whether a cloud GPU is offered to nodes that can use one, and at what price (`perception cloud status|on|off`).
+/// Turning it on checks that SkyPilot can reach AWS with the user's credentials first.
+#[tauri::command]
+pub async fn pipeline_cloud(state: State<'_, AppState>, on: Option<bool>) -> Result<Value> {
+    let p = pipeline(&state)?;
+    let action = match on { None => "status", Some(true) => "on", Some(false) => "off" };
+    blocking(move || p.one(&["cloud", action], "cloud")).await
+}
+
 #[tauri::command]
 pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
     pipeline(&state)?.graphs()

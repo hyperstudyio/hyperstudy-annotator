@@ -187,8 +187,14 @@ Checked:
   kinds, so `--allow-uploads` is passed whenever anything was agreed). The run's cap is the graph's (it covers the
   APIs) raised by each cloud machine's price (`spendingCap`, sent as `--max-cost-usd`).
 
+- **Machines** (with perception #15, #16): the dialog's Machines row lists the machines steps can run on and opens a
+  panel to add, check, clean and remove lab servers (`perception hosts`, reached with the user's own SSH keys) and to
+  turn the cloud GPU on or off (`perception cloud`, which checks AWS through SkyPilot first). A change plans again, so
+  the step menus follow; choosing a place there is still what sends a step's inputs. Names, destinations and folders
+  are checked in Rust before the CLI sees them (`host_args`, positional words after `--`). A pipeline from before these
+  says so on the row.
+
 Not yet:
-- adding hosts and turning cloud places on from the app (the CLI does it today);
 - the native window checked by hand.
 
 ## Also to sort out

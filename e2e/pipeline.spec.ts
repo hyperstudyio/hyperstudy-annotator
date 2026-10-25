@@ -250,3 +250,62 @@ test('moving a step back to this machine sends nothing', async ({ page }) => {
   const [ran] = await runs(page);
   expect(ran.allow.uploads).toEqual({});
 });
+
+// --- managing the other machines from the app ------------------------------------------------------------------------
+
+test('the machines steps can run on are listed, and adding a lab server adds its place to the step menus', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await expect(dialog.getByText('This Mac, lab (SSH), Cloud GPU')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await expect(machines.getByRole('listitem', { name: 'lab' })).toContainText('Linux, 32 cores, 252 GB, NVIDIA GPU (48 GB)');
+  await machines.getByLabel('Name').fill('gpu2');
+  await machines.getByLabel('SSH destination').fill('you@gpu2.example.edu');
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByRole('listitem', { name: 'gpu2' })).toBeVisible();
+  await expect(dialog.getByText('This Mac, lab (SSH), gpu2 (SSH), Cloud GPU')).toBeVisible();
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await expect(menu.getByRole('option', { name: /NVIDIA GPU on gpu2 \(SSH\)/ })).toHaveCount(1);
+  await expect(machines.getByLabel('Name')).toHaveValue('');          // the form is ready for the next one
+});
+
+test('removing a lab server or turning the cloud off takes its place out of the menus', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  const menu = dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox', { name: 'Where faces runs' });
+  await machines.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove' }).click();
+  await expect(menu.getByRole('option', { name: /on lab/ })).toHaveCount(0);
+  await expect(machines.getByText(/^On: AWS g6\.2xlarge, NVIDIA L4, \$0\.98 an hour/)).toBeVisible();
+  await machines.getByRole('button', { name: 'Turn off' }).click();
+  await expect(menu.getByRole('option', { name: /Cloud GPU/ })).toHaveCount(0);
+  await expect(dialog.getByText('This Mac', { exact: true })).toBeVisible();
+  await expect(machines.getByRole('button', { name: 'Turn on' })).toBeVisible();
+});
+
+test('a lab server that cannot be reached is not added, and says why', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  const machines = dialog.getByRole('region', { name: 'Machines' });
+  await machines.getByLabel('Name').fill('far');
+  await machines.getByLabel('SSH destination').fill('you@unreachable.example.edu');
+  await machines.getByRole('button', { name: 'Add' }).click();
+  await expect(machines.getByText(/could not reach you@unreachable\.example\.edu/)).toBeVisible();
+  await expect(machines.getByRole('listitem', { name: 'far' })).toHaveCount(0);
+  await expect(machines.getByLabel('Name')).toHaveValue('far');       // kept, to correct
+});
+
+test('a pipeline from before other machines says so and offers nothing to manage', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=old-cli');
+  await expect(dialog.getByText(/This machine only \(this pipeline cannot run steps elsewhere/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Manage…' })).toHaveCount(0);
+});
+
+test('in a narrow window the machines fit without scrolling sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 420, height: 900 });
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await dialog.getByRole('button', { name: 'Manage…' }).click();
+  await expect(dialog.getByRole('region', { name: 'Machines' })).toBeVisible();
+  const overflow = await dialog.evaluate((d) => d.scrollWidth - d.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+});

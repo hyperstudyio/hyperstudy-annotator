@@ -5,13 +5,18 @@
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
   import { latestOnly } from '../latest';
+  import Machines from './Machines.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    settingsFor, spendingCap, totalEstimate, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
+    settingsFor, spendingCap, totalEstimate, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
 
   let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
 
   let folder = $state<string | null>(null);
   let doctor = $state<Doctor | null>(null);
+  // other machines steps can run on (null: this pipeline predates them, perception #15/#16)
+  let hosts = $state<Host[] | null>(null);
+  let cloud = $state<CloudStatus | null>(null);
+  let manage = $state(false);
   let graphs = $state<GraphPreset[]>([]);
   let graph = $state<string | null>(null);
   let video = $state<string | null>(null);
@@ -84,6 +89,7 @@
     folder = await api.folder();
     if (!folder) return;
     [doctor, graphs] = await Promise.all([api.doctor(), api.graphs()]);
+    await loadMachines();
     if (graphs.some((g) => g.file === FULL_GRAPH)) graph = FULL_GRAPH;   // features are picked from it
   });
   $effect(() => { loadFolder(); return () => stop?.(); });
@@ -93,6 +99,7 @@
     if (!path) return;
     doctor = await api.setFolder(path);
     folder = path;
+    await loadMachines();
     // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
     // flight from the old one is superseded too)
     graph = null; plan = null; places = {}; wanted = null; ticked = {}; settings = {}; open = null;
@@ -102,6 +109,15 @@
   });
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
+  // a pipeline from before other machines answers neither: the row then says so
+  const loadMachines = async () => {
+    try { [hosts, cloud] = await Promise.all([api.hosts(), api.cloud()]); } catch { hosts = null; cloud = null; manage = false; }
+  };
+  // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps)
+  const machinesChanged = async () => { await loadMachines(); await makePlan(true); };
+  const machinesText = $derived(hosts === null ? 'This machine only (this pipeline cannot run steps elsewhere: update hyperstudy-perception)'
+    : [doctor?.platform.startsWith('darwin') ? 'This Mac' : 'This machine', ...hosts.map((h) => `${h.name} (SSH)`),
+       cloud?.enabled ? 'Cloud GPU' : null].filter(Boolean).join(', '));
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
   const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; open = null; await makePlan(); };
   // choosing another machine is the choice to send this step's inputs there (what the plan says it would send)
@@ -194,6 +210,14 @@
         {#if video}<span class="file" title={video}>{name(video)}</span>{:else}<span class="muted">None chosen</span>{/if}
         <button onclick={chooseVideo} disabled={started}>{video ? 'Change…' : 'Choose…'}</button>
       </div>
+      <span class="label">Machines</span>
+      <div class="value">
+        <span>{machinesText}</span>
+        {#if hosts !== null}<button onclick={() => (manage = !manage)} aria-expanded={manage} aria-controls="machines" disabled={started}>{manage ? 'Done' : 'Manage…'}</button>{/if}
+      </div>
+      {#if manage && hosts !== null}
+        <div class="machines-row" id="machines"><Machines {api} {hosts} {cloud} disabled={started} onchange={machinesChanged} /></div>
+      {/if}
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
       <div class="value graphs">
@@ -339,6 +363,7 @@
   /* setup: what goes in (a video, a graph), label and value side by side */
   .setup { display: grid; grid-template-columns: 64px 1fr; gap: 12px 14px; align-items: baseline; padding: 4px 20px 18px; }
   .label { color: var(--color-text-muted); }
+  .machines-row { grid-column: 1 / -1; }
   .value { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .file { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .graphs { flex-direction: column; align-items: flex-start; gap: 6px; }
