@@ -22,9 +22,41 @@ pub struct AppState {
     /// the user's keys, in the system keychain; the CLI gets them in its environment (shared with the threads that read
     /// and write the keychain: never the main one, where an unlock prompt would freeze the window)
     pub keys: std::sync::Arc<crate::keys::Keys>,
+    /// where uv keeps the Python and packages it fetches for the app
+    pub uv_dirs: pipeline::UvDirs,
+    /// setting the pipeline up on first launch (`start_setup`)
+    pub setup: Mutex<SetupStatus>,
 }
 
-const PIPELINE_FOLDER: &str = "pipeline_folder";
+/// Installing the pipeline from PyPI, or upgrading it (each start), then setting a new version up (`perception setup`:
+/// each step's packages and weights, once per version).
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct SetupStatus {
+    pub state: SetupState,
+    /// the steps finished so far, as `perception setup` reported them (`setup.step`)
+    pub steps: Vec<Value>,
+    /// why it failed
+    pub problem: Option<String>,
+    /// what did not stop it: an upgrade that could not be checked (offline), with a version already installed
+    pub notice: Option<String>,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SetupState {
+    /// not started (a checkout from PERCEPTION_REPO is set up by its developer)
+    #[default]
+    Idle,
+    /// installing the pipeline, or checking for a newer version: nothing can run yet
+    Installing,
+    /// setting a version up: the dialog can plan, a run waits
+    Running,
+    Done,
+    Failed,
+}
+
+/// the pipeline version last set up whole (`start_setup`)
+const SETUP_DONE: &str = "pipeline_setup_done";
 
 #[derive(Serialize)]
 pub struct OpenedBundle {
@@ -181,16 +213,16 @@ pub fn dismiss_unmatched(state: State<'_, AppState>, id: String, index: u64) -> 
 
 // --- running the perception pipeline (pipeline.rs) ---
 
-fn pipeline_at(folder: &str, data_dir: &std::path::Path) -> Result<Pipeline> {
-    pipeline::check_folder(std::path::Path::new(folder), data_dir)?;
-    Pipeline::new(std::path::Path::new(folder), pipeline::bundled_uv(&std::env::current_exe()?)?)
-}
-
-/// The pipeline, without the keys stored in the app (what the CLI finds on its own: `pipeline_keys`).
+/// The pipeline, without the keys stored in the app (what the CLI finds on its own: `pipeline_keys`): the one the app
+/// installed from PyPI, or the checkout PERCEPTION_REPO names when the app was started with it (pipeline development).
 fn pipeline_alone(state: &AppState) -> Result<Pipeline> {
-    let folder = library::get_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER)?
-        .ok_or_else(|| Error::NotFound("choose the hyperstudy-perception folder first".into()))?;
-    pipeline_at(&folder, &state.data_dir)
+    let uv = pipeline::bundled_uv(&std::env::current_exe()?)?;
+    let mut p = match std::env::var_os("PERCEPTION_REPO") {
+        Some(repo) => Pipeline::checkout(std::path::Path::new(&repo), uv)?,
+        None => Pipeline::installed(&state.uv_dirs.perception(), uv)?,
+    };
+    p.uv_dirs = Some(state.uv_dirs.clone());
+    Ok(p)
 }
 
 /// The pipeline every command runs: with the keys stored in the app in its environment.
@@ -200,18 +232,84 @@ fn pipeline(state: &AppState) -> Result<Pipeline> {
     Ok(p)
 }
 
-#[tauri::command]
-pub fn get_pipeline_folder(state: State<'_, AppState>) -> Result<Option<String>> {
-    library::get_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER)
+fn set_setup(app: &AppHandle, f: impl FnOnce(&mut SetupStatus)) {
+    let state = app.state::<AppState>();
+    let status = {
+        let mut s = state.setup.lock().unwrap_or_else(|e| e.into_inner());
+        f(&mut s);
+        s.clone()
+    };
+    let _ = app.emit("pipeline-setup", status);
 }
 
-/// Check a folder with `perception doctor` and remember it; returns what the doctor found.
+/// In the background: install the pipeline from PyPI, or upgrade it to the newest version this app reads, then set a
+/// version up that is not yet (each step's packages and weights). Run at start-up, and again when the user retries one
+/// that failed; not while one is under way. A checkout (PERCEPTION_REPO) is left to its developer.
+pub fn start_setup(app: AppHandle) {
+    if std::env::var_os("PERCEPTION_REPO").is_some() {
+        return;
+    }
+    {
+        let state = app.state::<AppState>();
+        let mut s = state.setup.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(s.state, SetupState::Installing | SetupState::Running) {
+            return;
+        }
+        *s = SetupStatus { state: SetupState::Installing, ..Default::default() };
+    }
+    let _ = app.emit("pipeline-setup", SetupStatus { state: SetupState::Installing, ..Default::default() });
+    std::thread::spawn(move || {
+        let _cleared = { let app = app.clone(); pipeline::OnPanic(move || set_setup(&app, |s| if matches!(s.state, SetupState::Installing | SetupState::Running) {
+            s.state = SetupState::Failed; s.problem = Some("setting the pipeline up stopped unexpectedly".into());
+        })) };
+        let state = app.state::<AppState>();
+        let installed = (|| {
+            let uv = pipeline::bundled_uv(&std::env::current_exe()?)?;
+            pipeline::install_tool(&uv, &std::env::var_os("PATH").unwrap_or_default(), &state.uv_dirs, pipeline::COMPATIBLE)
+        })();
+        let notice = match installed {
+            Ok(_) => None,
+            // offline, or PyPI unreachable: the version already here still runs, and the dialog says the check failed
+            Err(e) if state.uv_dirs.perception().is_file() => Some(format!("Could not check for a newer pipeline ({e}); using the one installed")),
+            Err(e) => return set_setup(&app, |s| { s.state = SetupState::Failed; s.problem = Some(e.to_string()); }),
+        };
+        let result = (|| {
+            let p = pipeline_alone(&state)?;
+            let version = p.one(&["doctor"], "doctor")?["pipeline"]["version"].as_str().unwrap_or_default().to_string();
+            if library::get_setting(&state.db.lock().unwrap(), SETUP_DONE)?.as_deref() == Some(version.as_str()) {
+                return Ok(());
+            }
+            set_setup(&app, |s| { s.state = SetupState::Running; s.notice = notice.clone(); });
+            p.setup(|o| if o["type"] == "setup.step" { set_setup(&app, |s| s.steps.push(o.clone())) })?;
+            library::set_setting(&state.db.lock().unwrap(), SETUP_DONE, &version)
+        })();
+        set_setup(&app, |s| match result {
+            Ok(()) => { s.state = SetupState::Done; s.notice = notice; }
+            Err(e) => { s.state = SetupState::Failed; s.problem = Some(e.to_string()); s.notice = notice; }
+        });
+    });
+}
+
 #[tauri::command]
-pub async fn set_pipeline_folder(state: State<'_, AppState>, path: String) -> Result<Value> {
-    let (folder, data_dir) = (path.clone(), state.data_dir.clone());
-    let doctor = blocking(move || pipeline_at(&folder, &data_dir)?.one(&["doctor"], "doctor")).await?;
-    library::set_setting(&state.db.lock().unwrap(), PIPELINE_FOLDER, &path)?;
-    Ok(doctor)
+pub fn pipeline_setup_status(state: State<'_, AppState>) -> SetupStatus {
+    state.setup.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Try a setup that failed again (it fetches only what is still missing): not during a run, whose environment an
+/// upgrade or a setup would change under it.
+#[tauri::command]
+pub fn pipeline_setup(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
+    check_no_run(state.running.lock().unwrap().as_deref())?;
+    start_setup(app);
+    Ok(())
+}
+
+/// Refused while a run is in progress (starting, or named).
+pub fn check_no_run(running: Option<&str>) -> Result<()> {
+    match running {
+        Some(_) => Err(Error::Bundle("a pipeline run is in progress: set the pipeline up again when it ends".into())),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -275,8 +373,9 @@ pub async fn pipeline_keys(state: State<'_, AppState>) -> Result<Value> {
 }
 
 #[tauri::command]
-pub fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
-    pipeline_alone(&state)?.graphs()   // files in the pipeline folder: no CLI, so no keys (and no keychain read here)
+pub async fn pipeline_graphs(state: State<'_, AppState>) -> Result<Vec<GraphPreset>> {
+    let p = pipeline_alone(&state)?;   // no keys: listing graphs needs none (and reads no keychain)
+    blocking(move || p.graphs()).await
 }
 
 /// The settings the user chose: node -> key -> value (`--set`).
@@ -288,7 +387,7 @@ pub async fn pipeline_plan(state: State<'_, AppState>, graph: String, video: Str
                            places: Option<std::collections::BTreeMap<String, String>>, settings: Option<Settings>) -> Result<Value> {
     let p = pipeline(&state)?;
     let g = p.graph(&graph)?;
-    let mut args = vec!["plan".to_string(), g.to_string_lossy().into_owned(), "--input".into(), format!("video={video}")];
+    let mut args = vec!["plan".to_string(), g, "--input".into(), format!("video={video}")];
     args.extend(pipeline::place_args(&places.unwrap_or_default())?);
     args.extend(pipeline::set_args(&settings.unwrap_or_default())?);
     blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "plan")).await
@@ -307,6 +406,9 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     places.extend(pipeline::only_args(&only.unwrap_or_default())?);
     places.extend(pipeline::set_args(&settings.unwrap_or_default())?);
     let cap = pipeline::cost_args(max_cost_usd)?;
+    if matches!(state.setup.lock().unwrap().state, SetupState::Installing | SetupState::Running) {
+        return Err(Error::Bundle("the pipeline is still being set up: the run can start when it is done".into()));
+    }
     {
         let mut running = state.running.lock().unwrap();
         if running.is_some() {
@@ -342,11 +444,10 @@ pub fn check_cancel(running: Option<&str>, run: &str) -> Result<()> {
 }
 
 /// The run, then its import; the final `imported` event, for the caller to send once the run is no longer in progress.
-fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &std::path::Path, video: &str,
+fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &str, video: &str,
                   uploads: &pipeline::Uploads, places: &[String], cap: &[String]) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
     let input = format!("video={video}");
-    let graph = graph.to_str().ok_or_else(|| Error::Bundle(format!("the graph path is not text: {}", graph.display())))?;
     // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
     let places: Vec<&str> = places.iter().map(String::as_str).collect();
     let plan_args = [&["plan", graph, "--input", &input][..], &places].concat();
@@ -420,6 +521,13 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pipeline_is_not_set_up_again_during_a_run() {
+        assert!(check_no_run(None).is_ok());
+        assert!(check_no_run(Some("")).unwrap_err().to_string().contains("run is in progress"));   // starting
+        assert!(check_no_run(Some("20261024-095828-1ad462")).is_err());
+    }
 
     #[test]
     fn only_the_run_in_progress_can_be_canceled() {

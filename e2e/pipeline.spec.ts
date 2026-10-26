@@ -2,12 +2,11 @@
 // real path is tested in Rust against the real CLI.
 import { expect, test, type Page } from '@playwright/test';
 
-/** The Extract page with a pipeline folder and a video chosen, and its plan on screen: the full graph's features, or (a
- *  pipeline folder with no full graph) mvp-captions.yaml. */
+/** The Extract page with a video chosen, and its plan on screen: the full graph's features, or (a pipeline with no
+ *  full graph) mvp-captions.yaml. */
 async function planned(page: Page, url: string) {
   await page.goto(url);
   const dialog = page.getByRole('region', { name: 'Extract' });
-  await dialog.getByRole('button', { name: 'Choose…' }).click();             // the pipeline folder
   await dialog.getByRole('button', { name: 'Choose…' }).click();             // the video
   if (await dialog.getByRole('radio').count()) await dialog.getByRole('radio').nth(1).check();
   await expect(dialog.getByRole('heading', { name: /steps? to run/ })).toBeVisible();
@@ -113,16 +112,54 @@ test('a run can be stopped before the pipeline has named it (a slow first enviro
 test('another video takes back the features turned on: sending one video\'s data is not the choice to send the next\'s', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
   await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
-  await dialog.getByRole('button', { name: 'Change…' }).nth(1).click();      // the video
+  await dialog.getByRole('button', { name: 'Change…' }).click();            // the video
   await expect(dialog.getByRole('heading', { name: /steps? to run/ })).toBeVisible();
   await expect(dialog.getByRole('checkbox', { name: 'Run Shot captions' })).not.toBeChecked();
 });
 
-test('choosing another pipeline folder takes back the features and the plan', async ({ page }) => {
+test('the dialog runs the pipeline the app installed, with nothing to choose but the video', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
-  await dialog.getByRole('button', { name: 'Change…' }).first().click();     // the pipeline folder
-  await expect(dialog.getByRole('checkbox', { name: 'Run Shot captions' })).not.toBeChecked();   // back to the defaults
+  await expect(dialog.locator('.pipeline')).toHaveText(/^Pipeline 0\.1\.0, 4 of 4 nodes can run on this Mac/);
+  await expect(dialog.getByRole('button', { name: 'Change…' })).toHaveCount(1);   // the video's: no pipeline folder
+});
+
+test('while the pipeline is installed nothing asks it anything, then the dialog fills in', async ({ page }) => {
+  await page.goto('/?pipeline-demo=installing');
+  const dialog = page.getByRole('region', { name: 'Extract' });
+  await expect(dialog.getByText(/^Installing the pipeline\./)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Choose…' })).toHaveCount(0);
+  await expect(dialog.locator('.error')).toHaveCount(0);   // the doctor was not asked before it was there
+  await expect(dialog.locator('.pipeline')).toHaveText(/^Pipeline 0\.1\.0/, { timeout: 5000 });
+  await expect(dialog.getByRole('button', { name: 'Choose…' })).toBeVisible();
+});
+
+test('while a new version of the pipeline is set up, Start run waits, then starts', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=setup-running');
+  await expect(dialog.getByText(/^Setting up this version of the pipeline/)).toContainText('Done: 1, last Shots and audio (environment).');
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled({ timeout: 5000 });   // the setup finished
+  await expect(dialog.getByText(/^Setting up the pipeline/)).toHaveCount(0);
+});
+
+test('an install that failed (offline at first launch) fills the page in once Try again succeeds', async ({ page }) => {
+  await page.goto('/?pipeline-demo=install-failed');
+  const dialog = page.getByRole('region', { name: 'Extract' });
+  await expect(dialog.getByText(/^Setting up the pipeline failed: uv could not install the pipeline/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Choose…' })).toHaveCount(0);   // nothing to run it with yet
+  await dialog.getByRole('button', { name: 'Try again' }).click();
+  await expect(dialog.locator('.pipeline')).toHaveText(/^Pipeline 0\.1\.0/, { timeout: 5000 });
+  await expect(dialog.getByRole('button', { name: 'Choose…' })).toBeVisible();
+});
+
+test('a setup that failed says what failed, and can be tried again without holding up a run', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=setup-failed');
+  await expect(dialog.getByText('Setting up the pipeline failed: environment vision.face-track@1.0.0: could not fetch torch.')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();   // a run fetches what it is missing itself
+  await dialog.getByRole('button', { name: 'Try again' }).click();
+  await expect(dialog.getByText(/^Setting up this version of the pipeline/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled({ timeout: 5000 });
+  await expect(dialog.getByText(/Setting up the pipeline failed/)).toHaveCount(0);
 });
 
 test('a node that can run in several places can be moved, and the plan says how long each step takes', async ({ page }) => {

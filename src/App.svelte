@@ -49,7 +49,8 @@
   if (desktop) tauriPipeline().then((p) => (pipeline = p)).catch((e) => (error = String(e)));
   else {
     const bundle = q.get('bundle');
-    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (pipeline = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary', remote: q.get('pipeline-demo') === 'remote', machinesError: q.get('pipeline-demo') === 'machines-error', noCloud: q.get('pipeline-demo') === 'no-cloud', keysError: q.get('pipeline-demo') === 'keys-error' },
+    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (pipeline = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary', remote: q.get('pipeline-demo') === 'remote', machinesError: q.get('pipeline-demo') === 'machines-error', noCloud: q.get('pipeline-demo') === 'no-cloud', keysError: q.get('pipeline-demo') === 'keys-error',
+      setup: q.get('pipeline-demo') === 'setup-running' ? 'running' : q.get('pipeline-demo') === 'setup-failed' ? 'failed' : q.get('pipeline-demo') === 'installing' ? 'installing' : q.get('pipeline-demo') === 'install-failed' ? 'install-failed' : 'done' },
       // what each demo run was given (its consent, places and spending cap), for the browser tests
       ((window as unknown as { __pipelineRuns: unknown[] }).__pipelineRuns = []))));
     if (bundle) httpSource(bundle, q.get('video'), q.get('previous')).then((s) => (source = s)).catch((e) => (error = String(e)));
