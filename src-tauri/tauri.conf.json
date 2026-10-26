@@ -52,7 +52,7 @@
       "endpoints": [
         "https://github.com/hyperstudyio/hyperstudy-annotator/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_WITH_THE_UPDATER_PUBLIC_KEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxQzkwNDhBQjcyNEQ1OEUKUldTTzFTUzNpZ1RKWVdCMW9NcDRLY1AwZDYrMTE4aWdWZXJIYUh2TXBHMHkrY0Nod3RNbE1NL3UK"
     }
   }
 }

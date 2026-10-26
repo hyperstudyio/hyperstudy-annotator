@@ -82,3 +82,10 @@ test('the app looks for updates on this repository\'s releases', () => {
   expect(conf.plugins.updater.endpoints).toEqual(['https://github.com/hyperstudyio/hyperstudy-annotator/releases/latest/download/latest.json']);
   expect(conf.bundle.createUpdaterArtifacts, 'only the release build makes updater artifacts: it alone has the key').toBeFalsy();
 });
+
+// The updater's public key: an app built without the real one could never install an update, and a key swapped by
+// mistake would strand every installed copy (they accept only updates signed with the key they were built with).
+test('the app carries the release key\'s public half', () => {
+  const pubkey: string = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).plugins.updater.pubkey;
+  expect(Buffer.from(pubkey, 'base64').toString('utf8').split('\n')[0]).toBe('untrusted comment: minisign public key: 61C9048AB724D58E');
+});
