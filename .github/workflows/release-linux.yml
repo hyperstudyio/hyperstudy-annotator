@@ -1,0 +1,110 @@
+# Linux packages of the annotator (x86_64: a .deb and an AppImage), attached to the draft release that release.yml
+# made for a tag. Run only for a release. Built on the oldest supported Ubuntu, so the AppImage's glibc is old enough
+# for most distributions. Nothing is signed: Linux has no Gatekeeper to check a signature.
+name: Linux release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'The release (its tag, e.g. v0.0.1) the packages are attached to'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu]
+    env:
+      VERSION: ${{ inputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The version is the app's
+        run: |
+          app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version: $VERSION" >&2; exit 1; }
+          [ "v$app" = "$VERSION" ] || { echo "tauri.conf.json says $app, not ${VERSION#v}: bump it first" >&2; exit 1; }
+      - name: The system libraries tauri builds against (as tests.yml), and patchelf for the AppImage
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: rustup target add "$TARGET"
+      - run: npm ci
+      - name: The uv the app bundles, for this target (pinned, checked by sha256)
+        run: TAURI_ENV_TARGET_TRIPLE="$TARGET" bash scripts/fetch-uv.sh
+      - name: Build the .deb and the AppImage
+        run: npx tauri build --target "$TARGET" --bundles deb,appimage
+      - name: Name them for the release
+        run: |
+          bundle="src-tauri/target/$TARGET/release/bundle"
+          deb=$(find "$bundle/deb" -maxdepth 1 -name '*.deb' | head -1)
+          appimage=$(find "$bundle/appimage" -maxdepth 1 -name '*.AppImage' | head -1)
+          [ -n "$deb" ] && [ -n "$appimage" ] || { echo "tauri made no .deb or no AppImage" >&2; exit 1; }
+          cp "$deb" "HyperStudy-Annotator-$VERSION-$TARGET.deb"
+          cp "$appimage" "HyperStudy-Annotator-$VERSION-$TARGET.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.target }}
+          path: HyperStudy-Annotator-*-${{ matrix.target }}.*
+          if-no-files-found: error
+          retention-days: 14
+
+  check:
+    name: Installs and finds its libraries and uv (Ubuntu, latest)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64-unknown-linux-gnu
+      - name: The .deb installs with its dependencies, the app finds every library, the bundled uv runs
+        run: |
+          deb=$(ls ./*.deb)
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "$deb"   # resolves the package's Depends as a user's apt would
+          pkg=$(dpkg-deb -f "$deb" Package)
+          missing=0
+          for f in $(dpkg -L "$pkg" | grep '^/usr/bin/'); do
+            if ldd "$f" | grep 'not found'; then echo "$f: libraries not found" >&2; missing=1; fi
+          done
+          [ "$missing" = 0 ]
+          /usr/bin/uv --version
+      - name: The AppImage holds the app and the bundled uv
+        run: |
+          appimage=$(ls ./*.AppImage)
+          chmod +x "$appimage"
+          "$appimage" --appimage-extract > /dev/null   # needs no FUSE, unlike running it
+          find squashfs-root -name uv -type f -perm -u+x -exec {} --version \; | grep -q '^uv ' \
+            || { echo "no runnable uv in the AppImage" >&2; exit 1; }
+
+  upload:
+    name: Attach to the release
+    needs: [build, check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          merge-multiple: true
+      - name: Attach the packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh release upload "$VERSION" HyperStudy-Annotator-*.deb HyperStudy-Annotator-*.AppImage --repo "$GITHUB_REPOSITORY" --clobber

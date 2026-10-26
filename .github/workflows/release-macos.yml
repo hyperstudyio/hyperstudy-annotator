@@ -1,0 +1,180 @@
+# Signed, notarized macOS DMGs of the annotator, for Apple silicon (Intel later), attached to the draft release that
+# release.yml made for a tag. Run only for a release: never by hand or on pull requests, which would sign code that is
+# not on main with the Developer ID.
+#
+# Secrets, in the GitHub Environment `release`, which only v*.*.* tags may use (Settings > Environments), so no other
+# branch or workflow can read them: APPLE_CERTIFICATE (the Developer ID Application certificate and key, a base64 .p12),
+# APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY ("Developer ID Application: ..."), and for notarizing an App Store
+# Connect API key: APPLE_API_KEY (the contents of its AuthKey_*.p8), APPLE_API_KEY_ID and APPLE_API_ISSUER.
+name: macOS release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'The release (its tag, e.g. v0.0.1) the DMGs are attached to'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, sign and notarize (${{ matrix.target }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    environment: release   # the signing secrets live here, for v*.*.* tags only
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin]   # Apple silicon only for now; add x86_64-apple-darwin for Intel Macs
+    env:
+      VERSION: ${{ inputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # origin/main, for the check below
+      - name: Only a commit on main is released
+        run: |
+          git merge-base --is-ancestor HEAD origin/main || { echo "$(git rev-parse --short HEAD) is not on main: merge it first" >&2; exit 1; }
+      - name: The signing secrets are all set
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          # without them tauri would quietly build unsigned or skip notarizing, and fail only later, unnamed
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            [ -n "${!v}" ] || { echo "the $v secret is not set in the release environment" >&2; exit 1; }
+          done
+      - name: The version is the app's
+        run: |
+          app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
+          printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version: $VERSION" >&2; exit 1; }
+          [ "v$app" = "$VERSION" ] || { echo "tauri.conf.json says $app, not ${VERSION#v}: bump it first" >&2; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: rustup target add "$TARGET"
+      - run: npm ci
+      - name: The uv the app bundles, for this target (pinned, checked by sha256)
+        run: TAURI_ENV_TARGET_TRIPLE="$TARGET" bash scripts/fetch-uv.sh
+
+      - name: The signing certificate, in a keychain of this run's own
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          (umask 077; printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$RUNNER_TEMP/certificate.p12")
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain"
+          rm "$RUNNER_TEMP/certificate.p12"
+
+      - name: The App Store Connect API key, for notarizing
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          (umask 077; printf '%s\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8")
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+
+      # tauri signs the app (hardened runtime, the bundled uv with it), then notarizes and staples it before making the
+      # DMG: a stapled app opens on a Mac that is offline the first time. tauri's APPLE_API_KEY is the key's ID.
+      - name: Build, sign, notarize and staple the app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: npx tauri build --target "$TARGET" --bundles app,dmg
+
+      - name: The app and its bundled uv are signed, with the hardened runtime, and the app is stapled
+        run: |
+          app=$(find "src-tauri/target/$TARGET/release/bundle/macos" -maxdepth 1 -name '*.app' | head -1)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          for bin in "$app/Contents/MacOS/"*; do
+            codesign --verify --strict "$bin"
+            codesign --display --verbose=2 "$bin" 2>&1 | grep -q 'flags=.*runtime' || { echo "$bin is not signed with the hardened runtime" >&2; exit 1; }
+          done
+
+      - name: Notarize and staple the DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          dmg=$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -name '*.dmg' | head -1)
+          name="HyperStudy-Annotator-$VERSION-$TARGET.dmg"
+          cp "$dmg" "$name"
+          scripts/notarize-dmg.sh "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-${{ matrix.target }}
+          path: HyperStudy-Annotator-*-${{ matrix.target }}.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the keychain, the certificate and the API key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+  check:
+    name: Opens as a user's Mac would open it (Apple silicon)
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dmg-aarch64-apple-darwin
+      - name: Stapled, accepted by Gatekeeper, and the app starts
+        run: |
+          spctl --status | grep -q 'assessments enabled' || { echo "Gatekeeper is off on this runner: spctl would pass anything" >&2; exit 1; }
+          dmg=$(ls ./*.dmg)
+          xcrun stapler validate "$dmg"
+          mount=$(hdiutil attach -nobrowse -readonly "$dmg" | tail -1 | cut -f3-)
+          app="$mount/HyperStudy Annotator.app"
+          [ -d "$app" ] || { echo "no HyperStudy Annotator.app in the DMG" >&2; exit 1; }
+          xcrun stapler validate "$app"   # its own ticket: opens offline once copied to /Applications
+          spctl --assess --type execute --verbose=2 "$app"
+          exe="$app/Contents/MacOS/$(defaults read "$app/Contents/Info" CFBundleExecutable)"
+          "$exe" > app.log 2>&1 &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2> /dev/null; then echo "the app exited within 15 s:" >&2; cat app.log >&2; exit 1; fi
+          kill "$pid"
+          wait "$pid" 2> /dev/null || true   # exited, so the volume is no longer busy
+          hdiutil detach "$mount"
+
+  upload:
+    name: Attach to the release
+    needs: [build, check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dmg-*
+          merge-multiple: true
+      - name: Attach the DMGs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh release upload "$VERSION" HyperStudy-Annotator-*.dmg --repo "$GITHUB_REPOSITORY" --clobber
