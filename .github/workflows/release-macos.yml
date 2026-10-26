@@ -1,4 +1,4 @@
-# Signed, notarized macOS DMGs of the annotator, for Apple silicon and Intel: called by release.yml for a tag. Run by
+# Signed, notarized macOS DMGs of the annotator, for Apple silicon (Intel later): called by release.yml for a tag. Run by
 # hand, or on a pull request that changes how releases are made, it does all of it without publishing anything.
 #
 # Secrets: APPLE_CERTIFICATE (the Developer ID Application certificate and key, a base64 .p12),
@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        target: [aarch64-apple-darwin]   # Apple silicon only for now; add x86_64-apple-darwin for Intel Macs
     env:
       VERSION: ${{ inputs.version }}   # empty on a pull request: the app's own (below)
       TARGET: ${{ matrix.target }}

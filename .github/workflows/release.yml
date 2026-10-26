@@ -33,10 +33,9 @@ jobs:
           TAG: ${{ steps.version.outputs.version }}
         run: |
           cat > notes.md <<EOF
-          ## Install (macOS 12 or later)
+          ## Install (macOS 12 or later, Apple silicon)
 
-          - Apple silicon: \`HyperStudy-Annotator-$TAG-aarch64-apple-darwin.dmg\`
-          - Intel: \`HyperStudy-Annotator-$TAG-x86_64-apple-darwin.dmg\`
+          - \`HyperStudy-Annotator-$TAG-aarch64-apple-darwin.dmg\`
 
           Open the DMG and drag HyperStudy Annotator to Applications. Signed with a Developer ID and notarized by Apple.
 
