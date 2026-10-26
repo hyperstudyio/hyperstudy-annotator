@@ -5,14 +5,16 @@
   // In a browser (development and testing): ?bundle=<URL of a bundle folder>&video=<URL of its video> opens that
   // bundle straight in the viewer; vite serves /devdata from a local http-server (see README). &previous=<URL of an
   // earlier bundle of the same video> opens it as a re-run, offering the earlier bundle's corrections. ?pipeline-demo
-  // opens Extract (and Settings) against a scripted stand-in for the pipeline.
-  import Rail, { type Page, type RunStatus } from './lib/components/Rail.svelte';
+  // opens Extract (and Settings) against a scripted stand-in for the pipeline, and ?update-demo=<available|current|
+  // offline|bad-download> the app's updates against one for the releases (updates.fake.ts).
+  import Rail, { type Page, type RunStatus, type UpdateBadge } from './lib/components/Rail.svelte';
   import Library from './lib/components/Library.svelte';
   import Viewer from './lib/components/Viewer.svelte';
   import Settings from './lib/components/Settings.svelte';
   import { httpSource, inTauri, tauriSource, type BundleSource } from './lib/source';
   import PipelineDialog from './lib/components/PipelineDialog.svelte';
   import { tauriPipeline, type PipelineApi } from './lib/pipeline';
+  import { tauriUpdater, Updates } from './lib/updates.svelte';
 
   let source = $state<BundleSource | null>(null);
   let error = $state<string | null>(null);
@@ -26,6 +28,23 @@
   let run = $state<RunStatus | null>(null);
   let modal = $state(false);   // the viewer waits on a dialog: the rail is out of reach, as the page behind it is
   let runKey = $state(0);   // New run: Extract starts over
+  // the app's updates: checked quietly at launch; the macOS app menu's Check for Updates… asks again, in Settings
+  let updates = $state<Updates | null>(null);
+  let showUpdates = $state(false);
+  const badge = $derived.by((): UpdateBadge | null => {
+    const u = updates?.phase;
+    return u?.kind === 'available' ? { state: 'available', version: u.version, fraction: null }
+      : u?.kind === 'downloading' ? { state: 'downloading', version: u.version, fraction: u.fraction }
+      : u?.kind === 'ready' ? { state: 'ready', version: u.version, fraction: 1 } : null;
+  });
+  const toUpdates = () => { page = 'settings'; showUpdates = true; };
+  const startUpdates = (u: Updates) => { updates = u; u.check({ quiet: true }); };
+  if (desktop) {
+    tauriUpdater().then((api) => startUpdates(new Updates(api))).catch(() => {});
+    import('@tauri-apps/api/event').then(({ listen }) => listen('menu://check-for-updates', () => { toUpdates(); updates?.check(); }));
+  } else if (q.has('update-demo')) {
+    import('./lib/updates.fake').then((m) => startUpdates(new Updates(m.fakeUpdater((q.get('update-demo') || 'available') as Parameters<typeof m.fakeUpdater>[0]))));
+  }
 
   if (desktop) tauriPipeline().then((p) => (pipeline = p)).catch((e) => (error = String(e)));
   else {
@@ -45,7 +64,7 @@
 </script>
 
 <div class="app">
-  <div class="rail-wrap" inert={modal}><Rail {page} {run} onnavigate={(p) => (page = p)} /></div>
+  <div class="rail-wrap" inert={modal}><Rail {page} {run} update={badge} onnavigate={(p) => (page = p)} onupdate={toUpdates} /></div>
   <main>
     {#if shown.has('extract')}
       <div class="page" class:on={page === 'extract'}>
@@ -76,7 +95,7 @@
 
     {#if shown.has('settings')}
       <div class="page" class:on={page === 'settings'}>
-        <Settings api={pipeline} active={page === 'settings'} />
+        <Settings api={pipeline} {updates} active={page === 'settings'} running={run?.state === 'running'} {showUpdates} onshown={() => (showUpdates = false)} />
       </div>
     {/if}
   </main>

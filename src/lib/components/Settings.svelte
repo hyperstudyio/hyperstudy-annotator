@@ -1,15 +1,21 @@
 <script lang="ts">
   // Settings: the keys the pipeline's steps use, the machines they can run on, what this computer can run, and the
-  // app's version. The keys and machines are the same controls Extract offers beside a plan; Extract loads them again
-  // when you go back to it, and this page loads them again each time it is shown.
+  // app's version and its updates. The keys and machines are the same controls Extract offers beside a plan; Extract
+  // loads them again when you go back to it, and this page loads them again each time it is shown.
   import { untrack } from 'svelte';
   import Keys from './Keys.svelte';
   import Machines from './Machines.svelte';
   import { DOCS_URL, openExternal } from '../links';
-  import { inTauri } from '../source';
+  import type { Updates } from '../updates.svelte';
   import { placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type PipelineApi } from '../pipeline';
 
-  let { api, active = true }: { api: PipelineApi | null; active?: boolean } = $props();
+  let { api, updates = null, active = true, running = false, showUpdates = false, onshown }: {
+    api: PipelineApi | null; updates?: Updates | null; active?: boolean;
+    /** a pipeline run is going: a relaunch now would stop it */
+    running?: boolean;
+    /** bring the updates into view (the rail's Update item); `onshown` once they are */
+    showUpdates?: boolean; onshown?: () => void;
+  } = $props();
 
   let keys = $state<KeyStatus[]>([]);
   let cli = $state<CliKeys | null>(null);
@@ -18,7 +24,7 @@
   let doctor = $state<Doctor | null>(null);
   let problems = $state<{ keys?: string; machines?: string; computer?: string }>({});
   let loaded = $state(false);
-  let version = $state<string | null>(null);
+  let updatesSection = $state<HTMLElement>();
 
   // a pipeline from before a command does not know it (argparse: invalid choice); that is said as such, not as a failure
   const older = (r: PromiseSettledResult<unknown>, cmd: string) => r.status === 'rejected' && new RegExp(`invalid choice: '${cmd}'`).test(String(r.reason));
@@ -39,9 +45,9 @@
     loaded = true;
   }
   $effect(() => { if (active && api) { const a = api; untrack(() => { load(a); }); } });
-  $effect(() => {
-    if (inTauri()) import('@tauri-apps/api/app').then((m) => m.getVersion()).then((v) => (version = v)).catch(() => {});
-  });
+  $effect(() => { if (active && showUpdates && updatesSection) { updatesSection.scrollIntoView({ block: 'start' }); onshown?.(); } });
+  const u = $derived(updates?.phase);
+  const time = (d: Date) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
   const PLATFORM: Record<string, string> = { darwin: 'Mac', linux: 'Linux', windows: 'Windows' };
   const ARCH: Record<string, string> = { arm64: 'Apple silicon', aarch64: 'Arm', amd64: 'x86-64', x86_64: 'x86-64' };
@@ -98,9 +104,39 @@
     </section>
   {/if}
 
-  <section class="group about" aria-labelledby="about-heading">
-    <h2 id="about-heading">About</h2>
-    <p>HyperStudy Annotator{#if version} {version}{/if}. <button class="link" onclick={() => openExternal(DOCS_URL)}>Read the documentation</button></p>
+  <section class="group" aria-labelledby="updates-heading" bind:this={updatesSection}>
+    <h2 id="updates-heading">Updates</h2>
+    <p class="lead">{updates?.version ? `HyperStudy Annotator ${updates.version}` : 'HyperStudy Annotator'}. <button class="link" onclick={() => openExternal(DOCS_URL)}>Read the documentation</button></p>
+    {#if !updates || !u}
+      <p class="muted">The desktop app updates itself. In a browser, add <code>?update-demo</code> to the address to try it against a stand-in.</p>
+    {:else if u.kind === 'available' || u.kind === 'downloading' || u.kind === 'ready'}
+      <div class="panel update" aria-live="polite">
+        {#if u.kind === 'available'}
+          <p><strong>Version {u.version} is available.</strong></p>
+          {#if u.notes}<p class="notes">{u.notes}</p>{/if}
+          <div class="row"><button class="primary" onclick={() => updates.install()}>Install update</button>
+            <span class="muted">It downloads now; the app relaunches when you say.</span></div>
+        {:else if u.kind === 'downloading'}
+          <p>Downloading version {u.version}{#if u.fraction != null}, {Math.round(u.fraction * 100)}%{/if}…</p>
+          <div class="track" role="progressbar" aria-label="Download" aria-valuemin={0} aria-valuemax={100}
+            aria-valuenow={u.fraction == null ? undefined : Math.round(u.fraction * 100)}>
+            <span class="bar" class:busy={u.fraction == null} style:width={u.fraction == null ? undefined : `${u.fraction * 100}%`}></span>
+          </div>
+        {:else}
+          <p><strong>Version {u.version} is installed.</strong> Relaunch to finish: your corrections are saved as you make them.</p>
+          <div class="row"><button class="primary" onclick={() => updates.relaunch()} disabled={running}>Relaunch now</button>
+            {#if running}<span class="muted">A run is going on Extract, and a relaunch would stop it. Relaunch once it ends.</span>{/if}</div>
+        {/if}
+      </div>
+    {:else}
+      <div class="row" aria-live="polite">
+        <button onclick={() => updates.check()} disabled={u.kind === 'checking'}>{u.kind === 'failed' ? 'Try again' : 'Check for updates'}</button>
+        {#if u.kind === 'checking'}<span class="muted">Checking…</span>
+        {:else if u.kind === 'current'}<span class="muted">Up to date, as of {time(u.at)}.</span>
+        {:else if u.kind === 'failed'}<span class="error">{u.op === 'check' ? 'Could not check for updates' : 'The update did not install'}: {u.message}</span>
+        {:else if updates.quietError}<span class="muted">The last check could not reach the releases ({updates.quietError}).</span>{/if}
+      </div>
+    {/if}
   </section>
 </section>
 
@@ -115,6 +151,13 @@
   .panel { padding: 12px 14px; border: 1px solid var(--color-border-default); background: var(--color-bg-surface); border-radius: 8px; display: grid; gap: 8px; }
   .cannot { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }
   .cannot li { display: flex; gap: 10px; flex-wrap: wrap; }
-  .about p { color: var(--color-text-secondary); }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .update { border-color: var(--color-primary); background: var(--color-primary-light); }
+  .notes { white-space: pre-line; color: var(--color-text-secondary); max-height: 10em; overflow: auto; }
+  .track { position: relative; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--color-primary); transition: width .3s linear; }
+  .bar.busy { width: 30%; animation: slide 1.4s ease-in-out infinite alternate; }
+  @keyframes slide { from { left: 0; } to { left: 70%; } }
+  @media (prefers-reduced-motion: reduce) { .bar { transition: none; } .bar.busy { animation: none; } }
   code { font-size: 12px; }
 </style>
