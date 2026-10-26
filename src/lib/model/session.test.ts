@@ -130,15 +130,16 @@ describe('segments', () => {
   });
 });
 
-// The user's cleaned identity file from the prototype, against the bundle converted from the same run.
-const RUN = '/Users/lukechang/Github/hyperstudy/.claude/worktrees/video-perception-bakeoff/tools/perception-bakeoff/runs/ooo-genz-clip1';
-test.skipIf(!existsSync(`${RUN}/perception_corrections.json`))('the prototype\'s real corrections file imports with no unknown ids', async () => {
+// A real corrections file from the annotator prototype, against the bundle converted from the same run: set
+// PROTOTYPE_RUN to that run's folder (it holds perception_corrections.json and bundle/). Skipped without it.
+const RUN = process.env.PROTOTYPE_RUN ?? '';
+test.skipIf(!RUN || !existsSync(`${RUN}/perception_corrections.json`))('the prototype\'s real corrections file imports with no unknown ids', async () => {
   const manifest = JSON.parse(readFileSync(`${RUN}/bundle/manifest.json`, 'utf8'));
   const layers = Object.fromEntries(['shots', 'transcript', 'speakers', 'faces', 'bodies', 'hands', 'gestures', 'facing', 'gaze', 'objects', 'sounds', 'text', 'prosody', 'waveform']
     .map((n) => [n, manifest.layers[n] && n !== 'bodies' && n !== 'hands' ? JSON.parse(readFileSync(`${RUN}/bundle/${manifest.layers[n].file}`, 'utf8')) : null])) as unknown as Layers;
   const s = new Session(new Bundle(manifest, layers), new LocalCorrectionStore(manifest.video.sha256, new MemoryStorage()), new View('x', null));
   const ops = await s.parseCorrections(readFileSync(`${RUN}/perception_corrections.json`, 'utf8'));
-  expect(ops).toHaveLength(88);
+  expect(ops.length).toBeGreaterThan(0);   // parseCorrections throws on an id the bundle does not have
 });
 
 test('two commits in the same millisecond get different timestamps', () => {
