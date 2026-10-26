@@ -3,7 +3,7 @@
 <!--
   Hardened runtime, Developer ID distribution, no App Sandbox: the app reads bundles and videos wherever the user
   keeps them, and remembers their paths between launches, which sandboxing would turn into security-scoped
-  bookmarks. Network access: the updater, and the pipeline the app can run (its bundled uv fetches environments,
+  bookmarks. Network access: the pipeline the app can run (its bundled uv fetches environments,
   and nodes fetch model weights). The app itself runs no models: the pipeline's processes do. No JIT, debugger or
   device entitlements.
 -->

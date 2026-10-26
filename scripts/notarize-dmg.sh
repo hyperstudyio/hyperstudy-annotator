@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sign, notarize and staple a release DMG (.github/workflows/release-macos.yml), then check it as Gatekeeper will:
 #   scripts/notarize-dmg.sh PATH.dmg
-# The app inside was signed by `tauri build` (APPLE_SIGNING_IDENTITY, hardened runtime, the bundled uv with it).
+# The app inside was signed, notarized and stapled by `tauri build` (hardened runtime, the bundled uv with it).
 # Needs APPLE_SIGNING_IDENTITY, and an App Store Connect API key for notarytool: APPLE_API_KEY_PATH (its .p8 file),
 # APPLE_API_KEY_ID and APPLE_API_ISSUER, from the repository's secrets; none is printed.
 set -euo pipefail

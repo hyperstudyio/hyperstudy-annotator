@@ -15,6 +15,11 @@ dialogs by hand, is still open).
   server, a DGX Spark). Price 0, duration from measurements on that machine.
 - **HyperStudy connection.** A Settings page where the user pastes an API key created in HyperStudy. Stored in the
   OS keychain; nothing else is needed to connect.
+- **macOS releases (2026-10-25).** Pushing a tag vX.Y.Z (the version in tauri.conf.json) makes a draft GitHub
+  release with a signed, notarized DMG for Apple silicon; it is published by hand once checked. Developer ID, hardened
+  runtime, only the network-client entitlement, no App Sandbox. The app and the DMG are each notarized and stapled,
+  so the app opens on a Mac that is offline. Notarized with an App Store Connect API key, not an Apple ID. Intel
+  DMGs: one more target in release-macos.yml.
 
 ## What exists
 
@@ -203,6 +208,6 @@ Not yet:
   JSON); timeline performance at 2 hours.
 - Playback: webview codec support differs by platform; a re-encoded H.264 proxy when a video does not play.
 - Licences: academic-only layers carry a warning when exported or shared.
-- Distribution: macOS signing and notarisation (the bundled uv is signed with the app), Windows build (fetch-uv.sh
+- Distribution: Windows build (fetch-uv.sh
   does not fetch the Windows .zip yet), auto-update, bundle schema migrations, packaging the pipeline itself.
 - Several annotators on one video: merging op logs, agreement statistics.
