@@ -64,11 +64,14 @@ jobs:
       # The packages apt downloads (77 MB), kept between runs: the Ubuntu mirror's speed varies by the run (10.7 MB/s,
       # or 451 kB/s), so a run downloads only what changed since (ci-apt.sh). apt checks each kept package against the
       # signed lists it fetches, so one that differs is downloaded again. Keyed on the runner image, which changes weekly.
+      # (ImageOS and ImageVersion are the runner's own environment, which ${{ env }} does not see)
+      - id: image
+        run: echo "id=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: ~/apt-archives/*.deb
-          key: apt-tauri-libs-${{ env.ImageOS }}-${{ env.ImageVersion }}
-          restore-keys: apt-tauri-libs-${{ env.ImageOS }}-
+          key: apt-tauri-libs-${{ steps.image.outputs.id }}
+          restore-keys: apt-tauri-libs-
       # about 40 s with the packages kept, a few minutes without on a slow mirror; a stall fails here, its log saying
       # where (ci-apt.sh), not at the job's 30 minutes
       - name: Tauri's Linux libraries
