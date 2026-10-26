@@ -25,9 +25,10 @@ pub fn run() {
             let conn = db::open(&data_dir.join("annotator.db"))?;
             let uv_dirs = pipeline::UvDirs { python: data_dir.join("python"), cache: app.path().app_cache_dir()?.join("uv"),
                                              tools: data_dir.join("tools"), bin: data_dir.join("bin") };
+            let setup = Mutex::new(commands::SetupStatus::at_start(&uv_dirs));
             app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), control: Default::default(),
                                             keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))),
-                                            uv_dirs, setup: Default::default() });
+                                            uv_dirs, setup });
             commands::start_setup(app.handle().clone())?;   // install or upgrade the pipeline, set a new version up: in the background
             Ok(())
         })
