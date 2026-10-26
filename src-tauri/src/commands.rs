@@ -295,10 +295,21 @@ pub fn pipeline_setup_status(state: State<'_, AppState>) -> SetupStatus {
     state.setup.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Try a setup that failed again (it fetches only what is still missing).
+/// Try a setup that failed again (it fetches only what is still missing): not during a run, whose environment an
+/// upgrade or a setup would change under it.
 #[tauri::command]
-pub fn pipeline_setup(app: AppHandle) {
+pub fn pipeline_setup(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
+    check_no_run(state.running.lock().unwrap().as_deref())?;
     start_setup(app);
+    Ok(())
+}
+
+/// Refused while a run is in progress (starting, or named).
+pub fn check_no_run(running: Option<&str>) -> Result<()> {
+    match running {
+        Some(_) => Err(Error::Bundle("a pipeline run is in progress: set the pipeline up again when it ends".into())),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -510,6 +521,13 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pipeline_is_not_set_up_again_during_a_run() {
+        assert!(check_no_run(None).is_ok());
+        assert!(check_no_run(Some("")).unwrap_err().to_string().contains("run is in progress"));   // starting
+        assert!(check_no_run(Some("20261024-095828-1ad462")).is_err());
+    }
 
     #[test]
     fn only_the_run_in_progress_can_be_canceled() {

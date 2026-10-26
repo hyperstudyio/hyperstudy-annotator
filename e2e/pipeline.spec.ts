@@ -141,6 +141,16 @@ test('while a new version of the pipeline is set up, Start run waits, then start
   await expect(dialog.getByText(/^Setting up the pipeline/)).toHaveCount(0);
 });
 
+test('an install that failed (offline at first launch) fills the page in once Try again succeeds', async ({ page }) => {
+  await page.goto('/?pipeline-demo=install-failed');
+  const dialog = page.getByRole('region', { name: 'Extract' });
+  await expect(dialog.getByText(/^Setting up the pipeline failed: uv could not install the pipeline/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Choose…' })).toHaveCount(0);   // nothing to run it with yet
+  await dialog.getByRole('button', { name: 'Try again' }).click();
+  await expect(dialog.locator('.pipeline')).toHaveText(/^Pipeline 0\.1\.0/, { timeout: 5000 });
+  await expect(dialog.getByRole('button', { name: 'Choose…' })).toBeVisible();
+});
+
 test('a setup that failed says what failed, and can be tried again without holding up a run', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=setup-failed');
   await expect(dialog.getByText('Setting up the pipeline failed: environment vision.face-track@1.0.0: could not fetch torch.')).toBeVisible();

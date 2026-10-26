@@ -23,7 +23,9 @@
     onstatus?: (run: RunStatus | null) => void;
   } = $props();
 
-  let loaded = $state(false);   // the pipeline was asked what it has (once it is installed)
+  // the setup state the pipeline was last asked what it has in: asked again when that changes and nothing loaded (an
+  // install that failed, then succeeded on Try again), never twice in one state (a load that fails does not loop)
+  let askedIn: string | null = null;
   let setup = $state<SetupStatus | null>(null);
   let doctor = $state<Doctor | null>(null);
   // other machines steps can run on (null: this pipeline predates them, perception #15/#16)
@@ -130,7 +132,12 @@
     if (graphs.some((g) => g.file === FULL_GRAPH)) graph = FULL_GRAPH;   // features are picked from it
   });
   // nothing can answer while the pipeline is being installed: asked once it is (or a checkout runs: no setup)
-  $effect(() => { if (setup && setup.state !== 'installing' && !loaded) { loaded = true; loadPipeline(); } });
+  $effect(() => {
+    const s = setup?.state;
+    if (!s || s === 'installing' || doctor || s === askedIn) return;
+    askedIn = s;
+    loadPipeline();
+  });
   $effect(() => () => stop?.());
   $effect(() => {   // the setup's status, then each change to it (listening first: no change is missed)
     let off: (() => void) | null = null, gone = false;
@@ -431,7 +438,7 @@
           {#if setup.steps.length}Done: {setup.steps.length}, last {stepTitle(setup.steps[setup.steps.length - 1])} ({setup.steps[setup.steps.length - 1].what}).{/if}
           Start run waits for it.</p>
       {:else if setup?.state === 'failed'}
-        <p class="error">Setting up the pipeline failed: {setup.problem}. <button class="link" onclick={retrySetup} disabled={!!busy}>Try again</button></p>
+        <p class="error">Setting up the pipeline failed: {setup.problem}. <button class="link" onclick={retrySetup} disabled={!!busy || (started && !done)}>Try again</button></p>
       {/if}
       {#if view.imported}<p>Imported into the library.</p>
       {:else if started && !done && view.status === 'succeeded'}<p class="muted">Importing into the library…</p>{/if}

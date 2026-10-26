@@ -22,6 +22,15 @@ dialogs by hand, is still open).
   a Mac that is offline; notarized with an App Store Connect API key, not an Apple ID; the signing secrets are in a GitHub Environment
   only v*.*.* tags may use. Intel DMGs: one more target in
   release-macos.yml. Linux: built on Ubuntu 22.04, unsigned.
+- **The pipeline, installed by the app (2026-10-26).** v0.0.1 asked for a hyperstudy-perception checkout, and every
+  step failed: an app started from the Finder has only /usr/bin:/bin:/usr/sbin:/sbin on its PATH, so uv and ffmpeg
+  were not found. Now the bundled uv installs hyperstudy-perception from PyPI as a tool into the app's folders, and
+  upgrades it at each start to the newest version the app reads (`COMPATIBLE`, `>=0.1,<0.2`: a minor version may change
+  the `--json` protocol, a patch may not), on a Python it fetches there (`UV_PYTHON_PREFERENCE=only-managed`, no user
+  uv.toml); `perception setup` then fetches each new version's packages and weights in the background, and a run waits
+  for it. Nothing else is needed on the machine: the pipeline reads video with PyAV, and each release pins its
+  dependencies to what its CI tested. Offline, the installed version runs and the page says the check failed. No folder
+  is chosen, so the guard against one inside the app's data went too; `PERCEPTION_REPO` runs a checkout (development).
 
 ## What exists
 
@@ -134,6 +143,7 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
 **Step 2 (2026-10-24): running the pipeline from the app, first part.** The library's *Run pipeline…* opens a
 dialog (`PipelineDialog.svelte`) that goes in order:
 - **Pipeline folder.** The hyperstudy-perception folder (a setting, migration 3), checked with `perception doctor`.
+  *Superseded 2026-10-26: no folder; the app installs the pipeline (Decisions). The setting is no longer read.*
 - **Video and graph.** A video, and one of the pipeline's `graphs/*.yaml`.
 - **Plan.** Placement, cache hits, model downloads, missing secrets and cost per node. (Downloads were first allowed
   explicitly, as uploads were; both are now part of running the features chosen, see Features below.)
@@ -148,14 +158,15 @@ How it is built:
 - One run at a time, since GPU nodes are exclusive.
 
 Checked:
-- Rust tests, including the real CLI end to end through the bundled uv (set `PERCEPTION_REPO`): a synthetic clip
-  decoded, exported and imported.
+- Rust tests, including the real CLI end to end through the bundled uv: installed as the app installs it (from PyPI,
+  or the wheel `PERCEPTION_WHEEL` names; `PERCEPTION_REPO` for a checkout), under the Finder's PATH, a synthetic clip
+  (src-tauri/tests/clip.mp4) decoded, exported and imported.
 - The dialog in Chrome against a scripted stand-in (`?pipeline-demo` in browser mode, where Tauri is absent).
 
 **Step 2, second part (2026-10-24): where each node runs, and how long it takes** (annotator #8, perception #11).
 - A node that can run in several places here has a menu (`native:mps`, `native:cpu`...). Changing it plans again, and
   the places go to `plan`, to the consent re-check and to `run` as `--place NODE=PLACE` (`place_args` checks their form:
-  a node id that is not an option, `backend:target`). Places reset with a new graph or pipeline folder.
+  a node id that is not an option, `backend:target`). Places reset with a new graph.
 - Each node that will run shows its estimated time: the median of its measured seconds per minute of video for that
   node and place on this machine, times this video's length; the reason when there is none. The total counts only
   what will run.
@@ -182,7 +193,7 @@ Checked:
   so sending is never chosen by bringing a step along. The app passes `--allow-uploads` then, after holding a fresh
   plan to exactly what the steps the user turned on send (`upload_gate`, per node and kind). A step that runs on a hosted
   API shows it ("Anthropic API (cloud)"). Progress is one colour: a running step fills against its estimate, a
-  finished one is full. A pipeline folder with no full graph offers its graphs instead.
+  finished one is full. A pipeline with no full graph offers its graphs instead.
 
 - **Other machines** (perception #15, #16): a lab server added with `perception hosts add` and, with `perception cloud
   on`, a cloud GPU started for the step and deleted after it, join each step's place menu after this machine's places,
@@ -211,5 +222,5 @@ Not yet:
 - Playback: webview codec support differs by platform; a re-encoded H.264 proxy when a video does not play.
 - Licences: academic-only layers carry a warning when exported or shared.
 - Distribution: Windows build (fetch-uv.sh
-  does not fetch the Windows .zip yet), auto-update, bundle schema migrations, packaging the pipeline itself.
+  does not fetch the Windows .zip yet), auto-update, bundle schema migrations.
 - Several annotators on one video: merging op logs, agreement statistics.

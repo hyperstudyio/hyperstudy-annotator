@@ -109,16 +109,18 @@ const KEYS = [
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, setup = 'done' as 'done' | 'installing' | 'running' | 'failed', setupMs = 1500 } = {},
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
   let status: SetupStatus = setup === 'done' ? { state: 'done', steps: [], problem: null, notice: null }
     : setup === 'installing' ? { state: 'installing', steps: [], problem: null, notice: null }
+    : setup === 'install-failed' ? { state: 'failed', steps: [], problem: 'uv could not install the pipeline: error: Failed to fetch: https://pypi.org/simple/hyperstudy-perception/', notice: null }
     : setup === 'running' ? { state: 'running', steps: [step('core.decode@1.0.0', 'environment')], problem: null, notice: null }
     : { state: 'failed', steps: [step('vision.face-track@1.0.0', 'environment', false, 'could not fetch torch')], problem: 'environment vision.face-track@1.0.0: could not fetch torch', notice: null };
   const setupListeners = new Set<(s: SetupStatus) => void>();
   const setStatus = (s: SetupStatus) => { status = s; setupListeners.forEach((on) => on(s)); };
-  const finish = () => setTimeout(() => setStatus({ state: 'done', steps: [...status.steps, step('audio.asr@1.0.0', 'environment')], problem: null, notice: null }), setupMs);
+  let installed = setup !== 'installing' && setup !== 'install-failed';   // a first launch offline has none
+  const finish = () => setTimeout(() => (installed = true) && setStatus({ state: 'done', steps: [...status.steps, step('audio.asr@1.0.0', 'environment')], problem: null, notice: null }), setupMs);
   if (setup === 'running' || setup === 'installing') finish();
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
   let hosts: Host[] = remote_ ? [labHost('lab', 'you@lab')] : [];
@@ -131,8 +133,8 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   return {
     setupStatus: async () => status,
     async onSetup(on) { setupListeners.add(on); return () => setupListeners.delete(on); },
-    async retrySetup() { setStatus({ state: 'running', steps: [], problem: null, notice: null }); finish(); },
-    async doctor() { if (status.state === 'installing') throw new Error('the pipeline is not installed yet: the app installs it when it starts'); return doctor; },
+    async retrySetup() { setStatus({ state: installed ? 'running' : 'installing', steps: [], problem: null, notice: null }); finish(); },
+    async doctor() { if (!installed) throw new Error('the pipeline is not installed yet: the app installs it when it starts'); return doctor; },
     graphs: async () => oldCli ? graphs.filter((g) => g.file !== 'full.yaml') : graphs,   // an older pipeline has no full graph
     async plan(_graph, _video, places, settings) {
       if (oldCli) return { ...plan, nodes: plan.nodes.map(({ needs, place, options, estimates, estimate_s, estimate_basis, title, service, description, outputs, models, settings, ...n }) => n) };
