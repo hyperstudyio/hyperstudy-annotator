@@ -13,7 +13,7 @@
   import Settings from './lib/components/Settings.svelte';
   import { httpSource, inTauri, tauriSource, type BundleSource } from './lib/source';
   import PipelineDialog from './lib/components/PipelineDialog.svelte';
-  import { tauriPipeline, type PipelineApi } from './lib/pipeline';
+  import { tauriPipeline, type PipelineApi, type SetupStatus } from './lib/pipeline';
   import { tauriUpdater, Updates } from './lib/updates.svelte';
 
   let source = $state<BundleSource | null>(null);
@@ -38,6 +38,21 @@
       : u?.kind === 'ready' ? { state: 'ready', version: u.version, fraction: 1 } : null;
   });
   const toUpdates = () => { page = 'settings'; showUpdates = true; };
+  // the pipeline being set up (first launch, or a new version: its packages and model weights) is, like a run, something
+  // a relaunch would stop: listening first, then its status now, so no change is missed
+  let setupBusy = $state(false);
+  $effect(() => {
+    const p = pipeline;
+    if (!p) return;
+    let off: (() => void) | null = null, gone = false, heard = false;
+    const busy = (s: SetupStatus) => s.state === 'installing' || s.state === 'running';
+    p.onSetup((s) => { heard = true; setupBusy = busy(s); })
+      .then((f) => { if (gone) f(); else off = f; return p.setupStatus(); })
+      .then((s) => { if (!gone && !heard) setupBusy = busy(s); }).catch(() => {});
+    return () => { gone = true; off?.(); };
+  });
+  const holdRelaunch = $derived(run?.state === 'running' ? 'A run is going on Extract, and a relaunch would stop it. Relaunch once it ends.'
+    : setupBusy ? 'The pipeline is being set up (its packages and model weights), and a relaunch would stop that. Relaunch once it is done.' : null);
   const startUpdates = (u: Updates) => { updates = u; u.check({ quiet: true }); };
   if (desktop) {
     tauriUpdater().then((api) => startUpdates(new Updates(api))).catch(() => {});
@@ -96,7 +111,7 @@
 
     {#if shown.has('settings')}
       <div class="page" class:on={page === 'settings'}>
-        <Settings api={pipeline} {updates} active={page === 'settings'} running={run?.state === 'running'} {showUpdates} onshown={() => (showUpdates = false)} />
+        <Settings api={pipeline} {updates} active={page === 'settings'} {holdRelaunch} {showUpdates} onshown={() => (showUpdates = false)} />
       </div>
     {/if}
   </main>
