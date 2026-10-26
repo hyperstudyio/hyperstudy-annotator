@@ -52,7 +52,7 @@
       "endpoints": [
         "https://github.com/hyperstudyio/hyperstudy-annotator/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxQzkwNDhBQjcyNEQ1OEUKUldTTzFTUzNpZ1RKWVdCMW9NcDRLY1AwZDYrMTE4aWdWZXJIYUh2TXBHMHkrY0Nod3RNbE1NL3UK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVBMkQxRDE0OTNFNkE0MzAKUldRd3BPYVRGQjB0Nmc4MUh1ajZZY3ljamppWVUzNFJXT1o5WEJwdlRoTWxUczRGcXViOHBpTDQK"
     }
   }
 }

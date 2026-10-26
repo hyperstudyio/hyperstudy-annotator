@@ -53,6 +53,19 @@ test('the Linux build reads the updater key, and nothing else', () => {
   expect([...new Set(secretsRead(load('release-linux.yml').jobs.build.steps))].sort()).toEqual(UPDATER);
 });
 
+// The updater key is tried before the build, not first at its end: v0.0.2's first run built and notarized for 6 minutes
+// before finding that the password was not the key's.
+test.each(['release-macos.yml', 'release-linux.yml'])('%s checks the updater key before it builds', (file) => {
+  const steps = load(file).jobs.build.steps as { run?: string }[];
+  const check = steps.findIndex((s) => s.run?.includes('scripts/check-updater-key.sh'));
+  const build = steps.findIndex((s) => s.run?.includes('npx tauri build'));
+  expect(check, 'no step runs scripts/check-updater-key.sh').toBeGreaterThan(-1);
+  expect(check, 'the key is checked only after the build').toBeLessThan(build);
+  const npmCi = steps.findIndex((s) => s.run === 'npm ci');
+  expect(npmCi, 'no npm ci step').toBeGreaterThan(-1);
+  expect(check, 'the check needs npm ci first (it signs with the tauri CLI)').toBeGreaterThan(npmCi);
+});
+
 // The updater's manifest is written after both builds, from the signatures they attached. Its script is run here on
 // stand-in signatures: an installed copy with no entry for its platform, or a URL that is not the file attached, never
 // gets the update.
@@ -87,5 +100,5 @@ test('the app looks for updates on this repository\'s releases', () => {
 // mistake would strand every installed copy (they accept only updates signed with the key they were built with).
 test('the app carries the release key\'s public half', () => {
   const pubkey: string = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8')).plugins.updater.pubkey;
-  expect(Buffer.from(pubkey, 'base64').toString('utf8').split('\n')[0]).toBe('untrusted comment: minisign public key: 61C9048AB724D58E');
+  expect(Buffer.from(pubkey, 'base64').toString('utf8').split('\n')[0]).toBe('untrusted comment: minisign public key: EA2D1D1493E6A430');
 });

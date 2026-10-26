@@ -80,6 +80,11 @@ jobs:
           cache: npm
       - run: rustup target add "$TARGET"
       - run: npm ci
+      - name: The updater key opens with its password, and is the app's (checked now, not after the build)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/check-updater-key.sh
       - name: The uv the app bundles, for this target (pinned, checked by sha256)
         run: TAURI_ENV_TARGET_TRIPLE="$TARGET" bash scripts/fetch-uv.sh
 
