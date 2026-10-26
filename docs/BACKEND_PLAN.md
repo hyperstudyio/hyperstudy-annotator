@@ -15,11 +15,12 @@ dialogs by hand, is still open).
   server, a DGX Spark). Price 0, duration from measurements on that machine.
 - **HyperStudy connection.** A Settings page where the user pastes an API key created in HyperStudy. Stored in the
   OS keychain; nothing else is needed to connect.
-- **macOS releases (2026-10-25).** Pushing a tag vX.Y.Z (the version in tauri.conf.json) makes a draft GitHub
-  release with a signed, notarized DMG for Apple silicon; it is published by hand once checked. Developer ID, hardened
-  runtime, only the network-client entitlement, no App Sandbox. The app and the DMG are each notarized and stapled,
-  so the app opens on a Mac that is offline. Notarized with an App Store Connect API key, not an Apple ID. Intel
-  DMGs: one more target in release-macos.yml.
+- **Releases (2026-10-25).** Only a release builds the app: pushing a tag vX.Y.Z (the version in tauri.conf.json, on
+  a commit on main) makes a draft GitHub release with a signed, notarized DMG for Apple silicon and a .deb and an
+  AppImage for x86_64 Linux; it is published by hand once checked. macOS: Developer ID, hardened runtime, only the
+  network-client entitlement, no App Sandbox; the app and the DMG are each notarized and stapled, so the app opens on
+  a Mac that is offline; notarized with an App Store Connect API key, not an Apple ID. Intel DMGs: one more target in
+  release-macos.yml. Linux: built on Ubuntu 22.04, unsigned.
 
 ## What exists
 

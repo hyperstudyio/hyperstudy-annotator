@@ -1,6 +1,6 @@
-# Signed, notarized macOS DMGs of the annotator, for Apple silicon (Intel later): called by release.yml for a tag. Run by
-# hand (Actions > macOS release > Run workflow), it does all of it without publishing anything. Not run on pull
-# requests: those would sign unreviewed code with the Developer ID, and CI stays on Linux (tests.yml).
+# Signed, notarized macOS DMGs of the annotator, for Apple silicon (Intel later), attached to the draft release that
+# release.yml made for a tag. Run only for a release: never by hand or on pull requests, which would sign code that is
+# not on main with the Developer ID.
 #
 # Secrets: APPLE_CERTIFICATE (the Developer ID Application certificate and key, a base64 .p12),
 # APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY ("Developer ID Application: ..."), and for notarizing an App Store
@@ -8,22 +8,12 @@
 name: macOS release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version, as in tauri.conf.json with a v (e.g. v0.0.1); empty: that version'
-        required: false
-        type: string
   workflow_call:
     inputs:
       version:
+        description: 'The release (its tag, e.g. v0.0.1) the DMGs are attached to'
         required: true
         type: string
-      upload:
-        description: 'Attach the DMGs to the release named by version (release.yml made it)'
-        required: false
-        type: boolean
-        default: false
     secrets:
       APPLE_CERTIFICATE: {required: true}
       APPLE_CERTIFICATE_PASSWORD: {required: true}
@@ -45,7 +35,7 @@ jobs:
       matrix:
         target: [aarch64-apple-darwin]   # Apple silicon only for now; add x86_64-apple-darwin for Intel Macs
     env:
-      VERSION: ${{ inputs.version }}   # empty on a pull request: the app's own (below)
+      VERSION: ${{ inputs.version }}
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +61,6 @@ jobs:
       - name: The version is the app's
         run: |
           app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
-          VERSION=${VERSION:-v$app}
           printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version: $VERSION" >&2; exit 1; }
           [ "v$app" = "$VERSION" ] || { echo "tauri.conf.json says $app, not ${VERSION#v}: bump it first" >&2; exit 1; }
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -181,7 +170,6 @@ jobs:
   upload:
     name: Attach to the release
     needs: [build, check]
-    if: inputs.upload
     runs-on: ubuntu-latest
     permissions:
       contents: write

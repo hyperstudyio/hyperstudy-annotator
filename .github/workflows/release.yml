@@ -1,5 +1,6 @@
-# A release of the annotator: pushing a tag vX.Y.Z (the version in tauri.conf.json) makes a draft GitHub release and
-# attaches signed, notarized macOS DMGs to it (release-macos.yml). The draft is published by hand once checked.
+# A release of the annotator, the only thing that builds one: pushing a tag vX.Y.Z (the version in tauri.conf.json, on
+# a commit on main) makes a draft GitHub release, and attaches a signed, notarized macOS DMG (release-macos.yml) and
+# Linux packages (release-linux.yml) to it. The draft is published by hand once checked.
 name: Release
 
 on:
@@ -37,11 +38,13 @@ jobs:
           TAG: ${{ steps.version.outputs.version }}
         run: |
           cat > notes.md <<EOF
-          ## Install (macOS 12 or later, Apple silicon)
+          ## Install
 
-          - \`HyperStudy-Annotator-$TAG-aarch64-apple-darwin.dmg\`
+          **macOS 12 or later, Apple silicon:** \`HyperStudy-Annotator-$TAG-aarch64-apple-darwin.dmg\`. Open it and drag
+          HyperStudy Annotator to Applications. Signed with a Developer ID and notarized by Apple.
 
-          Open the DMG and drag HyperStudy Annotator to Applications. Signed with a Developer ID and notarized by Apple.
+          **Linux (x86_64):** on Ubuntu or Debian, \`sudo apt install ./HyperStudy-Annotator-$TAG-x86_64-unknown-linux-gnu.deb\`.
+          Elsewhere, \`HyperStudy-Annotator-$TAG-x86_64-unknown-linux-gnu.AppImage\`: make it executable and run it.
 
           To run the perception pipeline from the app, clone hyperstudy-perception and choose its folder in Run pipeline.
           EOF
@@ -55,7 +58,6 @@ jobs:
     uses: ./.github/workflows/release-macos.yml
     with:
       version: ${{ needs.draft.outputs.version }}
-      upload: true
     secrets:   # only what signing and notarizing need, not every secret of the repository
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -63,3 +65,9 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+  linux:
+    needs: draft
+    uses: ./.github/workflows/release-linux.yml
+    with:
+      version: ${{ needs.draft.outputs.version }}
