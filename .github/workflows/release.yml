@@ -50,7 +50,9 @@ jobs:
           **Linux (x86_64):** on Ubuntu or Debian, \`sudo apt install ./HyperStudy-Annotator-$TAG-x86_64-unknown-linux-gnu.deb\`.
           Elsewhere, \`HyperStudy-Annotator-$TAG-x86_64-unknown-linux-gnu.AppImage\`: make it executable and run it.
 
-          To run the perception pipeline from the app, clone hyperstudy-perception and choose its folder in Run pipeline.
+          **The perception pipeline** needs nothing installed: on its first launch the app installs
+          [hyperstudy-perception](https://pypi.org/project/hyperstudy-perception/) and the Python it runs on into its own
+          folders, then each step's packages and model weights (a few GB, once), and updates the pipeline when it starts.
           EOF
           flags=(--draft --verify-tag)
           case "$TAG" in *-*) flags+=(--prerelease);; esac   # v0.1.0-beta.1 and the like
