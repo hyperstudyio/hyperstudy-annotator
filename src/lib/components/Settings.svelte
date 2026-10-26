@@ -11,7 +11,6 @@
 
   let { api, updates = null, active = true, holdRelaunch = null, relaunchCaution = null, showUpdates = false, onshown }: {
     api: PipelineApi | null; updates?: Updates | null; active?: boolean;
-    /** a pipeline run is going: a relaunch now would stop it */
     /** why the relaunch waits (a run going, or the pipeline being set up, which it would stop), or null */
     holdRelaunch?: string | null;
     /** what a relaunch might stop that could not be checked: said, without holding it */
