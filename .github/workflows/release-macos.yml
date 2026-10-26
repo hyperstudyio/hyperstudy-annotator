@@ -51,6 +51,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0   # origin/main, for the check below
+      - name: Only a commit on main is released
+        run: |
+          git merge-base --is-ancestor HEAD origin/main || { echo "$(git rev-parse --short HEAD) is not on main: merge it first" >&2; exit 1; }
+      - name: The signing secrets are all set
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          # without them tauri would quietly build unsigned or skip notarizing, and fail only later, unnamed
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            [ -n "${!v}" ] || { echo "the $v secret is not set on this repository" >&2; exit 1; }
+          done
       - name: The version is the app's
         run: |
           app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
@@ -72,12 +89,9 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
-            [ -n "${!v}" ] || { echo "the $v secret is not set on this repository" >&2; exit 1; }
-          done
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password=$(openssl rand -hex 24)
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$RUNNER_TEMP/certificate.p12"
+          (umask 077; printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$RUNNER_TEMP/certificate.p12")
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
@@ -90,7 +104,6 @@ jobs:
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
-          [ -n "$APPLE_API_KEY" ] || { echo "the APPLE_API_KEY secret is not set on this repository" >&2; exit 1; }
           (umask 077; printf '%s\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8")
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
 
@@ -131,11 +144,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Remove the keychain and the API key
+      - name: Remove the keychain, the certificate and the API key
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
-          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
 
   check:
     name: Opens as a user's Mac would open it (Apple silicon)
