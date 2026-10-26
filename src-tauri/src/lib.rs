@@ -4,6 +4,8 @@ mod db;
 mod error;
 mod keys;
 mod library;
+#[cfg(target_os = "macos")]
+mod menu;
 mod pipeline;
 
 use std::sync::Mutex;
@@ -13,7 +15,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            menu::install(app)?;   // Check for Updates… in the app menu
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(data_dir.join("bundles"))?;
             let conn = db::open(&data_dir.join("annotator.db"))?;

@@ -46,5 +46,13 @@
     "externalBin": [
       "binaries/uv"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/hyperstudyio/hyperstudy-annotator/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_THE_UPDATER_PUBLIC_KEY"
+    }
   }
 }

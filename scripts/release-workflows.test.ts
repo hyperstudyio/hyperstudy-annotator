@@ -3,7 +3,10 @@
 // secret only if (1) it declares the secret under on.workflow_call.secrets, (2) its caller passes it by name, and (3)
 // the job reading it sets `environment: release`. Otherwise the secret is an empty string, with no error: that is how
 // the first v0.0.1 run failed.
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { parse } from 'yaml';
 
@@ -37,9 +40,45 @@ test.each(called.map((j) => [j.uses!.split('/').pop()!, j] as const))(
   },
 );
 
-test('the macOS build reads all six signing secrets', () => {
+const UPDATER = ['TAURI_SIGNING_PRIVATE_KEY', 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'];
+
+test('the macOS build reads all six signing secrets, and the updater key', () => {
   const read = new Set(secretsRead(load('release-macos.yml').jobs.build.steps));
   expect([...read].sort()).toEqual(
-    ['APPLE_API_ISSUER', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_CERTIFICATE', 'APPLE_CERTIFICATE_PASSWORD', 'APPLE_SIGNING_IDENTITY'],
+    ['APPLE_API_ISSUER', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_CERTIFICATE', 'APPLE_CERTIFICATE_PASSWORD', 'APPLE_SIGNING_IDENTITY', ...UPDATER],
   );
+});
+
+test('the Linux build reads the updater key, and nothing else', () => {
+  expect([...new Set(secretsRead(load('release-linux.yml').jobs.build.steps))].sort()).toEqual(UPDATER);
+});
+
+// The updater's manifest is written after both builds, from the signatures they attached. Its script is run here on
+// stand-in signatures: an installed copy with no entry for its platform, or a URL that is not the file attached, never
+// gets the update.
+test('latest.json is made after both builds, for the Mac, a .deb install and an AppImage', () => {
+  const job = release.jobs.updater as Job & { needs: string[]; steps: { name: string; run: string }[] };
+  expect(job.needs).toEqual(expect.arrayContaining(['macos', 'linux']));
+  expect(secretsRead(job.steps), 'it needs no secret: the signatures are on the release already').toEqual([]);
+  const dir = mkdtempSync(join(tmpdir(), 'latest-json-'));
+  const files = ['aarch64-apple-darwin.app.tar.gz', 'x86_64-unknown-linux-gnu.deb', 'x86_64-unknown-linux-gnu.AppImage'];
+  mkdirSync(join(dir, 'sigs'));
+  for (const f of files) writeFileSync(join(dir, 'sigs', `HyperStudy-Annotator-v1.2.3-${f}.sig`), `sig of ${f}\n`);
+  execFileSync('bash', ['-c', job.steps.find((s) => s.name === 'Write latest.json')!.run],
+    { cwd: dir, env: { ...process.env, TAG: 'v1.2.3', GITHUB_REPOSITORY: 'hyperstudyio/hyperstudy-annotator' }, stdio: 'pipe' });
+  const manifest = JSON.parse(readFileSync(join(dir, 'latest.json'), 'utf8'));
+  expect(manifest.version).toBe('1.2.3');
+  const base = 'https://github.com/hyperstudyio/hyperstudy-annotator/releases/download/v1.2.3/HyperStudy-Annotator-v1.2.3-';
+  expect(manifest.platforms).toEqual({
+    'darwin-aarch64': { signature: `sig of ${files[0]}`, url: base + files[0] },
+    'linux-x86_64-deb': { signature: `sig of ${files[1]}`, url: base + files[1] },
+    'linux-x86_64': { signature: `sig of ${files[2]}`, url: base + files[2] },
+  });
+});
+
+// The app checks this repository's latest release: the endpoint must name it, and every download must be signed.
+test('the app looks for updates on this repository\'s releases', () => {
+  const conf = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+  expect(conf.plugins.updater.endpoints).toEqual(['https://github.com/hyperstudyio/hyperstudy-annotator/releases/latest/download/latest.json']);
+  expect(conf.bundle.createUpdaterArtifacts, 'only the release build makes updater artifacts: it alone has the key').toBeFalsy();
 });
