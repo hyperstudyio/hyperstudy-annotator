@@ -71,7 +71,9 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          [ -n "$APPLE_CERTIFICATE" ] || { echo "the APPLE_CERTIFICATE secret is not set on this repository" >&2; exit 1; }
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
+            [ -n "${!v}" ] || { echo "the $v secret is not set on this repository" >&2; exit 1; }
+          done
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password=$(openssl rand -hex 24)
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode -o "$RUNNER_TEMP/certificate.p12"
