@@ -28,5 +28,8 @@ chrono = "0.4"
 thiserror = "2"
 keyring = "4.2"
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"   # TERM, INT and HUP quit the app as its Quit does (lib.rs)
+
 [dev-dependencies]
 tempfile = "3"

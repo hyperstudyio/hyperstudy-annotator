@@ -194,8 +194,13 @@ jobs:
           pid=$!
           sleep 15
           if ! kill -0 "$pid" 2> /dev/null; then echo "the app exited within 15 s:" >&2; cat app.log >&2; exit 1; fi
-          kill "$pid"
-          wait "$pid" 2> /dev/null || true   # exited, so the volume is no longer busy
+          echo "what the app started (the pipeline's setup, at first launch):"; pgrep -lP "$pid" || echo "  nothing"
+          kill "$pid"   # TERM: it quits as its Quit does, stopping what it started (lib.rs, quit_on_signals)
+          wait "$pid" 2> /dev/null || true
+          # and nothing it started is left running from the DMG: in v0.0.2's first build the pipeline's setup was,
+          # with the bundled uv, and the DMG could not be ejected
+          left=$(lsof +D "$mount" 2> /dev/null | awk 'NR > 1 {print $1 " (" $2 ")"}' | sort -u)
+          [ -z "$left" ] || { echo "still running from the DMG after the app quit: $left" >&2; exit 1; }
           hdiutil detach "$mount"
 
   upload:
