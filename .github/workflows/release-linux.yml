@@ -4,8 +4,6 @@
 name: Linux release
 
 on:
-  push:   # TEMPORARY: one test run on the PR branch, reverted next
-    branches: [release-workflow]
   workflow_call:
     inputs:
       version:
@@ -25,7 +23,7 @@ jobs:
       matrix:
         target: [x86_64-unknown-linux-gnu]
     env:
-      VERSION: ${{ inputs.version || 'v0.0.1' }}
+      VERSION: ${{ inputs.version }}
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
@@ -97,7 +95,6 @@ jobs:
   upload:
     name: Attach to the release
     needs: [build, check]
-    if: inputs.version != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
