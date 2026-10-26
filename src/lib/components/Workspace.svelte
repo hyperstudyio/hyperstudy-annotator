@@ -17,16 +17,23 @@
   import Toast from './Toast.svelte';
   import CarryOffer from './CarryOffer.svelte';
 
-  let { session: s, source, onback }: { session: Session; source: BundleSource; onback?: () => void } = $props();
+  // `active`: on screen. An app that hides the workspace and keeps it (the desktop app's other pages) sets it false:
+  // the video stops, and the keys go to what is on screen instead. `onmodal`: a dialog here waits for its answer
+  // (CarryOffer), so what the app shows around the workspace is out of reach too, as the workspace is.
+  let { session: s, source, onback, active = true, onmodal }: {
+    session: Session; source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void;
+  } = $props();
   // svelte-ignore state_referenced_locally
   provideSession(s, source);
   const pb = $derived(s.playback);
   const TIMELINE_MIN_H = 120, VIDEO_MIN_H = 220;
 
   $effect(() => source.corrections.subscribe?.(() => { s.load(); }));   // another tab of this bundle saved
+  $effect(() => { if (!active) s.playback.stop(); });
+  $effect(() => { onmodal?.(s.modal); return () => onmodal?.(false); });
 
   function onkeydown(e: KeyboardEvent) {
-    if (s.modal) return;   // a dialog waits for its answer (CarryOffer); its buttons take the keyboard
+    if (s.modal || !active) return;   // a dialog waits for its answer (CarryOffer); its buttons take the keyboard
     // Space means play/pause everywhere except while typing text. A focused dropdown, slider or checkbox gives it up
     // (after you touch a picker, Space would otherwise stop working), and so does a focused button, which would also
     // "click" on key-up so that one press did two things.

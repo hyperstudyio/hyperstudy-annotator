@@ -60,14 +60,14 @@
 </script>
 
 <header>
-  {#if onback}<button onclick={onback} title="Back to the library">Library</button>{/if}
+  {#if onback}<button onclick={onback} title="Back to all bundles">All bundles</button>{/if}
   <h1>{source.title}</h1>
   <span class="sub" title={sources}>{sub}</span>
   {#if strictest}<span class="licence {strictest}" title="Most restrictive licence mode among this bundle's layers">{strictest}</span>{/if}
   <span class="count">{plural(s.ops.length, 'correction')}</span>
   <button disabled={!s.ops.length} onclick={() => s.undo()} title="Undo the last change (Cmd+Z)">Undo</button>
-  <button onclick={importFile} title="Import a corrections file (from this app or the annotator prototype)">Import</button>
-  <button class="primary" onclick={exportFile}>Export corrections</button>
+  <button onclick={importFile} title="Load corrections from a file (made by this app or the annotator prototype); they replace the ones here">Import…</button>
+  <button class="primary" onclick={exportFile} title="Save this bundle's corrections to a file">Export…</button>
 </header>
 {#if pending}
   <div class="banner">
