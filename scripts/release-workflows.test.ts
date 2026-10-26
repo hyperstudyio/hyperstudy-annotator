@@ -61,7 +61,9 @@ test.each(['release-macos.yml', 'release-linux.yml'])('%s checks the updater key
   const build = steps.findIndex((s) => s.run?.includes('npx tauri build'));
   expect(check, 'no step runs scripts/check-updater-key.sh').toBeGreaterThan(-1);
   expect(check, 'the key is checked only after the build').toBeLessThan(build);
-  expect(check, 'the check needs npm ci first (it signs with the tauri CLI)').toBeGreaterThan(steps.findIndex((s) => s.run === 'npm ci'));
+  const npmCi = steps.findIndex((s) => s.run === 'npm ci');
+  expect(npmCi, 'no npm ci step').toBeGreaterThan(-1);
+  expect(check, 'the check needs npm ci first (it signs with the tauri CLI)').toBeGreaterThan(npmCi);
 });
 
 // The updater's manifest is written after both builds, from the signatures they attached. Its script is run here on
