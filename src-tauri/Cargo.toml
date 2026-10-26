@@ -1,6 +1,6 @@
 [package]
 name = "hyperstudy-annotator"
-version = "0.0.1"
+version = "0.0.2"
 description = "View, edit and add data to HyperStudy perception track bundles"
 license = "MIT"
 edition = "2021"
