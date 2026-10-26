@@ -146,6 +146,7 @@ test('an install that failed (offline at first launch) fills the page in once Tr
   const dialog = page.getByRole('region', { name: 'Extract' });
   await expect(dialog.getByText(/^Setting up the pipeline failed: uv could not install the pipeline/)).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Choose…' })).toHaveCount(0);   // nothing to run it with yet
+  await expect(dialog.getByText(/not installed yet/)).toHaveCount(0);   // the install's failure says why, once
   await dialog.getByRole('button', { name: 'Try again' }).click();
   await expect(dialog.locator('.pipeline')).toHaveText(/^Pipeline 0\.1\.0/, { timeout: 5000 });
   await expect(dialog.getByRole('button', { name: 'Choose…' })).toBeVisible();

@@ -75,7 +75,9 @@ export type PipelineMessage = { v: 1 } & (
  *  version up (`running`: each step's packages and weights; Start run waits). `notice`: what did not stop it (an upgrade
  *  that could not be checked, with a version installed). */
 export interface SetupStep { node: string | null; what: string; ok: boolean; seconds: number; message: string }
-export interface SetupStatus { state: 'idle' | 'installing' | 'running' | 'done' | 'failed'; steps: SetupStep[]; problem: string | null; notice: string | null }
+export interface SetupStatus { state: 'idle' | 'installing' | 'running' | 'done' | 'failed'; steps: SetupStep[]; problem: string | null; notice: string | null;
+  /** a version is installed (false after an install that failed with none: the pipeline cannot be asked anything) */
+  installed: boolean }
 
 export interface PipelineApi {
   setupStatus(): Promise<SetupStatus>;

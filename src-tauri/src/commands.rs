@@ -39,6 +39,8 @@ pub struct SetupStatus {
     pub problem: Option<String>,
     /// what did not stop it: an upgrade that could not be checked (offline), with a version already installed
     pub notice: Option<String>,
+    /// a version is installed (false after an install that failed with none: nothing can be asked of the pipeline yet)
+    pub installed: bool,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -245,19 +247,17 @@ fn set_setup(app: &AppHandle, f: impl FnOnce(&mut SetupStatus)) {
 /// In the background: install the pipeline from PyPI, or upgrade it to the newest version this app reads, then set a
 /// version up that is not yet (each step's packages and weights). Run at start-up, and again when the user retries one
 /// that failed; not while one is under way. A checkout (PERCEPTION_REPO) is left to its developer.
-pub fn start_setup(app: AppHandle) {
+pub fn start_setup(app: AppHandle) -> Result<()> {
     if std::env::var_os("PERCEPTION_REPO").is_some() {
-        return;
+        return Ok(());
     }
     {
         let state = app.state::<AppState>();
-        let mut s = state.setup.lock().unwrap_or_else(|e| e.into_inner());
-        if matches!(s.state, SetupState::Installing | SetupState::Running) {
-            return;
+        if !begin_setup(&state.setup, &state.running)? {
+            return Ok(());   // one is under way
         }
-        *s = SetupStatus { state: SetupState::Installing, ..Default::default() };
+        let _ = app.emit("pipeline-setup", state.setup.lock().unwrap_or_else(|e| e.into_inner()).clone());
     }
-    let _ = app.emit("pipeline-setup", SetupStatus { state: SetupState::Installing, ..Default::default() });
     std::thread::spawn(move || {
         let _cleared = { let app = app.clone(); pipeline::OnPanic(move || set_setup(&app, |s| if matches!(s.state, SetupState::Installing | SetupState::Running) {
             s.state = SetupState::Failed; s.problem = Some("setting the pipeline up stopped unexpectedly".into());
@@ -271,8 +271,9 @@ pub fn start_setup(app: AppHandle) {
             Ok(_) => None,
             // offline, or PyPI unreachable: the version already here still runs, and the dialog says the check failed
             Err(e) if state.uv_dirs.perception().is_file() => Some(format!("Could not check for a newer pipeline ({e}); using the one installed")),
-            Err(e) => return set_setup(&app, |s| { s.state = SetupState::Failed; s.problem = Some(e.to_string()); }),
+            Err(e) => return set_setup(&app, |s| { s.state = SetupState::Failed; s.problem = Some(e.to_string()); s.installed = false; }),
         };
+        set_setup(&app, |s| s.installed = true);
         let result = (|| {
             let p = pipeline_alone(&state)?;
             let version = p.one(&["doctor"], "doctor")?["pipeline"]["version"].as_str().unwrap_or_default().to_string();
@@ -288,6 +289,7 @@ pub fn start_setup(app: AppHandle) {
             Err(e) => { s.state = SetupState::Failed; s.problem = Some(e.to_string()); s.notice = notice; }
         });
     });
+    Ok(())
 }
 
 #[tauri::command]
@@ -298,10 +300,37 @@ pub fn pipeline_setup_status(state: State<'_, AppState>) -> SetupStatus {
 /// Try a setup that failed again (it fetches only what is still missing): not during a run, whose environment an
 /// upgrade or a setup would change under it.
 #[tauri::command]
-pub fn pipeline_setup(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
-    check_no_run(state.running.lock().unwrap().as_deref())?;
-    start_setup(app);
+pub fn pipeline_setup(app: AppHandle) -> Result<()> {
+    start_setup(app)
+}
+
+/// Start a run unless the pipeline is being set up or another run is under way: decided under the setup's lock and
+/// then the run's, so a Try again clicked as Start run is clicked cannot slip between the check and the start (the
+/// same order in begin_setup: no deadlock). `started` runs under both (the run's control is started with it).
+pub fn begin_run(setup: &Mutex<SetupStatus>, running: &Mutex<Option<String>>, started: impl FnOnce()) -> Result<()> {
+    let s = setup.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(s.state, SetupState::Installing | SetupState::Running) {
+        return Err(Error::Bundle("the pipeline is still being set up: the run can start when it is done".into()));
+    }
+    let mut r = running.lock().unwrap_or_else(|e| e.into_inner());
+    if r.is_some() {
+        return Err(Error::Bundle("a pipeline run is already in progress".into()));
+    }
+    *r = Some(String::new());
+    started();
     Ok(())
+}
+
+/// Start setting the pipeline up unless a run is under way (refused) or a setup already is (false): under the same two
+/// locks, in the same order, as begin_run.
+pub fn begin_setup(setup: &Mutex<SetupStatus>, running: &Mutex<Option<String>>) -> Result<bool> {
+    let mut s = setup.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(s.state, SetupState::Installing | SetupState::Running) {
+        return Ok(false);
+    }
+    check_no_run(running.lock().unwrap_or_else(|e| e.into_inner()).as_deref())?;
+    *s = SetupStatus { state: SetupState::Installing, installed: s.installed, ..Default::default() };
+    Ok(true)
 }
 
 /// Refused while a run is in progress (starting, or named).
@@ -406,17 +435,7 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
     places.extend(pipeline::only_args(&only.unwrap_or_default())?);
     places.extend(pipeline::set_args(&settings.unwrap_or_default())?);
     let cap = pipeline::cost_args(max_cost_usd)?;
-    if matches!(state.setup.lock().unwrap().state, SetupState::Installing | SetupState::Running) {
-        return Err(Error::Bundle("the pipeline is still being set up: the run can start when it is done".into()));
-    }
-    {
-        let mut running = state.running.lock().unwrap();
-        if running.is_some() {
-            return Err(Error::Bundle("a pipeline run is already in progress".into()));
-        }
-        *running = Some(String::new());
-        state.control.start();
-    }
+    begin_run(&state.setup, &state.running, || state.control.start())?;
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };   // a panic clears it too
         let last = match run_and_import(&app, &p, &g, &video, &uploads.unwrap_or_default(), &places, &cap) {
@@ -521,6 +540,39 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn idle() -> (Mutex<SetupStatus>, Mutex<Option<String>>) {
+        (Mutex::new(SetupStatus { state: SetupState::Done, installed: true, ..Default::default() }), Mutex::new(None))
+    }
+
+    #[test]
+    fn a_run_and_a_setup_never_start_together() {
+        let (setup, running) = idle();
+        let mut started = 0;
+        begin_run(&setup, &running, || started += 1).unwrap();
+        assert!(begin_setup(&setup, &running).unwrap_err().to_string().contains("run is in progress"));
+        assert!(begin_run(&setup, &running, || started += 1).unwrap_err().to_string().contains("already in progress"));
+        assert_eq!(started, 1);
+
+        let (setup, running) = idle();
+        assert!(begin_setup(&setup, &running).unwrap());
+        assert!(!begin_setup(&setup, &running).unwrap());   // one is under way: not started twice
+        assert!(begin_run(&setup, &running, || {}).unwrap_err().to_string().contains("still being set up"));
+        assert!(setup.lock().unwrap().installed);   // an installed version stays known while it is set up again
+    }
+
+    #[test]
+    fn a_run_and_a_setup_clicked_at_once_never_both_start() {
+        for _ in 0..2000 {
+            let (setup, running) = idle();
+            let (ran, set) = std::thread::scope(|s| {
+                let run = s.spawn(|| begin_run(&setup, &running, || {}).is_ok());
+                let up = s.spawn(|| begin_setup(&setup, &running).unwrap_or(false));
+                (run.join().unwrap(), up.join().unwrap())
+            });
+            assert!(ran != set, "a run and a setup both started (or neither): {ran} {set}");
+        }
+    }
 
     #[test]
     fn the_pipeline_is_not_set_up_again_during_a_run() {

@@ -134,7 +134,7 @@
   // nothing can answer while the pipeline is being installed: asked once it is (or a checkout runs: no setup)
   $effect(() => {
     const s = setup?.state;
-    if (!s || s === 'installing' || doctor || s === askedIn) return;
+    if (!s || s === 'installing' || (s === 'failed' && !setup!.installed) || doctor || s === askedIn) return;   // nothing installed: its failure says why
     askedIn = s;
     loadPipeline();
   });

@@ -28,7 +28,7 @@ pub fn run() {
             app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), control: Default::default(),
                                             keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))),
                                             uv_dirs, setup: Default::default() });
-            commands::start_setup(app.handle().clone());   // install or upgrade the pipeline, set a new version up: in the background
+            commands::start_setup(app.handle().clone())?;   // install or upgrade the pipeline, set a new version up: in the background
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
