@@ -43,6 +43,13 @@ pub struct SetupStatus {
     pub installed: bool,
 }
 
+impl SetupStatus {
+    /// Before setup starts: not started, with a version installed when its command is on disk.
+    pub fn at_start(dirs: &pipeline::UvDirs) -> SetupStatus {
+        SetupStatus { installed: dirs.perception().is_file(), ..Default::default() }
+    }
+}
+
 #[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SetupState {
@@ -256,7 +263,8 @@ pub fn start_setup(app: AppHandle) -> Result<()> {
         if !begin_setup(&state.setup, &state.running)? {
             return Ok(());   // one is under way
         }
-        let _ = app.emit("pipeline-setup", state.setup.lock().unwrap_or_else(|e| e.into_inner()).clone());
+        let status = state.setup.lock().unwrap_or_else(|e| e.into_inner()).clone();   // the lock released before emitting, as in set_setup
+        let _ = app.emit("pipeline-setup", status);
     }
     std::thread::spawn(move || {
         let _cleared = { let app = app.clone(); pipeline::OnPanic(move || set_setup(&app, |s| if matches!(s.state, SetupState::Installing | SetupState::Running) {
@@ -543,6 +551,21 @@ mod tests {
 
     fn idle() -> (Mutex<SetupStatus>, Mutex<Option<String>>) {
         (Mutex::new(SetupStatus { state: SetupState::Done, installed: true, ..Default::default() }), Mutex::new(None))
+    }
+
+    #[test]
+    fn a_version_on_disk_is_known_as_installed_from_the_start() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = pipeline::UvDirs { python: root.path().join("python"), cache: root.path().join("cache"),
+                                      tools: root.path().join("tools"), bin: root.path().join("bin") };
+        assert!(!SetupStatus::at_start(&dirs).installed);
+        std::fs::create_dir_all(&dirs.bin).unwrap();
+        std::fs::write(dirs.perception(), "").unwrap();
+        // known before the install step returns: a setup that stops before then (OnPanic: Failed) still lets the
+        // dialog ask the version that is here
+        let s = SetupStatus::at_start(&dirs);
+        assert!(s.installed);
+        assert_eq!(s.state, SetupState::Idle);
     }
 
     #[test]
