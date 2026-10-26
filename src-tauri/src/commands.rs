@@ -546,11 +546,12 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
 }
 
 /// The app is quitting (RunEvent::Exit): a run canceled as Cancel does, and nothing the app started left running
-/// (`pipeline::stop_for_quit`). Without the keys: cancelling needs none, and no keychain prompt may hold up quitting.
+/// (`pipeline::stop_for_quit`). With the keys, as Cancel's: the CLI may need one to reach a cloud machine. Reading them
+/// cannot prompt here: the run read them when it started (`pipeline`), and they are not read again (`Keys::loaded`).
 pub fn stop_on_exit(app: &AppHandle) {
     let state = app.state::<AppState>();
     let named = state.running.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|r| !r.is_empty());
-    let p = named.as_ref().and_then(|_| pipeline_alone(&state).ok());
+    let p = named.as_ref().and_then(|_| pipeline(&state).ok());
     pipeline::stop_for_quit(p.as_ref(), named.as_deref(), &state.control, &pipeline::PROCS, std::time::Duration::from_secs(5));
 }
 
