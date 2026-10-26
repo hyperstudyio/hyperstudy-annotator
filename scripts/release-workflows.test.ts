@@ -66,6 +66,15 @@ test.each(['release-macos.yml', 'release-linux.yml'])('%s checks the updater key
   expect(check, 'the check needs npm ci first (it signs with the tauri CLI)').toBeGreaterThan(npmCi);
 });
 
+// The release key was made with no passphrase, so its password secret is empty: requiring it to be set stopped v0.0.2's
+// build before it began. Whether the password opens the key is check-updater-key.sh's to say.
+test('the macOS build does not require the updater key to have a password', () => {
+  const steps = load('release-macos.yml').jobs.build.steps as { name?: string; run?: string }[];
+  const allSet = steps.find((s) => s.name === 'The signing secrets are all set')!.run!;
+  expect(allSet).toMatch(/\bTAURI_SIGNING_PRIVATE_KEY\b(?!_)/);
+  expect(allSet).not.toContain('TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
+});
+
 // The updater's manifest is written after both builds, from the signatures they attached. Its script is run here on
 // stand-in signatures: an installed copy with no entry for its platform, or a URL that is not the file attached, never
 // gets the update.
