@@ -41,9 +41,8 @@ jobs:
           printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version: $VERSION" >&2; exit 1; }
           [ "v$app" = "$VERSION" ] || { echo "tauri.conf.json says $app, not ${VERSION#v}: bump it first" >&2; exit 1; }
       - name: The system libraries tauri builds against (as tests.yml), and patchelf for the AppImage
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+        timeout-minutes: 5   # usually well under a minute; a stall fails here, saying where (ci-apt.sh)
+        run: bash scripts/ci-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -85,14 +84,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4   # for scripts/ci-apt.sh only
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+          path: repo
       - uses: actions/download-artifact@v4
         with:
           name: linux-x86_64-unknown-linux-gnu
       - name: The .deb installs with its dependencies, the app finds every library, the bundled uv runs
+        timeout-minutes: 5
         run: |
           deb=$(ls ./*.deb)
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq "$deb"   # resolves the package's Depends as a user's apt would
+          bash repo/scripts/ci-apt.sh "$deb"   # resolves the package's Depends as a user's apt would
           pkg=$(dpkg-deb -f "$deb" Package)
           missing=0
           for f in $(dpkg -L "$pkg" | grep '^/usr/bin/'); do
