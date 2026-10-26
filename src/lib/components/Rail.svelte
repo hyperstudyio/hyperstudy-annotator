@@ -2,16 +2,22 @@
   export type Page = 'extract' | 'annotator' | 'settings';
   /** A run on the Extract page: how far along (steps done over steps), or how it ended. */
   export type RunStatus = { state: 'running' | 'imported' | 'failed'; fraction: number };
+  /** A newer version of the app: found, downloading (null fraction: no size given), or installed and waiting for the
+   *  relaunch. */
+  export type UpdateBadge = { state: 'available' | 'downloading' | 'ready'; version: string; fraction: number | null };
 </script>
 
 <script lang="ts">
   // The app's navigation: a slim rail down the left edge. Extract (run the pipeline on a video), Annotator (the
   // library, and a bundle open in the viewer), Settings (keys and machines), and the documentation, which opens in the
   // browser. Extract's icon carries the run: a ring that fills as its steps finish, then a dot for how it ended, so a
-  // run can go on while you annotate.
+  // run can go on while you annotate. A newer version of the app adds an Update item, which leads to Settings; it
+  // carries its download the same way.
   import { DOCS_URL, openExternal } from '../links';
 
-  let { page, run, onnavigate }: { page: Page; run: RunStatus | null; onnavigate: (p: Page) => void } = $props();
+  let { page, run, update = null, onnavigate, onupdate }: {
+    page: Page; run: RunStatus | null; update?: UpdateBadge | null; onnavigate: (p: Page) => void; onupdate?: () => void;
+  } = $props();
 
   const ITEMS: { key: Page; label: string; hint: string }[] = [
     { key: 'extract', label: 'Extract', hint: 'Run the pipeline on a video' },
@@ -70,6 +76,27 @@
   </ul>
 
   <span class="spacer"></span>
+  {#if update}
+    <button class="item update" title={update.state === 'available' ? `Version ${update.version} is ready to install`
+      : update.state === 'downloading' ? `Downloading version ${update.version}` : `Version ${update.version} is installed: relaunch to finish`}
+      onclick={() => onupdate?.()}>
+      <span class="icon">
+        <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.5" /><path d="M10 6v7m-3-3 3 3 3-3" />
+        </svg>
+        {#if update.state === 'downloading'}
+          <svg class="ring" viewBox="0 0 34 34" aria-hidden="true">
+            <circle class="track" cx="17" cy="17" r={R} />
+            <circle class="fill" class:indeterminate={update.fraction == null} cx="17" cy="17" r={R} stroke-dasharray={C}
+              stroke-dashoffset={C * (1 - Math.max(update.fraction ?? 0.25, 0.04))} />
+          </svg>
+        {:else}
+          <span class="dot imported" aria-hidden="true"></span>
+        {/if}
+      </span>
+      <span class="label">{update.state === 'ready' ? 'Relaunch' : 'Update'}</span>
+    </button>
+  {/if}
   <button class="item docs" title="The documentation, in your browser" onclick={() => openExternal(DOCS_URL)}>
     <span class="icon">
       <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
@@ -109,5 +136,8 @@
   .dot { position: absolute; right: 2px; top: 0; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px var(--color-bg-base); }
   .dot.imported { background: var(--color-primary); }
   .dot.failed { background: var(--color-danger); }
-  @media (prefers-reduced-motion: reduce) { .ring .fill { transition: none; } }
+  .ring .fill.indeterminate { animation: spin 1.2s linear infinite; transform-origin: 17px 17px; }
+  .update { color: var(--color-text-secondary); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .ring .fill { transition: none; } .ring .fill.indeterminate { animation: none; } }
 </style>

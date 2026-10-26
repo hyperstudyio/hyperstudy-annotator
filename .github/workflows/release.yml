@@ -1,6 +1,8 @@
 # A release of the annotator, the only thing that builds one: pushing a tag vX.Y.Z (the version in tauri.conf.json, on
 # a commit on main) makes a draft GitHub release, and attaches a signed, notarized macOS DMG (release-macos.yml) and
-# Linux packages (release-linux.yml) to it. The draft is published by hand once checked.
+# Linux packages (release-linux.yml) to it, then latest.json, which installed copies of the app check for updates
+# (the updater's endpoint in tauri.conf.json is this repository's latest release). The draft is published by hand once
+# checked: publishing it is what offers the update to every installed copy (a prerelease never is).
 name: Release
 
 on:
@@ -31,6 +33,8 @@ jobs:
           printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not a version tag: $TAG" >&2; exit 1; }
           app=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')
           [ "v$app" = "$TAG" ] || { echo "tauri.conf.json says $app, not ${TAG#v}" >&2; exit 1; }
+          # an app built with no real updater key could never install an update: fail before building it
+          python3 -c 'import json,sys; k=json.load(open("src-tauri/tauri.conf.json"))["plugins"]["updater"]["pubkey"]; sys.exit(k.startswith("REPLACE") and "tauri.conf.json has no updater public key: see the comment in release-macos.yml")'
           echo "version=$TAG" >> "$GITHUB_OUTPUT"
       - name: A draft release for the tag
         env:
@@ -68,9 +72,54 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
   linux:
     needs: draft
     uses: ./.github/workflows/release-linux.yml
     with:
       version: ${{ needs.draft.outputs.version }}
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+  # The updater's manifest: for each platform, the update's URL on this release and its signature (what the app checks
+  # against its public key before installing). A .deb install looks for linux-x86_64-deb first, an AppImage takes
+  # linux-x86_64. Made from what the builds attached, so it lists only updates that are there.
+  updater:
+    name: latest.json for the updater
+    needs: [draft, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.draft.outputs.version }}
+    steps:
+      - name: The updates' signatures, from the release
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir sigs
+      - name: Write latest.json
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, pathlib
+          tag, repo = os.environ["TAG"], os.environ["GITHUB_REPOSITORY"]
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+          wanted = {   # the platform key the updater looks for -> the file it downloads
+              "darwin-aarch64": f"HyperStudy-Annotator-{tag}-aarch64-apple-darwin.app.tar.gz",
+              "linux-x86_64-deb": f"HyperStudy-Annotator-{tag}-x86_64-unknown-linux-gnu.deb",
+              "linux-x86_64": f"HyperStudy-Annotator-{tag}-x86_64-unknown-linux-gnu.AppImage",
+          }
+          platforms = {}
+          for key, name in wanted.items():
+              sig = pathlib.Path("sigs", name + ".sig")
+              if not sig.exists():
+                  raise SystemExit(f"no signature for {name}: was it built and signed?")
+              platforms[key] = {"signature": sig.read_text().strip(), "url": f"{base}/{name}"}
+          now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          manifest = {"version": tag.removeprefix("v"), "notes": f"HyperStudy Annotator {tag}", "pub_date": now, "platforms": platforms}
+          pathlib.Path("latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          print(json.dumps(manifest, indent=2))
+          PY
+      - name: Attach it
+        run: gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY" --clobber

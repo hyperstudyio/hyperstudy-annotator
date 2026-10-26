@@ -1,6 +1,8 @@
 # Linux packages of the annotator (x86_64: a .deb and an AppImage), attached to the draft release that release.yml
 # made for a tag. Run only for a release. Built on the oldest supported Ubuntu, so the AppImage's glibc is old enough
-# for most distributions. Nothing is signed: Linux has no Gatekeeper to check a signature.
+# for most distributions. Linux has no Gatekeeper, but the in-app updater installs a package only if it is signed with
+# the updater key (TAURI_SIGNING_PRIVATE_KEY and its _PASSWORD, in the `release` environment): each package gets a .sig,
+# which release.yml lists in latest.json. A .deb updates through dpkg (asking for the password), an AppImage in place.
 name: Linux release
 
 on:
@@ -10,6 +12,9 @@ on:
         description: 'The release (its tag, e.g. v0.0.1) the packages are attached to'
         required: true
         type: string
+    secrets:   # passed by name by release.yml; the values come from the `release` environment (build job)
+      TAURI_SIGNING_PRIVATE_KEY: {required: true}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: {required: true}
 
 permissions:
   contents: read
@@ -19,6 +24,7 @@ jobs:
     name: Build (${{ matrix.target }})
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    environment: release   # the updater key lives here, for v*.*.* tags only
     strategy:
       matrix:
         target: [x86_64-unknown-linux-gnu]
@@ -56,6 +62,16 @@ jobs:
           [ -n "$deb" ] && [ -n "$appimage" ] || { echo "tauri made no .deb or no AppImage" >&2; exit 1; }
           cp "$deb" "HyperStudy-Annotator-$VERSION-$TARGET.deb"
           cp "$appimage" "HyperStudy-Annotator-$VERSION-$TARGET.AppImage"
+      - name: Sign them for the updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "the TAURI_SIGNING_PRIVATE_KEY secret is not set in the release environment" >&2; exit 1; }
+          for f in HyperStudy-Annotator-"$VERSION"-"$TARGET".{deb,AppImage}; do
+            npx tauri signer sign "$f" > /dev/null
+            [ -s "$f.sig" ] || { echo "no signature made for $f" >&2; exit 1; }
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.target }}
@@ -107,4 +123,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-        run: gh release upload "$VERSION" HyperStudy-Annotator-*.deb HyperStudy-Annotator-*.AppImage --repo "$GITHUB_REPOSITORY" --clobber
+        run: gh release upload "$VERSION" HyperStudy-Annotator-*.deb HyperStudy-Annotator-*.AppImage HyperStudy-Annotator-*.sig --repo "$GITHUB_REPOSITORY" --clobber
