@@ -131,9 +131,23 @@ pub fn stop_process(pid: u32) -> Result<()> {
 /// to report to, and from a mounted DMG the bundled uv it ran kept the disk image from ejecting. The app keeps one
 /// (`PROCS`); a test gives its pipeline its own, so stopping them stops no other test's.
 #[derive(Debug, Default)]
-pub struct Procs(std::sync::Mutex<std::collections::BTreeSet<u32>>);
+pub struct Procs {
+    state: std::sync::Mutex<Kept>,
+    /// told each time a command ends (`Live` dropped)
+    ended: std::sync::Condvar,
+}
 
-pub static PROCS: Procs = Procs(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+#[derive(Debug, Default)]
+struct Kept {
+    live: std::collections::BTreeSet<u32>,
+    /// the app is quitting: a command kept from now on is stopped at once
+    closed: bool,
+}
+
+pub static PROCS: Procs = Procs {
+    state: std::sync::Mutex::new(Kept { live: std::collections::BTreeSet::new(), closed: false }),
+    ended: std::sync::Condvar::new(),
+};
 
 /// A started command, in its `Procs` until this is dropped: after its `wait`, so a group that has ended is not
 /// stopped (its id may be another's by then).
@@ -141,48 +155,64 @@ struct Live<'a>(&'a Procs, u32);
 
 impl Drop for Live<'_> {
     fn drop(&mut self) {
-        self.0.lock().remove(&self.1);
+        self.0.lock().live.remove(&self.1);
+        self.0.ended.notify_all();
     }
 }
 
 impl Procs {
-    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<u32>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock(&self) -> std::sync::MutexGuard<'_, Kept> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Keep `child` while it runs. Once the app is quitting, it is stopped as it is kept: the thread that started it
+    /// goes on after its last command was stopped (an upgrade stopped while one is installed goes on to `doctor`; a run
+    /// that ended goes on to `export`), and a command started then, or started before `stop_all` but kept after, would
+    /// otherwise outlive the app.
     fn live(&self, child: &Child) -> Live<'_> {
-        self.lock().insert(child.id());
+        let mut kept = self.lock();
+        kept.live.insert(child.id());
+        if kept.closed {
+            let _ = stop_process(child.id());
+        }
         Live(self, child.id())
     }
 
     /// Wait up to `limit` for the command `pid` to end by itself; whether it did.
     pub fn wait_for(&self, pid: u32, limit: std::time::Duration) -> bool {
-        let deadline = std::time::Instant::now() + limit;
-        while self.lock().contains(&pid) {
-            if std::time::Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        true
+        let kept = self.lock();
+        let (kept, _) = self.ended.wait_timeout_while(kept, limit, |k| k.live.contains(&pid)).unwrap_or_else(|e| e.into_inner());
+        !kept.live.contains(&pid)
     }
 
     /// The app is quitting: stop every command still running, with what it started (TERM to its group, as
-    /// `stop_process`), and kill a group still there after `grace`. Returns the groups that had to be killed. A run is
-    /// canceled before (`stop_for_quit`): its nodes and cloud drivers are in sessions of their own, out of reach.
+    /// `stop_process`), and kill a group still there after `grace`. Returns the groups that had to be killed. Closed
+    /// first, so one started from here on is stopped too (`live`). A run is canceled before (`stop_for_quit`): its
+    /// nodes and cloud drivers are in sessions of their own, out of reach.
     pub fn stop_all(&self, grace: std::time::Duration) -> Vec<u32> {
-        let mut left: Vec<u32> = self.lock().iter().copied().collect();
-        for &g in &left {
-            let _ = stop_process(g);
-        }
         let deadline = std::time::Instant::now() + grace;
+        let mut stopped = std::collections::BTreeSet::new();
+        let mut kept = self.lock();
+        kept.closed = true;
         loop {
-            left.retain(|&g| group_alive(g));
-            if left.is_empty() || std::time::Instant::now() >= deadline {
+            for &g in &kept.live {
+                if stopped.insert(g) {
+                    let _ = stop_process(g);
+                }
+            }
+            // done when every command has ended and nothing is left of its group (what it started, too)
+            if kept.live.is_empty() && !stopped.iter().any(|&g| group_alive(g)) {
+                return vec![];
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            // a poll, woken early when a command ends: what it started is not the app's child, to wait on
+            kept = self.ended.wait_timeout(kept, (deadline - now).min(std::time::Duration::from_millis(50)))
+                .unwrap_or_else(|e| e.into_inner()).0;
         }
+        let left: Vec<u32> = stopped.into_iter().filter(|&g| group_alive(g)).collect();
         for &g in &left {
             let _ = Command::new("kill").args(["-KILL", "--", &format!("-{g}")]).status();
         }
@@ -841,7 +871,7 @@ printf '{\"v\": 1, \"type\": \"doctor\", \"path\": \"%s\", \"pref\": \"%s\", \"p
         let (p, procs) = own_procs(Pipeline::checkout(dir.path(), uv).unwrap());
         let setup = std::thread::spawn(move || p.setup(|_| {}));
         let child = started(&child_pid);
-        assert_eq!(procs.lock().len(), 1, "the setup's CLI is not kept while it runs");
+        assert_eq!(procs.lock().live.len(), 1, "the setup's CLI is not kept while it runs");
         let stopping = std::time::Instant::now();
         assert_eq!(procs.stop_all(std::time::Duration::from_secs(10)), Vec::<u32>::new(), "TERM was enough: nothing killed");
         let err = setup.join().unwrap().unwrap_err().to_string();
@@ -849,7 +879,7 @@ printf '{\"v\": 1, \"type\": \"doctor\", \"path\": \"%s\", \"pref\": \"%s\", \"p
         assert!(stopping.elapsed() < std::time::Duration::from_secs(5), "the setup was not stopped: it ran to its end");
         assert!(err.contains("setup ended without finishing"), "{err}");
         assert!(!alive(child), "what the CLI started outlived it");
-        assert!(procs.lock().is_empty(), "an ended command is still kept");
+        assert!(procs.lock().live.is_empty(), "an ended command is still kept");
     }
 
     #[test]
@@ -895,7 +925,40 @@ esac
                    Vec::<u32>::new());
         // it saw the cancel and ended by itself: not stopped before it could stop what it was starting
         assert_eq!(run.join().unwrap().unwrap(), Some(("20261026-221500-abcdef".to_string(), "canceled".to_string())));
-        assert!(procs.lock().is_empty());
+        assert!(procs.lock().live.is_empty());
+    }
+
+    #[test]
+    fn a_command_started_once_quitting_has_begun_is_stopped_too() {
+        // as start_setup does: an upgrade stopped while a version is installed goes on to `doctor`
+        let dir = repo();
+        let second = dir.path().join("second.child");
+        let uv = executable(dir.path(), "two-step-uv", &format!(r#"#!/bin/sh
+case "$*" in
+  *"--json upgrade"*) sleep 30 ;;
+  *"--json doctor"*) sleep 30 &
+    echo $! > '{}'
+    wait ;;
+esac
+"#, second.display()));
+        let (p, procs) = own_procs(Pipeline::checkout(dir.path(), uv).unwrap());
+        let thread = std::thread::spawn(move || {
+            let _ = p.call(&["upgrade"]);   // stopped: carries on regardless
+            p.call(&["doctor"])
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while procs.lock().live.is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the first command never started");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let stopping = std::time::Instant::now();
+        assert_eq!(procs.stop_all(std::time::Duration::from_secs(5)), Vec::<u32>::new());
+        assert!(thread.join().unwrap().is_err(), "the second command ran to its end");
+        assert!(stopping.elapsed() < std::time::Duration::from_secs(5), "the second command was not stopped: it ran to its end");
+        if let Some(child) = fs::read_to_string(&second).ok().and_then(|t| t.trim().parse().ok()) {
+            assert!(!alive(child), "what the second command started outlived the quit");
+        }
+        assert!(procs.lock().live.is_empty());
     }
 
     #[test]
@@ -903,7 +966,7 @@ esac
         let dir = repo();
         let (p, procs) = own_procs(Pipeline::checkout(dir.path(), fake_uv(dir.path(), r#"{"v": 1, "type": "doctor"}"#, "", 0)).unwrap());
         p.one(&["doctor"], "doctor").unwrap();
-        assert!(procs.lock().is_empty());
+        assert!(procs.lock().live.is_empty());
         assert_eq!(procs.stop_all(std::time::Duration::from_secs(1)), Vec::<u32>::new());
     }
 
