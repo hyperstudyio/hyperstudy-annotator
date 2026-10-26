@@ -1,13 +1,16 @@
-//! Running the perception pipeline from the app: the `perception` CLI of a hyperstudy-perception folder, run with uv
-//! and read through its `--json` output (one versioned JSON object per line; docs/cli-json.md in that repository).
+//! Running the perception pipeline from the app: the `perception` CLI of hyperstudy-perception, read through its
+//! `--json` output (one versioned JSON object per line; docs/cli-json.md in that repository).
 //!
 //! The app runs the uv it bundles (scripts/fetch-uv.sh, tauri.conf.json bundle.externalBin), never one found on the
-//! machine. The pipeline folder is a setting (a lab checkout, for now; packaging the pipeline itself with the app is a
-//! distribution question).
+//! machine. With it, the app installs the pipeline from PyPI (`install_tool`) and upgrades it on each start to the
+//! newest version it can read (COMPATIBLE); uv fetches the Python it runs on and every step's packages into the app's
+//! own folders, so a Mac needs nothing installed (no Python, ffmpeg or developer tools). PERCEPTION_REPO, set when
+//! starting the app, runs a checkout instead (pipeline development).
 //! Plain functions over paths and processes, so they can be tested without a running app; `commands.rs` wraps them.
 use crate::error::{Error, Result};
 use serde::Serialize;
 use serde_json::Value;
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -47,14 +50,56 @@ pub fn run_id(id: &str) -> Result<&str> {
     if ok { Ok(id) } else { Err(Error::Bundle(format!("the pipeline reported a run id that is not one: {id:?}"))) }
 }
 
-/// A pipeline folder must not be inside the app's own data (the library's bundle copies are made from files a bundle
-/// lists, so a bundle could otherwise supply the code this app runs with uv).
-pub fn check_folder(folder: &Path, data_dir: &Path) -> Result<()> {
-    let (f, d) = (folder.canonicalize()?, data_dir.canonicalize()?);   // the data folder exists (made at start-up)
-    if f.starts_with(&d) {
-        return Err(Error::Bundle(format!("{} is inside the app's own data; choose your hyperstudy-perception folder", folder.display())));
+/// The pipeline versions this app reads: the newest is installed. Before 1.0 a minor version may change the `--json`
+/// protocol or the bundle format, a patch version may not (hyperstudy-perception's RELEASING.md).
+pub const COMPATIBLE: &str = "hyperstudy-perception>=0.1,<0.2";
+
+/// Where uv keeps what it fetches for the app: the Python it runs (it never uses another, Homebrew's or the system's),
+/// its cache of packages, and the pipeline it installs (`tools`, with its `perception` command in `bin`).
+#[derive(Debug, Clone)]
+pub struct UvDirs {
+    pub python: PathBuf,
+    pub cache: PathBuf,
+    pub tools: PathBuf,
+    pub bin: PathBuf,
+}
+
+impl UvDirs {
+    /// The installed pipeline's command.
+    pub fn perception(&self) -> PathBuf {
+        self.bin.join(if cfg!(windows) { "perception.exe" } else { "perception" })
     }
-    Ok(())
+}
+
+/// What uv and the CLI it starts are given: the app's uv first on PATH (the CLI and its steps find uv by PATH, `uv run`
+/// for each step's environment), then `path`; and with `dirs`, only uv's own Python, in the app's folders, and not the
+/// user's uv.toml.
+fn uv_env(c: &mut Command, uv: &Path, path: &OsStr, dirs: Option<&UvDirs>) {
+    let uv_dir = uv.parent().map(Path::to_path_buf).unwrap_or_default();
+    c.env("PATH", std::env::join_paths(std::iter::once(uv_dir).chain(std::env::split_paths(path))).unwrap_or_else(|_| path.to_owned()));
+    if let Some(d) = dirs {
+        c.env("UV_PYTHON_PREFERENCE", "only-managed").env("UV_PYTHON_INSTALL_DIR", &d.python).env("UV_CACHE_DIR", &d.cache)
+            .env("UV_TOOL_DIR", &d.tools).env("UV_TOOL_BIN_DIR", &d.bin).env("UV_NO_CONFIG", "1");
+    }
+}
+
+/// Install the pipeline (`spec`: COMPATIBLE, or a wheel's path in tests) into the app's folders, or upgrade it to the
+/// newest version `spec` allows, on Python 3.12, which uv fetches the first time. Returns its `perception` command.
+pub fn install_tool(uv: &Path, path: &OsStr, dirs: &UvDirs, spec: &str) -> Result<PathBuf> {
+    let mut c = Command::new(uv);
+    c.args(["tool", "install", "--upgrade", "--quiet", "--python", "3.12", spec]).stdin(Stdio::null());
+    uv_env(&mut c, uv, path, Some(dirs));
+    let out = c.output()?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+        return Err(Error::Bundle(format!("uv could not install the pipeline: {}", last[last.len().saturating_sub(3)..].join(" | "))));
+    }
+    let perception = dirs.perception();
+    if !perception.is_file() {
+        return Err(Error::Bundle(format!("uv installed the pipeline but {} is missing", perception.display())));
+    }
+    Ok(perception)
 }
 
 /// `path`, resolved, if it is inside `dir` (the CLI reports where it wrote an export; it must be where it was asked).
@@ -322,27 +367,63 @@ pub struct GraphPreset {
     pub description: String,
 }
 
+/// The CLI the app runs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// the package installed from PyPI: its `perception` command
+    Installed(PathBuf),
+    /// a checkout of hyperstudy-perception, run with `uv run` (PERCEPTION_REPO)
+    Checkout(PathBuf),
+}
+
 #[derive(Debug)]
 pub struct Pipeline {
     pub uv: PathBuf,
-    pub repo: PathBuf,
+    pub source: Source,
     /// the store the CLI uses (PERCEPTION_HOME); None: its default, shared with command-line use
     pub home: Option<PathBuf>,
     /// the keys the user stored in the app (keys.rs), for the CLI's environment, where it looks first
     pub secrets: crate::keys::Secrets,
+    /// the PATH the CLI starts with, after the folder of the app's uv. The app's own: an app started from the Finder
+    /// has only /usr/bin:/bin:/usr/sbin:/sbin, so nothing a step needs may come from it.
+    pub path: OsString,
+    /// None: uv's own defaults, shared with command-line use (tests)
+    pub uv_dirs: Option<UvDirs>,
 }
 
 impl Pipeline {
-    pub fn new(repo: &Path, uv: PathBuf) -> Result<Self> {
+    fn with(source: Source, uv: PathBuf) -> Self {
+        Pipeline { uv, source, home: None, secrets: Default::default(), path: std::env::var_os("PATH").unwrap_or_default(), uv_dirs: None }
+    }
+
+    /// The pipeline installed from PyPI (`install_tool`).
+    pub fn installed(perception: &Path, uv: PathBuf) -> Result<Self> {
+        if !perception.is_file() {
+            return Err(Error::NotFound("the pipeline is not installed yet: the app installs it when it starts".into()));
+        }
+        Ok(Self::with(Source::Installed(perception.to_path_buf()), uv))
+    }
+
+    /// A checkout of hyperstudy-perception (PERCEPTION_REPO).
+    pub fn checkout(repo: &Path, uv: PathBuf) -> Result<Self> {
         if !repo.join("orchestrator").join("pyproject.toml").is_file() {
             return Err(Error::Bundle(format!("{} is not a hyperstudy-perception folder (no orchestrator/pyproject.toml)", repo.display())));
         }
-        Ok(Pipeline { uv, repo: repo.to_path_buf(), home: None, secrets: Default::default() })
+        Ok(Self::with(Source::Checkout(repo.to_path_buf()), uv))
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let orchestrator = self.repo.join("orchestrator");
-        let mut c = Command::new(&self.uv);
+        // the folder it runs in holds no graph files: a graph is named, and the CLI takes a file of that name in its
+        // folder before its own graph
+        let (mut c, dir) = match &self.source {
+            Source::Installed(perception) => (Command::new(perception), perception.parent().map(Path::to_path_buf).unwrap_or_default()),
+            Source::Checkout(repo) => {
+                let orchestrator = repo.join("orchestrator");
+                let mut c = Command::new(&self.uv);
+                c.arg("run").arg("--quiet").arg("--project").arg(&orchestrator).arg("perception");
+                (c, orchestrator)
+            }
+        };
         #[cfg(unix)]
         {
             // its own process group: stopping it stops what it started too (uv runs Python as a child, which would
@@ -350,8 +431,8 @@ impl Pipeline {
             use std::os::unix::process::CommandExt;
             c.process_group(0);
         }
-        c.arg("run").arg("--quiet").arg("--project").arg(&orchestrator).arg("perception").arg("--json").args(args)
-            .current_dir(&orchestrator).stdin(Stdio::null());
+        c.arg("--json").args(args).current_dir(dir).stdin(Stdio::null());
+        uv_env(&mut c, &self.uv, &self.path, self.uv_dirs.as_ref());
         if let Some(home) = &self.home {
             c.env("PERCEPTION_HOME", home);
         }
@@ -425,34 +506,56 @@ impl Pipeline {
         }
     }
 
-    /// A graph of the pipeline's graphs/ folder, by file name only: nothing outside that folder can be named.
-    pub fn graph(&self, file: &str) -> Result<PathBuf> {
-        // one plain file name: no separators, no `..`, no drive (`C:x.yaml` is relative to a drive on Windows)
-        let plain = matches!(Path::new(file).components().collect::<Vec<_>>()[..], [std::path::Component::Normal(_)]);
-        let ok = plain && file.ends_with(".yaml") && !file.contains(['/', '\\', ':']) && !file.starts_with('.');
-        let path = self.repo.join("graphs").join(file);
-        if !ok || !path.is_file() {
-            return Err(Error::NotFound(format!("the pipeline has no graph {file:?}")));
+    /// `perception setup`: for each node that can run here, its environment synced from its lock and its weights
+    /// fetched, so the first run does not wait for them. `on` gets each step as it ends. Ok when every step succeeded;
+    /// else what failed, or how the CLI ended without saying.
+    pub fn setup(&self, mut on: impl FnMut(&Value)) -> Result<()> {
+        let mut child = self.command(&["setup"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        let stderr = child.stderr.take().map(|e| std::thread::spawn(move || {   // read apart: a full pipe would block
+            BufReader::new(e).lines().map_while(|l| l.ok()).last().unwrap_or_default()
+        }));
+        let (mut failed, mut ok) = (vec![], None);
+        let read = lines(&mut child, |o| {
+            match o["type"].as_str() {
+                Some("setup.step") if o["ok"] == false => failed.push(format!("{} {}: {}", o["what"].as_str().unwrap_or("step"),
+                    o["node"].as_str().unwrap_or("this machine"), o["message"].as_str().unwrap_or(""))),
+                Some("setup") => ok = o["ok"].as_bool(),
+                _ => {}
+            }
+            on(&o);
+        });
+        if read.is_err() {
+            let _ = stop_process(child.id());
         }
-        Ok(path)
+        let status = child.wait()?;
+        let last_words = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
+        read?;
+        match ok {
+            Some(true) => Ok(()),
+            Some(false) => Err(Error::Bundle(failed.join("; "))),
+            None => Err(Error::Bundle(format!("the pipeline's setup ended without finishing ({status}){}",
+                                              if last_words.is_empty() { String::new() } else { format!(": {last_words}") }))),
+        }
     }
 
-    /// The graphs a user can run, with the comment each starts with.
-    pub fn graphs(&self) -> Result<Vec<GraphPreset>> {
-        let mut out = vec![];
-        for entry in std::fs::read_dir(self.repo.join("graphs"))? {
-            let path = entry?.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path)?;
-            let description = text.lines().take_while(|l| l.starts_with('#')).map(|l| l.trim_start_matches('#').trim())
-                .filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
-            let pipeline = text.lines().find_map(|l| l.strip_prefix("pipeline:")).map(|p| p.trim().to_string()).unwrap_or_default();
-            out.push(GraphPreset { file: path.file_name().unwrap().to_string_lossy().into_owned(), pipeline, description });
+    /// One of the pipeline's graphs, by its file name, which run and plan take: a plain name only (no folder, `..` or
+    /// drive: `C:x.yaml` is relative to a drive on Windows). Whether there is such a graph is the CLI's to say.
+    pub fn graph(&self, file: &str) -> Result<String> {
+        let plain = matches!(Path::new(file).components().collect::<Vec<_>>()[..], [std::path::Component::Normal(_)]);
+        if !(plain && file.ends_with(".yaml") && !file.contains(['/', '\\', ':']) && !file.starts_with('.')) {
+            return Err(Error::NotFound(format!("the pipeline has no graph {file:?}")));
         }
-        out.sort_by(|a, b| a.file.cmp(&b.file));
-        Ok(out)
+        Ok(file.to_string())
+    }
+
+    /// The graphs a user can run, with the comment each starts with (`perception graphs`).
+    pub fn graphs(&self) -> Result<Vec<GraphPreset>> {
+        let v = self.one(&["graphs"], "graphs")?;
+        let graphs = v["graphs"].as_array().ok_or_else(|| Error::Bundle("the pipeline listed no graphs".into()))?;
+        Ok(graphs.iter().map(|g| GraphPreset {
+            file: g["file"].as_str().unwrap_or_default().into(), pipeline: g["pipeline"].as_str().unwrap_or_default().into(),
+            description: g["description"].as_str().unwrap_or_default().into(),
+        }).collect())
     }
 }
 
@@ -507,13 +610,14 @@ mod tests {
     }
 
     #[test]
-    fn graphs_are_listed_with_their_comment_and_only_named_inside_the_graphs_folder() {
+    fn graphs_come_from_the_cli_and_only_a_plain_graph_name_reaches_it() {
         let dir = repo();
-        let p = Pipeline::new(dir.path(), PathBuf::from("/bin/uv")).unwrap();
+        let listed = r#"{"v": 1, "type": "graphs", "graphs": [{"file": "faces.yaml", "pipeline": "perception-faces", "description": "Decode and face tracks.", "path": "/x/graphs/faces.yaml"}]}"#;
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), listed, "", 0)).unwrap();
         assert_eq!(p.graphs().unwrap(), vec![GraphPreset { file: "faces.yaml".into(), pipeline: "perception-faces".into(),
-                                                           description: "Decode and face tracks. perception run ...".into() }]);
-        assert!(p.graph("faces.yaml").is_ok());
-        for bad in ["../faces.yaml", "/etc/passwd", "sub/faces.yaml", "notes.txt", ".hidden.yaml", "missing.yaml", "C:faces.yaml", "C:\\faces.yaml"] {
+                                                           description: "Decode and face tracks.".into() }]);
+        assert_eq!(p.graph("faces.yaml").unwrap(), "faces.yaml");
+        for bad in ["../faces.yaml", "/etc/passwd", "sub/faces.yaml", "notes.txt", ".hidden.yaml", "C:faces.yaml", "C:\\faces.yaml"] {
             assert!(p.graph(bad).is_err(), "{bad} should be refused");
         }
     }
@@ -521,7 +625,7 @@ mod tests {
     #[test]
     fn a_folder_that_is_not_the_pipeline_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(Pipeline::new(dir.path(), PathBuf::from("/bin/uv")).unwrap_err().to_string().contains("not a hyperstudy-perception folder"));
+        assert!(Pipeline::checkout(dir.path(), PathBuf::from("/bin/uv")).unwrap_err().to_string().contains("not a hyperstudy-perception folder"));
     }
 
     #[test]
@@ -532,21 +636,50 @@ mod tests {
         }
     }
 
+    fn dirs(root: &Path) -> UvDirs {
+        UvDirs { python: root.join("python"), cache: root.join("uv-cache"), tools: root.join("tools"), bin: root.join("bin") }
+    }
+
     #[test]
-    fn the_pipeline_folder_cannot_be_inside_the_apps_own_data() {
-        let data = tempfile::tempdir().unwrap();
-        let inside = data.path().join("bundles").join("some-bundle");
-        fs::create_dir_all(&inside).unwrap();
-        assert!(check_folder(&inside, data.path()).unwrap_err().to_string().contains("inside the app's own data"));
-        let elsewhere = tempfile::tempdir().unwrap();
-        assert!(check_folder(elsewhere.path(), data.path()).is_ok());
+    fn the_pipeline_is_installed_or_upgraded_from_pypi_into_the_apps_folders_on_its_own_python() {
+        let dir = tempfile::tempdir().unwrap();
+        // a stand-in for uv that records what it was asked and with what, and installs a `perception` where it was told
+        let uv = executable(dir.path(), "uv", "#!/bin/sh\necho \"$* | $UV_TOOL_DIR | $UV_TOOL_BIN_DIR | $UV_PYTHON_PREFERENCE | $UV_NO_CONFIG\" > \"$UV_TOOL_DIR.args\"\n\
+            mkdir -p \"$UV_TOOL_BIN_DIR\" && touch \"$UV_TOOL_BIN_DIR/perception\"\n");
+        let d = dirs(dir.path());
+        let perception = install_tool(&uv, OsStr::new("/usr/bin:/bin"), &d, COMPATIBLE).unwrap();
+        assert_eq!(perception, d.perception());
+        let args = fs::read_to_string(dir.path().join("tools.args")).unwrap();
+        assert_eq!(args.trim(), format!("tool install --upgrade --quiet --python 3.12 {COMPATIBLE} | {} | {} | only-managed | 1",
+                                        d.tools.display(), d.bin.display()));
+        assert!(Pipeline::installed(&perception, uv.clone()).is_ok());
+        // uv refusing (no network, no such version) is an error that says why
+        let failing = executable(dir.path(), "uv-offline", "#!/bin/sh\necho 'error: Failed to fetch: https://pypi.org/simple/hyperstudy-perception/' >&2\nexit 2\n");
+        let err = install_tool(&failing, OsStr::new("/usr/bin:/bin"), &dirs(&dir.path().join("other")), COMPATIBLE).unwrap_err().to_string();
+        assert!(err.contains("could not install the pipeline") && err.contains("Failed to fetch"), "{err}");
+        assert!(Pipeline::installed(&dirs(&dir.path().join("other")).perception(), uv).unwrap_err().to_string().contains("not installed yet"));
+    }
+
+    #[test]
+    fn the_cli_finds_the_apps_uv_first_on_its_path_and_uv_keeps_python_and_packages_in_the_apps_folders() {
+        let dir = repo();
+        let uv = executable(dir.path(), "uv", "#!/bin/sh
+printf '{\"v\": 1, \"type\": \"doctor\", \"path\": \"%s\", \"pref\": \"%s\", \"python\": \"%s\", \"cache\": \"%s\", \"noconfig\": \"%s\"}\\n' \
+            \"$PATH\" \"$UV_PYTHON_PREFERENCE\" \"$UV_PYTHON_INSTALL_DIR\" \"$UV_CACHE_DIR\" \"$UV_NO_CONFIG\"\n");
+        let mut p = Pipeline::checkout(dir.path(), uv).unwrap();
+        p.path = "/usr/bin:/bin:/usr/sbin:/sbin".into();   // an app started from the Finder
+        p.uv_dirs = Some(UvDirs { python: "/data/python".into(), cache: "/caches/uv".into(), tools: "/data/tools".into(), bin: "/data/bin".into() });
+        let seen = p.one(&["doctor"], "doctor").unwrap();
+        assert_eq!(seen["path"], format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", dir.path().display()));
+        assert_eq!((&seen["pref"], &seen["python"], &seen["cache"], &seen["noconfig"]),
+                   (&"only-managed".into(), &"/data/python".into(), &"/caches/uv".into(), &"1".into()));
     }
 
     #[test]
     fn a_run_can_be_stopped_by_its_process_before_it_has_an_id() {
         let dir = repo();
         let script = executable(dir.path(), "slow-uv", "#!/bin/sh\nsleep 30\n");   // a first environment sync that does not end
-        let p = Pipeline::new(dir.path(), script).unwrap();
+        let p = Pipeline::checkout(dir.path(), script).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let started = std::time::Instant::now();
         let run = std::thread::spawn(move || p.run_to_end_with(&["run"], |pid| tx.send(pid).unwrap(), |_| {}));
@@ -666,7 +799,7 @@ mod tests {
     fn a_cli_that_prints_something_else_is_stopped_not_left_running_unobserved() {
         let dir = repo();
         let script = executable(dir.path(), "chatty-uv", "#!/bin/sh\necho 'Resolved 12 packages in 3ms'\nsleep 30\n");
-        let p = Pipeline::new(dir.path(), script).unwrap();
+        let p = Pipeline::checkout(dir.path(), script).unwrap();
         let started = std::time::Instant::now();
         let mut pid = 0;
         let err = p.run_to_end_with(&["run"], |id| pid = id, |_| {}).unwrap_err().to_string();
@@ -779,7 +912,7 @@ mod tests {
     fn a_run_that_ends_without_finishing_is_an_error_that_says_why() {
         let dir = repo();
         let created = r#"{"v": 1, "type": "run.created", "run": "r1", "store": "/s"}"#;
-        let p = Pipeline::new(dir.path(), fake_uv(dir.path(), created, "error: uv could not sync the environment", 1)).unwrap();
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), created, "error: uv could not sync the environment", 1)).unwrap();
         let mut seen = 0;
         let err = p.run_to_end(&["run", "g.yaml"], |_| seen += 1).unwrap_err().to_string();
         assert!(err.contains("ended without finishing the run") && err.contains("uv could not sync"), "{err}");
@@ -792,7 +925,7 @@ mod tests {
         // the CLI stand-in says whether it got the key, and checks the value without printing it
         let uv = executable(dir.path(), "fake-uv", "#!/bin/sh\n[ \"$RUNPOD_API_KEY\" = sk-test-rp ] && got=true || got=false\n\
             printf '{\"v\": 1, \"type\": \"doctor\", \"got\": %s}\\n' \"$got\"\n");
-        let mut p = Pipeline::new(dir.path(), uv).unwrap();
+        let mut p = Pipeline::checkout(dir.path(), uv).unwrap();
         assert_eq!(p.one(&["doctor"], "doctor").unwrap()["got"], false);
         p.secrets = crate::keys::Secrets(vec![("RUNPOD_API_KEY".into(), "sk-test-rp".into())]);
         assert_eq!(p.one(&["doctor"], "doctor").unwrap()["got"], true);
@@ -803,39 +936,65 @@ mod tests {
     fn a_run_reports_its_id_and_status_and_one_the_cli_refused_says_so_in_its_own_objects() {
         let dir = repo();
         let finished = "{\"v\": 1, \"type\": \"run.created\", \"run\": \"r1\", \"store\": \"/s\"}\n{\"v\": 1, \"type\": \"run.finished\", \"run\": \"r1\", \"status\": \"succeeded\"}";
-        let p = Pipeline::new(dir.path(), fake_uv(dir.path(), finished, "", 0)).unwrap();
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), finished, "", 0)).unwrap();
         assert_eq!(p.run_to_end(&["run"], |_| {}).unwrap(), Some(("r1".into(), "succeeded".into())));
         let refused = r#"{"v": 1, "type": "plan", "ok": false, "nodes": [], "estimated_usd": 0}"#;   // printed, then exit 1
-        let p = Pipeline::new(dir.path(), fake_uv(dir.path(), refused, "", 1)).unwrap();
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), refused, "", 1)).unwrap();
         assert_eq!(p.run_to_end(&["run"], |_| {}).unwrap(), None);
     }
 
-    /// The real CLI end to end, through the uv the app bundles: a synthetic clip decoded, exported and imported into a
-    /// library. Needs the pipeline folder (PERCEPTION_REPO), the fetched uv and ffmpeg; skipped without them.
+    #[test]
+    fn setup_reports_each_step_as_it_ends_and_what_failed() {
+        let dir = repo();
+        let step = |what: &str, ok: bool, msg: &str| format!(r#"{{"v": 1, "type": "setup.step", "node": "core.decode@1.0.0", "what": "{what}", "ok": {ok}, "seconds": 1.0, "message": "{msg}"}}"#);
+        let ok = format!("{}\n{}\n{{\"v\": 1, \"type\": \"setup\", \"ok\": true}}", step("environment", true, ""), step("models", true, ""));
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), &ok, "", 0)).unwrap();
+        let mut seen = vec![];
+        p.setup(|o| seen.push(o["type"].as_str().unwrap().to_string())).unwrap();
+        assert_eq!(seen, ["setup.step", "setup.step", "setup"]);
+        let failed = format!("{}\n{{\"v\": 1, \"type\": \"setup\", \"ok\": false}}", step("environment", false, "no network"));
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), &failed, "", 1)).unwrap();
+        assert_eq!(p.setup(|_| {}).unwrap_err().to_string(), "environment core.decode@1.0.0: no network");
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), "", "error: no Python 3.12 could be fetched", 2)).unwrap();
+        let err = p.setup(|_| {}).unwrap_err().to_string();
+        assert!(err.contains("ended without finishing") && err.contains("no Python 3.12"), "{err}");
+    }
+
+    /// The real CLI end to end, as the app runs it: the pipeline installed with the uv the app bundles into folders of
+    /// its own (from PyPI, or the wheel PERCEPTION_WHEEL names), with only the PATH an app started from the Finder has,
+    /// on a Python uv fetches (nothing of this machine's is used). A small clip is decoded, exported and imported into a
+    /// library. Needs the fetched uv and the network; PERCEPTION_REPO runs a checkout instead.
     #[test]
     fn a_run_streams_events_then_exports_a_bundle_the_library_imports() {
-        let Some(repo) = std::env::var_os("PERCEPTION_REPO").map(PathBuf::from) else { return eprintln!("skipped: set PERCEPTION_REPO") };
-        let work = tempfile::tempdir().unwrap();
-        let video = work.path().join("clip.mp4");
-        let made = Command::new("ffmpeg").args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=4",
-                                                "-f", "lavfi", "-i", "sine=duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
-            .arg(&video).status();
-        if !made.map(|s| s.success()).unwrap_or(false) {
-            return eprintln!("skipped: ffmpeg could not make a clip");
-        }
         let Some(uv) = fetched_uv() else { return eprintln!("skipped: run scripts/fetch-uv.sh") };
-        let mut p = Pipeline::new(&repo, uv).unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let video = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/clip.mp4");
+        let app = work.path().join("MacOS");   // laid out as in the app: `uv` beside the executable
+        fs::create_dir_all(&app).unwrap();
+        std::os::unix::fs::symlink(&uv, app.join("uv")).unwrap();
+        let uv = bundled_uv(&app.join("hyperstudy-annotator")).unwrap();
+        let (finder, d) = (OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin"), dirs(work.path()));
+        let mut p = match std::env::var_os("PERCEPTION_REPO") {
+            Some(repo) => Pipeline::checkout(Path::new(&repo), uv).unwrap(),
+            None => {
+                let spec = std::env::var("PERCEPTION_WHEEL").unwrap_or_else(|_| COMPATIBLE.to_string());
+                Pipeline::installed(&install_tool(&uv, finder, &d, &spec).unwrap(), uv).unwrap()
+            }
+        };
         p.home = Some(work.path().join("home"));
+        p.path = finder.to_owned();
+        p.uv_dirs = Some(d);
         let doctor = p.one(&["doctor"], "doctor").unwrap();
         assert!(doctor["nodes"].as_array().unwrap().iter().any(|n| n["ref"] == "core.decode@1.0.0"));
 
+        assert!(p.graphs().unwrap().iter().any(|g| g.file == "decode.yaml"));
         let graph = p.graph("decode.yaml").unwrap();
         let input = format!("video={}", video.display());
-        let plan = p.one(&["plan", graph.to_str().unwrap(), "--input", &input], "plan").unwrap();
-        assert_eq!(plan["ok"], true);
+        let plan = p.one(&["plan", &graph, "--input", &input], "plan").unwrap();
+        assert_eq!(plan["ok"], true, "{plan}");
 
         let mut seen = vec![];
-        let (run, status) = p.run_to_end(&["run", graph.to_str().unwrap(), "--input", &input], |o| seen.push(o.clone())).unwrap().unwrap();
+        let (run, status) = p.run_to_end(&["run", &graph, "--input", &input], |o| seen.push(o.clone())).unwrap().unwrap();
         assert_eq!(seen[0]["type"], "run.created");
         assert_eq!(status, "succeeded");
         assert_eq!(seen.last().unwrap()["type"], "run.finished");
@@ -851,5 +1010,9 @@ mod tests {
         let summary = crate::library::record_import(&conn, &bundle_dir, &id, &manifest, &dst).unwrap();
         assert!(summary.layers.contains_key("shots"));
         crate::library::check_video(&summary.video_sha256, &video).unwrap();   // the bundle names the clip it was made from
+        if std::env::var_os("PERCEPTION_REPO").is_none() {   // the CLI ran on the Python uv fetched for the app
+            let cfg = fs::read_to_string(work.path().join("tools/hyperstudy-perception/pyvenv.cfg")).unwrap();
+            assert!(cfg.lines().any(|l| l.starts_with("home = ") && l.contains(&*work.path().join("python").to_string_lossy())), "{cfg}");
+        }
     }
 }

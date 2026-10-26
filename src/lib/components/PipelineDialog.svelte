@@ -1,16 +1,16 @@
 <script lang="ts">
-  // Run the perception pipeline on a video and import the bundle it makes: the pipeline folder (checked by
-  // `perception doctor`), a video, the features to run from the pipeline's full graph (what they need comes along),
+  // Run the perception pipeline on a video and import the bundle it makes: the pipeline the app installs from PyPI
+  // (checked once it is installed; Start run waits while a new version is set up), a video, the features to run from the pipeline's full graph (what they need comes along),
   // the plan (where each step runs, what is cached, what it costs, each step's details and settings: what it downloads
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
-  // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
+  // choice to send it; such features start off. A pipeline with no full graph offers its graphs instead.
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
   import Keys from './Keys.svelte';
   import Machines from './Machines.svelte';
   import type { RunStatus } from './Rail.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    settingsFor, spendingCap, totalEstimate, keyRows, keysText, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
+    settingsFor, spendingCap, totalEstimate, keyRows, keysText, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -23,7 +23,8 @@
     onstatus?: (run: RunStatus | null) => void;
   } = $props();
 
-  let folder = $state<string | null>(null);
+  let loaded = $state(false);   // the pipeline was asked what it has (once it is installed)
+  let setup = $state<SetupStatus | null>(null);
   let doctor = $state<Doctor | null>(null);
   // other machines steps can run on (null: this pipeline predates them, perception #15/#16)
   let hosts = $state<Host[] | null>(null);
@@ -74,7 +75,8 @@
   const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy && !keysBusy);
+  const settingUp = $derived(setup?.state === 'installing' || setup?.state === 'running');   // Start run waits for it
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy && !keysBusy && !settingUp);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -122,28 +124,25 @@
     busy = label; error = null;
     try { await f(); } catch (e) { error = String(e); } finally { busy = null; }
   }
-  const loadFolder = () => step('Checking the pipeline…', async () => {
-    folder = await api.folder();
-    if (!folder) return;
+  const loadPipeline = () => step('Checking the pipeline…', async () => {
     [doctor, graphs] = await Promise.all([api.doctor(), api.graphs()]);
     await Promise.all([loadMachines(), loadKeys()]);
     if (graphs.some((g) => g.file === FULL_GRAPH)) graph = FULL_GRAPH;   // features are picked from it
   });
-  $effect(() => { loadFolder(); return () => stop?.(); });
-
-  const chooseFolder = () => step('Checking the pipeline…', async () => {
-    const path = await api.pickFolder();
-    if (!path) return;
-    doctor = await api.setFolder(path);
-    folder = path;
-    await Promise.all([loadMachines(), loadKeys()]);
-    // another pipeline: its graphs are not the old ones, and no plan or permission carries over (a plan still in
-    // flight from the old one is superseded too)
-    graph = null; plan = null; places = {}; wanted = null; ticked = {}; settings = {}; open = null;
-    newestPlan(Promise.resolve(null), (p) => (plan = p), () => {});
-    graphs = await api.graphs();
-    if (graphs.some((g) => g.file === FULL_GRAPH)) await chooseGraph(FULL_GRAPH);
+  // nothing can answer while the pipeline is being installed: asked once it is (or a checkout runs: no setup)
+  $effect(() => { if (setup && setup.state !== 'installing' && !loaded) { loaded = true; loadPipeline(); } });
+  $effect(() => () => stop?.());
+  $effect(() => {   // the setup's status, then each change to it (listening first: no change is missed)
+    let off: (() => void) | null = null, gone = false;
+    api.onSetup((s) => (setup = s)).then((f) => { if (gone) f(); else off = f; return api.setupStatus(); })
+      .then((s) => { if (s && !gone && setup === null) setup = s; }).catch((e) => (error = String(e)));
+    return () => { gone = true; off?.(); };
   });
+  const retrySetup = () => step('Setting up the pipeline…', () => api.retrySetup());
+  // the step a setup.step names, as the plan calls it (`uses` is the node's ref)
+  const stepTitle = (s: SetupStep) => plan?.nodes.find((n) => n.uses === s.node)?.title ?? s.node ?? 'this machine';
+
+
   // a pipeline from before other machines does not know the commands (argparse: invalid choice): the row says so; any
   // other failure is said on the row as it is, with the machines last known kept
   const loadMachines = async () => {
@@ -237,6 +236,8 @@
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
 
   const name = (p: string | null) => p?.split('/').pop() ?? '';
+  const pipelineName = $derived(doctor?.pipeline?.commit ? `Pipeline ${doctor.pipeline.version}`
+    : `Pipeline ${doctor?.pipeline?.version ?? ''} from ${name(doctor?.pipeline?.root ?? 'a checkout')}`);
   const stem = (file: string) => file.replace(/\.ya?ml$/, '');
   const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
   const STATE_LABEL = { waiting: 'Waiting', cached: 'Cached', running: 'Running', retrying: 'Retrying', succeeded: 'Done', failed: 'Failed', canceled: 'Canceled' };
@@ -273,21 +274,20 @@
     <div class="title">
       <h1 class="page-title">Extract</h1>
       <p class="page-lead">Run the perception pipeline on a video. The bundle it makes opens in the Annotator.</p>
-      {#if folder}
+      {#if doctor}
         <p class="pipeline">
-          <span title={folder}>{name(folder)}</span>{#if doctor}, {doctor.nodes.filter((n) => n.where).length} of {doctor.nodes.length} nodes can run on this {doctor.platform.startsWith('darwin') ? 'Mac' : 'machine'} ({doctor.accelerators.map((a) => placeName(`native:${a}`)).join(', ')}){/if}
-          <button class="link" onclick={chooseFolder} disabled={started}>Change…</button>
+          <span title={doctor.pipeline?.root}>{pipelineName}</span>, {doctor.nodes.filter((n) => n.where).length} of {doctor.nodes.length} nodes can run on this {doctor.platform.startsWith('darwin') ? 'Mac' : 'machine'} ({doctor.accelerators.map((a) => placeName(`native:${a}`)).join(', ')})
         </p>
       {/if}
     </div>
   </header>
 
-  {#if !folder}
+  {#if setup?.state === 'installing'}
     <div class="empty">
-      <p>Choose your hyperstudy-perception folder. The app runs its <code>perception</code> command with the uv it bundles.</p>
-      <button class="primary" onclick={chooseFolder}>Choose…</button>
+      <p>Installing the pipeline. The first time, this fetches the pipeline and the Python it runs on; after that, it
+        only checks for a newer version.</p>
     </div>
-  {:else}
+  {:else if doctor}
     <div class="setup">
       <span class="label">Video</span>
       <div class="value">
@@ -425,6 +425,14 @@
       {#if view.status && view.status !== 'succeeded'}<p class="error">The run {view.status}. The step marked failed says why.</p>{/if}
       {#each why as b (b)}<p class="error">{b[0].toUpperCase() + b.slice(1)}.</p>{/each}
       {#if busy}<p class="muted">{busy}</p>{/if}
+      {#if setup?.notice}<p class="muted">{setup.notice}.</p>{/if}
+      {#if setup?.state === 'running'}
+        <p class="muted">Setting up this version of the pipeline: each step's packages and model weights (a few GB the first time).
+          {#if setup.steps.length}Done: {setup.steps.length}, last {stepTitle(setup.steps[setup.steps.length - 1])} ({setup.steps[setup.steps.length - 1].what}).{/if}
+          Start run waits for it.</p>
+      {:else if setup?.state === 'failed'}
+        <p class="error">Setting up the pipeline failed: {setup.problem}. <button class="link" onclick={retrySetup} disabled={!!busy}>Try again</button></p>
+      {/if}
       {#if view.imported}<p>Imported into the library.</p>
       {:else if started && !done && view.status === 'succeeded'}<p class="muted">Importing into the library…</p>{/if}
     </div>
@@ -448,10 +456,8 @@
   .title { flex: 1; min-width: 0; }
   .pipeline { margin: 6px 0 0; font-size: 12px; color: var(--color-text-muted); }
   .pipeline span { color: var(--color-text-secondary); }
-  .pipeline .link { font-size: 12px; margin-left: 6px; }
   p { margin: 0; }
 
-  .empty { padding: 28px 20px 32px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; color: var(--color-text-secondary); max-width: 60ch; }
 
   /* setup: what goes in (a video, a graph), label and value side by side */
   .setup { display: grid; grid-template-columns: 64px 1fr; gap: 12px 14px; align-items: baseline; padding: 4px 20px 18px; }
@@ -506,6 +512,7 @@
   @media (prefers-reduced-motion: reduce) { .bar { transition: none; } .bar.busy { animation: none; } }
 
 
+  .empty { padding: 28px 20px 32px; color: var(--color-text-secondary); max-width: 60ch; }
   footer { display: flex; align-items: center; gap: 12px; padding: 14px 20px 18px; margin-top: auto; position: sticky; bottom: 0;
            background: var(--color-bg-base); }
   footer:has(button, p) { border-top: 1px solid var(--color-border-default); }   /* no rule under an empty page */

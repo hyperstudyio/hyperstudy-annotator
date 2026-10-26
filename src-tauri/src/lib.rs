@@ -23,8 +23,12 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(data_dir.join("bundles"))?;
             let conn = db::open(&data_dir.join("annotator.db"))?;
+            let uv_dirs = pipeline::UvDirs { python: data_dir.join("python"), cache: app.path().app_cache_dir()?.join("uv"),
+                                             tools: data_dir.join("tools"), bin: data_dir.join("bin") };
             app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), control: Default::default(),
-                                            keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))) });
+                                            keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))),
+                                            uv_dirs, setup: Default::default() });
+            commands::start_setup(app.handle().clone());   // install or upgrade the pipeline, set a new version up: in the background
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -48,8 +52,8 @@ pub fn run() {
             commands::carry_over,
             commands::decline_carryover,
             commands::dismiss_unmatched,
-            commands::get_pipeline_folder,
-            commands::set_pipeline_folder,
+            commands::pipeline_setup_status,
+            commands::pipeline_setup,
             commands::pipeline_doctor,
             commands::pipeline_graphs,
             commands::pipeline_hosts,

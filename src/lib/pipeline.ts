@@ -1,5 +1,5 @@
 // Running the perception pipeline from the app (src-tauri/src/pipeline.rs drives `perception --json`, whose
-// protocol is docs/cli-json.md in hyperstudy-perception): the folder, the graphs, a plan, then a run's messages.
+// protocol is docs/cli-json.md in hyperstudy-perception): the pipeline, its setup, the graphs, a plan, then a run's messages.
 // The dialog only sees PipelineApi; browser mode's ?pipeline-demo uses a scripted stand-in (pipeline.fake.ts).
 import type { BundleSummary } from './types';
 
@@ -58,6 +58,8 @@ export type HostAction = 'add' | 'check' | 'remove' | 'clean';
 export interface Doctor {
   platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number;
   nodes: { ref: string; stage: string; description: string; where: string | null; why_not: string }[];
+  /** the pipeline: its version, its commit (the package's; null for a checkout) and where its files are */
+  pipeline?: { version: string | null; commit: string | null; root: string };
 }
 
 export type PipelineMessage = { v: 1 } & (
@@ -69,10 +71,18 @@ export type PipelineMessage = { v: 1 } & (
   | { type: 'error'; problems: string[] }
 );
 
+/** Installing the pipeline from PyPI or upgrading it (each start: `installing`, nothing runs yet), then setting a new
+ *  version up (`running`: each step's packages and weights; Start run waits). `notice`: what did not stop it (an upgrade
+ *  that could not be checked, with a version installed). */
+export interface SetupStep { node: string | null; what: string; ok: boolean; seconds: number; message: string }
+export interface SetupStatus { state: 'idle' | 'installing' | 'running' | 'done' | 'failed'; steps: SetupStep[]; problem: string | null; notice: string | null }
+
 export interface PipelineApi {
-  folder(): Promise<string | null>;
-  /** Check a hyperstudy-perception folder with `perception doctor`, and remember it. */
-  setFolder(path: string): Promise<Doctor>;
+  setupStatus(): Promise<SetupStatus>;
+  /** Hear the setup's status each time it changes; resolves to a function that stops listening. */
+  onSetup(on: (s: SetupStatus) => void): Promise<() => void>;
+  /** Try a setup that failed again. */
+  retrySetup(): Promise<void>;
   doctor(): Promise<Doctor>;
   graphs(): Promise<GraphPreset[]>;
   /** Lab servers (perception #15); a pipeline from before them rejects these. */
@@ -95,7 +105,6 @@ export interface PipelineApi {
   run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, settings: Settings, maxCostUsd: number | null, on: (m: PipelineMessage) => void): Promise<() => void>;
   /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. */
   cancel(run: string | null): Promise<void>;
-  pickFolder(): Promise<string | null>;
   pickVideo(): Promise<string | null>;
 }
 
@@ -379,8 +388,9 @@ export async function tauriPipeline(): Promise<PipelineApi> {
   const { listen } = await import('@tauri-apps/api/event');
   const { open } = await import('@tauri-apps/plugin-dialog');
   return {
-    folder: () => invoke<string | null>('get_pipeline_folder'),
-    setFolder: (path) => invoke<Doctor>('set_pipeline_folder', { path }),
+    setupStatus: () => invoke<SetupStatus>('pipeline_setup_status'),
+    onSetup: (on) => listen<SetupStatus>('pipeline-setup', (e) => on(e.payload)),
+    retrySetup: () => invoke<void>('pipeline_setup'),
     doctor: () => invoke<Doctor>('pipeline_doctor'),
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
     hosts: async () => (await invoke<{ hosts: Host[] }>('pipeline_hosts')).hosts,
@@ -398,10 +408,6 @@ export async function tauriPipeline(): Promise<PipelineApi> {
       return unlisten;
     },
     cancel: (run) => invoke<void>('pipeline_cancel', { run }),
-    async pickFolder() {
-      const dir = await open({ directory: true, title: 'Choose the hyperstudy-perception folder' });
-      return typeof dir === 'string' ? dir : null;
-    },
     async pickVideo() {
       const file = await open({ title: 'Choose a video', filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'webm', 'mkv'] }] });
       return typeof file === 'string' ? file : null;

@@ -1,9 +1,10 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
-import type { CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage } from './pipeline';
+import type { CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep } from './pipeline';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,
+  pipeline: { version: '0.1.0', commit: 'd09d9643f1f2ab72853a7b1723255a9826582fa2', root: '/Users/you/Library/Application Support/io.hyperstudy.annotator/tools/hyperstudy-perception/lib/python3.12/site-packages/perception/_pipeline' },
   nodes: [
     { ref: 'core.decode@1.0.0', stage: 'decode', description: 'Probe, shots, keyframes, audio', where: 'native (cpu)', why_not: '' },
     { ref: 'audio.asr@1.0.0', stage: 'asr', description: 'Speech and speakers', where: 'native (mps)', why_not: '' },
@@ -101,16 +102,24 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `runs` records each run's arguments, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `runs` records each run's arguments, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods (Machines)', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false } = {},
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, setup = 'done' as 'done' | 'installing' | 'running' | 'failed', setupMs = 1500 } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
-  let folder: string | null = null;
+  const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
+  let status: SetupStatus = setup === 'done' ? { state: 'done', steps: [], problem: null, notice: null }
+    : setup === 'installing' ? { state: 'installing', steps: [], problem: null, notice: null }
+    : setup === 'running' ? { state: 'running', steps: [step('core.decode@1.0.0', 'environment')], problem: null, notice: null }
+    : { state: 'failed', steps: [step('vision.face-track@1.0.0', 'environment', false, 'could not fetch torch')], problem: 'environment vision.face-track@1.0.0: could not fetch torch', notice: null };
+  const setupListeners = new Set<(s: SetupStatus) => void>();
+  const setStatus = (s: SetupStatus) => { status = s; setupListeners.forEach((on) => on(s)); };
+  const finish = () => setTimeout(() => setStatus({ state: 'done', steps: [...status.steps, step('audio.asr@1.0.0', 'environment')], problem: null, notice: null }), setupMs);
+  if (setup === 'running' || setup === 'installing') finish();
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
   let hosts: Host[] = remote_ ? [labHost('lab', 'you@lab')] : [];
   const stored = new Map<string, string>();
@@ -120,9 +129,10 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
   return {
-    folder: async () => folder,
-    setFolder: async (path) => { folder = path; return doctor; },
-    doctor: async () => doctor,
+    setupStatus: async () => status,
+    async onSetup(on) { setupListeners.add(on); return () => setupListeners.delete(on); },
+    async retrySetup() { setStatus({ state: 'running', steps: [], problem: null, notice: null }); finish(); },
+    async doctor() { if (status.state === 'installing') throw new Error('the pipeline is not installed yet: the app installs it when it starts'); return doctor; },
     graphs: async () => oldCli ? graphs.filter((g) => g.file !== 'full.yaml') : graphs,   // an older pipeline has no full graph
     async plan(_graph, _video, places, settings) {
       if (oldCli) return { ...plan, nodes: plan.nodes.map(({ needs, place, options, estimates, estimate_s, estimate_basis, title, service, description, outputs, models, settings, ...n }) => n) };
@@ -138,6 +148,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     },
     async run(_graph, _video, allow, places, only, _settings, maxCostUsd, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
+      if (status.state === 'running') throw new Error('the pipeline is still being set up: the run can start when it is done');
       runs.push({ allow, places, maxCostUsd });
       listener = on;
       const first = slowStart ? 60_000 : 0;
@@ -178,7 +189,6 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     },
     async removeKey(name) { stored.delete(name); return keyStatus(); },
     async cliKeys() { older('keys'); if (keysError) throw new Error('the pipeline failed: PermissionError: keys.json'); return { keys: [{ name: 'HF_TOKEN', source: '~/.config/hyperstudy/bakeoff.env' }], problems: [] }; },
-    pickFolder: async () => '/Users/you/Github/hyperstudy-perception',
     pickVideo: async () => '/videos/clip.mp4',
   };
 }
