@@ -545,26 +545,13 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
     blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await
 }
 
-/// The app is quitting (RunEvent::Exit): a run in progress is canceled as Cancel does, then every command the app
-/// started is stopped (`Procs::stop_all`). Cancel first: `perception cancel` records the run canceled, then stops its
-/// nodes and cloud drivers (in sessions of their own, out of reach of the CLI's group; a driver deletes its machine),
-/// so nothing is taken for a crash and retried. Without the keys: cancelling needs none, and no keychain prompt may
-/// hold up quitting.
+/// The app is quitting (RunEvent::Exit): a run canceled as Cancel does, and nothing the app started left running
+/// (`pipeline::stop_for_quit`). Without the keys: cancelling needs none, and no keychain prompt may hold up quitting.
 pub fn stop_on_exit(app: &AppHandle) {
     let state = app.state::<AppState>();
     let named = state.running.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|r| !r.is_empty());
-    match named {
-        Some(run) => {
-            if let Ok(p) = pipeline_alone(&state) {
-                let _ = p.one(&["cancel", &run], "canceled");
-            }
-        }
-        // not named yet: it has started no node, and stopping its CLI is the cancel (below, with the rest)
-        None => if let pipeline::Cancel::Stop(pid) = state.control.cancel() {
-            let _ = pipeline::stop_process(pid);
-        },
-    }
-    pipeline::PROCS.stop_all(std::time::Duration::from_secs(5));
+    let p = named.as_ref().and_then(|_| pipeline_alone(&state).ok());
+    pipeline::stop_for_quit(p.as_ref(), named.as_deref(), &state.control, &pipeline::PROCS, std::time::Duration::from_secs(5));
 }
 
 #[cfg(test)]

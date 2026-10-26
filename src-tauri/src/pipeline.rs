@@ -155,10 +155,21 @@ impl Procs {
         Live(self, child.id())
     }
 
+    /// Wait up to `limit` for the command `pid` to end by itself; whether it did.
+    pub fn wait_for(&self, pid: u32, limit: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        while self.lock().contains(&pid) {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        true
+    }
+
     /// The app is quitting: stop every command still running, with what it started (TERM to its group, as
     /// `stop_process`), and kill a group still there after `grace`. Returns the groups that had to be killed. A run is
-    /// canceled first (`commands::stop_on_exit`): its nodes and cloud drivers are in sessions of their own, which
-    /// this does not reach, and `perception cancel` stops them, a cloud machine included.
+    /// canceled before (`stop_for_quit`): its nodes and cloud drivers are in sessions of their own, out of reach.
     pub fn stop_all(&self, grace: std::time::Duration) -> Vec<u32> {
         let mut left: Vec<u32> = self.lock().iter().copied().collect();
         for &g in &left {
@@ -182,6 +193,35 @@ impl Procs {
 /// Whether any process of the group `g` is left (on Windows, `stop_process` already ended the whole tree, forcibly).
 fn group_alive(g: u32) -> bool {
     cfg!(unix) && Command::new("kill").args(["-0", "--", &format!("-{g}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
+/// The app is quitting (`commands::stop_on_exit`): a run in progress is canceled as Cancel does, then every command the
+/// app started is stopped. A named run through `perception cancel` (`p`), which records it canceled, then stops its
+/// nodes and cloud drivers (in sessions of their own, out of reach of the CLI's group; a driver deletes its machine), so
+/// nothing is taken for a crash and retried. Then its CLI is left `grace` to end by itself: it stops, on its next tick,
+/// a node it was starting as the cancel came, which the cancel could not see; stopped at once, that node would live on.
+/// A run not named yet has started no node: stopping its CLI is its cancel. Returns the groups that had to be killed.
+pub fn stop_for_quit(p: Option<&Pipeline>, named: Option<&str>, control: &RunControl, procs: &Procs,
+                     grace: std::time::Duration) -> Vec<u32> {
+    match named {
+        Some(run) => {
+            let canceled = match p.map(|p| p.one(&["cancel", run], "canceled")) {
+                Some(Ok(_)) => true,
+                // nothing else to do while quitting: said where the app's output goes, as a run left to its nodes
+                Some(Err(e)) => { eprintln!("quitting: could not cancel run {run} ({e}); its nodes may go on"); false }
+                None => { eprintln!("quitting: no pipeline to cancel run {run} with; its nodes may go on"); false }
+            };
+            if let (true, Some(cli)) = (canceled, control.pid()) {
+                procs.wait_for(cli, grace);   // not ended by then (or the cancel failed): stopped with the rest
+            }
+        }
+        None => {
+            if let Cancel::Stop(cli) = control.cancel() {
+                let _ = stop_process(cli);
+            }
+        }
+    }
+    procs.stop_all(grace)
 }
 
 /// What the user agreed may leave this machine: node id -> the kinds of data it sends and where to (what the plan on
@@ -311,6 +351,11 @@ impl RunControl {
             }
             None => Cancel::Nothing,
         }
+    }
+
+    /// The run's CLI process, once it has started.
+    pub fn pid(&self) -> Option<u32> {
+        self.lock().pid
     }
 
     /// The run is over: no process, and no request carried over to the next run.
@@ -821,6 +866,36 @@ printf '{\"v\": 1, \"type\": \"doctor\", \"path\": \"%s\", \"pref\": \"%s\", \"p
         assert!(run.join().unwrap().is_err());
         assert!(stopping.elapsed() < std::time::Duration::from_secs(5), "the run was not stopped: it ran to its end");
         assert!(!alive(child) && !alive(cli));
+    }
+
+    #[test]
+    fn quitting_during_a_named_run_cancels_it_and_lets_its_cli_end_by_itself() {
+        let dir = repo();
+        let canceled = dir.path().join("canceled");
+        // the CLI's run polls for the cancel (as its scheduler does each tick) and ends by itself, `canceled`
+        let uv = executable(dir.path(), "run-uv", &format!(r#"#!/bin/sh
+case "$*" in
+  *"--json cancel"*) touch '{0}'; echo '{{"v": 1, "type": "canceled", "run": "20261026-221500-abcdef"}}' ;;
+  *"--json run"*) echo '{{"v": 1, "type": "run.created", "run": "20261026-221500-abcdef"}}'
+    while [ ! -e '{0}' ]; do sleep 0.05; done
+    echo '{{"v": 1, "type": "run.finished", "run": "20261026-221500-abcdef", "status": "canceled"}}' ;;
+esac
+"#, canceled.display()));
+        let (p, procs) = own_procs(Pipeline::checkout(dir.path(), uv.clone()).unwrap());
+        let control: &'static RunControl = Box::leak(Box::default());
+        control.start();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let run = std::thread::spawn(move || p.run_to_end_with(&["run"], |pid| { control.spawned(pid); }, |o| {
+            if o["type"] == "run.created" { tx.send(()).unwrap() }
+        }));
+        rx.recv().unwrap();   // named
+        let mut cancel = Pipeline::checkout(dir.path(), uv).unwrap();
+        cancel.procs = procs;
+        assert_eq!(stop_for_quit(Some(&cancel), Some("20261026-221500-abcdef"), control, procs, std::time::Duration::from_secs(5)),
+                   Vec::<u32>::new());
+        // it saw the cancel and ended by itself: not stopped before it could stop what it was starting
+        assert_eq!(run.join().unwrap().unwrap(), Some(("20261026-221500-abcdef".to_string(), "canceled".to_string())));
+        assert!(procs.lock().is_empty());
     }
 
     #[test]
