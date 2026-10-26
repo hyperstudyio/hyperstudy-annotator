@@ -1,5 +1,6 @@
 # Signed, notarized macOS DMGs of the annotator, for Apple silicon (Intel later): called by release.yml for a tag. Run by
-# hand, or on a pull request that changes how releases are made, it does all of it without publishing anything.
+# hand (Actions > macOS release > Run workflow), it does all of it without publishing anything. Not run on pull
+# requests: those would sign unreviewed code with the Developer ID, and CI stays on Linux (tests.yml).
 #
 # Secrets: APPLE_CERTIFICATE (the Developer ID Application certificate and key, a base64 .p12),
 # APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY ("Developer ID Application: ..."), and for notarizing an App Store
@@ -7,13 +8,6 @@
 name: macOS release
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/release*.yml
-      - scripts/notarize-dmg.sh
-      - scripts/fetch-uv.sh
-      - src-tauri/tauri.macos.conf.json
-      - src-tauri/entitlements.plist
   workflow_dispatch:
     inputs:
       version:
