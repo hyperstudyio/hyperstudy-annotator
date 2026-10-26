@@ -4,13 +4,24 @@
   // the plan (where each step runs, what is cached, what it costs, each step's details and settings: what it downloads
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline folder with no full graph offers its graphs instead.
+  import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
   import Keys from './Keys.svelte';
   import Machines from './Machines.svelte';
+  import type { RunStatus } from './Rail.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
     settingsFor, spendingCap, totalEstimate, keyRows, keysText, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type Settings, type Ticked } from '../pipeline';
 
-  let { api, onclose, onopen }: { api: PipelineApi; onclose: () => void; onopen: (bundleId: string) => void } = $props();
+  let { api, visible = true, onnew, onopen, onstatus }: {
+    api: PipelineApi;
+    /** the page is on screen (it stays mounted while hidden, so a run goes on) */
+    visible?: boolean;
+    /** start over, after a run has ended */
+    onnew: () => void;
+    onopen: (bundleId: string) => void;
+    /** the run as the rail shows it: how far along, then how it ended (null: none started) */
+    onstatus?: (run: RunStatus | null) => void;
+  } = $props();
 
   let folder = $state<string | null>(null);
   let doctor = $state<Doctor | null>(null);
@@ -88,9 +99,24 @@
     if (n.estimate_s == null) return r.to === null ? null : 0;
     return Math.min(((r.to ?? now) - r.from) / 1000 / n.estimate_s, r.to === null ? 0.95 : 1);
   }
-  let first = $state<HTMLButtonElement>();
-  $effect(() => { first?.focus(); });   // the dialog takes the keyboard (the library behind it is inert)
-  function onkeydown(e: KeyboardEvent) { if (e.key === 'Escape' && !(started && !done)) onclose(); }
+  $effect(() => {
+    const states = Object.values(view.nodes).map((n) => n.state);
+    onstatus?.(!started ? null : { state: view.imported ? 'imported' : done ? 'failed' : 'running',
+      fraction: states.length ? states.filter((x) => x === 'succeeded' || x === 'cached').length / states.length : 0 });
+  });
+  // Back on this page after Settings, where keys and machines may have changed: what the steps are offered changes with
+  // them, so load them again and plan again (keeping the choices). The first showing has just loaded them.
+  let shown = false;
+  $effect(() => {
+    if (!visible) return;
+    if (!shown) { shown = true; return; }
+    untrack(() => { revisit(); });
+  });
+  const revisit = async () => {
+    const [h, c] = await Promise.allSettled([api.hosts(), api.cloud()]);
+    await loadKeys();
+    await machinesChanged({ hosts: h.status === 'fulfilled' ? h.value : undefined, cloud: c.status === 'fulfilled' ? c.value : undefined });
+  };
 
   async function step(label: string, f: () => Promise<void>) {
     busy = label; error = null;
@@ -242,12 +268,11 @@
   };
 </script>
 
-<svelte:window {onkeydown} />
-<div class="backdrop"></div>
-<div class="dialog" role="dialog" aria-modal="true" aria-label="Run the pipeline">
+<section class="extract" aria-label="Extract">
   <header>
     <div class="title">
-      <h2>Run the pipeline</h2>
+      <h1 class="page-title">Extract</h1>
+      <p class="page-lead">Run the perception pipeline on a video. The bundle it makes opens in the Annotator.</p>
       {#if folder}
         <p class="pipeline">
           <span title={folder}>{name(folder)}</span>{#if doctor}, {doctor.nodes.filter((n) => n.where).length} of {doctor.nodes.length} nodes can run on this {doctor.platform.startsWith('darwin') ? 'Mac' : 'machine'} ({doctor.accelerators.map((a) => placeName(`native:${a}`)).join(', ')}){/if}
@@ -255,7 +280,6 @@
         </p>
       {/if}
     </div>
-    <button bind:this={first} class="close" onclick={onclose} disabled={started && !done}>Close</button>
   </header>
 
   {#if !folder}
@@ -404,8 +428,9 @@
       {#if view.imported}<p>Imported into the library.</p>
       {:else if started && !done && view.status === 'succeeded'}<p class="muted">Importing into the library…</p>{/if}
     </div>
+    {#if done}<button onclick={onnew}>New run</button>{/if}
     {#if view.imported}
-      <button class="primary" onclick={() => onopen(view.imported!.id)}>Open</button>
+      <button class="primary" onclick={() => onopen(view.imported!.id)}>Open in Annotator</button>
     {:else if started && !done && view.status === 'succeeded'}
       <!-- nothing left to cancel -->
     {:else if started && !done}
@@ -414,20 +439,16 @@
       <button class="primary" onclick={run} disabled={!canRun}>Start run</button>
     {/if}
   </footer>
-</div>
+</section>
 
 <style>
-  .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 44; }
-  .dialog { position: fixed; top: 6vh; left: 50%; transform: translateX(-50%); width: min(780px, calc(100vw - 32px)); max-height: 88vh; overflow: auto;
-            z-index: 45; background: var(--color-bg-elevated); border: 1px solid var(--color-border-strong); border-radius: 10px;
-            box-shadow: 0 24px 64px rgba(0, 0, 0, .5); display: flex; flex-direction: column; }
-  header { display: flex; align-items: flex-start; gap: 16px; padding: 18px 20px 14px; }
+  /* a page column: the plan a panel in it, the footer (Start run, the run's status) held at the window's foot */
+  .extract { max-width: 920px; min-height: 100%; display: flex; flex-direction: column; }
+  header { display: flex; align-items: flex-start; gap: 16px; padding: 28px 20px 16px; }
   .title { flex: 1; min-width: 0; }
-  h2 { font-size: 17px; font-weight: 600; margin: 0; }
-  .pipeline { margin: 3px 0 0; font-size: 12px; color: var(--color-text-muted); }
+  .pipeline { margin: 6px 0 0; font-size: 12px; color: var(--color-text-muted); }
   .pipeline span { color: var(--color-text-secondary); }
   .pipeline .link { font-size: 12px; margin-left: 6px; }
-  .close { flex: none; }
   p { margin: 0; }
 
   .empty { padding: 28px 20px 32px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; color: var(--color-text-secondary); max-width: 60ch; }
@@ -446,7 +467,7 @@
   .segment:has(input:focus-visible) { outline: 2px solid var(--color-info); outline-offset: 1px; }
 
   /* the plan: one row per step, its bar on a shared clock (when it starts after what it needs, how long it takes) */
-  .plan { background: var(--color-bg-surface); border-top: 1px solid var(--color-border-default); border-bottom: 1px solid var(--color-border-default); padding: 16px 20px 18px; }
+  .plan { background: var(--color-bg-surface); border: 1px solid var(--color-border-default); border-radius: 10px; margin: 0 20px 20px; padding: 16px 20px 18px; }
   h3 { font-size: 15px; font-weight: 600; margin: 0; font-variant-numeric: tabular-nums; }
   .plan > .muted { font-size: 12px; margin-top: 2px; }
   .steps { list-style: none; margin: 14px 0 0; padding: 0; }
@@ -485,7 +506,9 @@
   @media (prefers-reduced-motion: reduce) { .bar { transition: none; } .bar.busy { animation: none; } }
 
 
-  footer { display: flex; align-items: center; gap: 16px; padding: 14px 20px 18px; }
+  footer { display: flex; align-items: center; gap: 12px; padding: 14px 20px 18px; margin-top: auto; position: sticky; bottom: 0;
+           background: var(--color-bg-base); }
+  footer:has(button, p) { border-top: 1px solid var(--color-border-default); }   /* no rule under an empty page */
   .status { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 0; }
   footer button { flex: none; padding: 6px 16px; }
 

@@ -1,12 +1,12 @@
-// The Run pipeline dialog, against browser mode's scripted stand-in (?pipeline-demo): Tauri is absent here, and the
+// The Extract page (run the pipeline), and the rail that reaches it, against browser mode's scripted stand-in (?pipeline-demo): Tauri is absent here, and the
 // real path is tested in Rust against the real CLI.
 import { expect, test, type Page } from '@playwright/test';
 
-/** The dialog with a pipeline folder and a video chosen, and its plan on screen: the full graph's features, or (a
+/** The Extract page with a pipeline folder and a video chosen, and its plan on screen: the full graph's features, or (a
  *  pipeline folder with no full graph) mvp-captions.yaml. */
 async function planned(page: Page, url: string) {
   await page.goto(url);
-  const dialog = page.getByRole('dialog', { name: 'Run the pipeline' });
+  const dialog = page.getByRole('region', { name: 'Extract' });
   await dialog.getByRole('button', { name: 'Choose…' }).click();             // the pipeline folder
   await dialog.getByRole('button', { name: 'Choose…' }).click();             // the video
   if (await dialog.getByRole('radio').count()) await dialog.getByRole('radio').nth(1).check();
@@ -42,20 +42,45 @@ test('on a Mac a step runs on the Apple GPU with no CPU to choose instead', asyn
   await expect(dialog.getByRole('combobox', { name: /^Where / })).toHaveCount(0);
 });
 
-test('a run the app refuses to start leaves the dialog usable, with the reason', async ({ page }) => {
+test('a run the app refuses to start leaves the page usable, with the reason', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=reject-run');
   await dialog.getByRole('button', { name: 'Start run' }).click();
   await expect(dialog.getByText('a pipeline run is already in progress')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
 });
 
-test('the dialog takes the keyboard, and Escape closes it when no run is going', async ({ page }) => {
-  await page.goto('/?pipeline-demo');
-  const dialog = page.getByRole('dialog', { name: 'Run the pipeline' });
-  await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
-  await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
+test('the rail opens each page, and a run goes on while another page is on screen', async ({ page }) => {
+  const extract = await planned(page, '/?pipeline-demo');
+  const rail = page.getByRole('navigation', { name: 'App' });
+  await expect(rail.getByRole('button', { name: 'Extract' })).toHaveAttribute('aria-current', 'page');
+  await extract.getByRole('button', { name: 'Start run' }).click();
+  await rail.getByRole('button', { name: 'Settings' }).click();
+  await expect(extract).toBeHidden();
+  const settings = page.getByRole('region', { name: 'Settings' });
+  await expect(settings.getByRole('heading', { name: 'API keys' })).toBeVisible();
+  await expect(settings.getByRole('heading', { name: 'Lab servers' })).toBeVisible();
+  await rail.getByRole('button', { name: 'Annotator' }).click();
+  await expect(page.getByRole('heading', { name: 'Annotator' })).toBeVisible();
+  await rail.getByRole('button', { name: 'Extract' }).click();
+  await expect(extract.getByRole('heading', { name: /^Finished all/ })).toBeVisible();   // it ran while hidden
+  await expect(extract.getByRole('button', { name: 'Open in Annotator' })).toBeVisible();
+  await extract.getByRole('button', { name: 'New run' }).click();
+  await expect(extract.getByText('None chosen')).toBeVisible();
+});
+
+test('a lab server added in Settings is offered on Extract when you go back to it', async ({ page }) => {
+  const extract = await planned(page, '/?pipeline-demo');
+  const rail = page.getByRole('navigation', { name: 'App' });
+  await expect(extract.getByText('This Mac', { exact: true })).toBeVisible();
+  await rail.getByRole('button', { name: 'Settings' }).click();
+  const settings = page.getByRole('region', { name: 'Settings' });
+  const add = settings.getByRole('form', { name: 'Add a lab server' });
+  await add.getByLabel('Name').fill('gpu9');
+  await add.getByLabel('SSH destination').fill('you@gpu9.example.edu');
+  await add.getByRole('button', { name: 'Add' }).click();
+  await expect(settings.getByRole('listitem', { name: 'gpu9' })).toBeVisible();
+  await rail.getByRole('button', { name: 'Extract' }).click();
+  await expect(extract.getByText('This Mac, gpu9 (SSH)')).toBeVisible();
 });
 
 test('a feature that would bring along a step that sends data off waits until that step is turned on', async ({ page }) => {
@@ -82,7 +107,7 @@ test('a run can be stopped before the pipeline has named it (a slow first enviro
   await dialog.getByRole('button', { name: 'Start run' }).click();
   await dialog.getByRole('button', { name: 'Cancel run' }).click();          // no run id yet
   await expect(dialog.getByText(/ended without finishing the run/)).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: 'New run' })).toBeEnabled();
 });
 
 test('another video takes back the features turned on: sending one video\'s data is not the choice to send the next\'s', async ({ page }) => {

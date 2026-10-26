@@ -1,22 +1,19 @@
 <script lang="ts">
   // Imported bundles. Import a bundle folder (checked against its manifest's checksums and copied into the app),
-  // locate its video (checked by sha256; bundles never contain video), and open it.
+  // locate its video (checked by sha256; bundles never contain video), and open it. Listed again each time the page is
+  // shown: a run on Extract imports its bundle here.
   import { open } from '@tauri-apps/plugin-dialog';
   import { api } from '../source';
-  import { tauriPipeline, type PipelineApi } from '../pipeline';
-  import PipelineDialog from './PipelineDialog.svelte';
   import type { BundleSummary, LicenceMode } from '../types';
 
-  let { onopen }: { onopen: (id: string) => void } = $props();
+  let { onopen, onextract, active = true }: { onopen: (id: string) => void; onextract: () => void; active?: boolean } = $props();
 
   let bundles = $state<BundleSummary[]>([]);
   let busy = $state<string | null>(null);
   let error = $state<string | null>(null);
-  let pipeline = $state<PipelineApi | null>(null);   // the Run pipeline dialog, while open
-  const openPipeline = async () => { pipeline = await tauriPipeline(); };
 
   async function refresh() { bundles = await api.list(); }
-  $effect(() => { refresh().catch((e) => (error = String(e))); });
+  $effect(() => { if (active) refresh().catch((e) => (error = String(e))); });
 
   async function run(label: string, f: () => Promise<unknown>) {
     busy = label; error = null;
@@ -37,14 +34,13 @@
   const strictest = (b: BundleSummary) => Object.values(b.layers).reduce((a, m) => (ORDER.indexOf(m) > ORDER.indexOf(a) ? m : a), 'commercial-ok' as LicenceMode);
 </script>
 
-{#if pipeline}
-  <PipelineDialog api={pipeline} onclose={() => { pipeline = null; refresh(); }} onopen={(id) => { pipeline = null; onopen(id); }} />
-{/if}
-<div class="library" inert={!!pipeline}>
+<div class="library">
   <header>
-    <h1>HyperStudy Annotator</h1>
-    <span class="spacer"></span>
-    <button onclick={openPipeline} disabled={!!busy}>Run pipeline…</button>
+    <div class="title">
+      <h1 class="page-title">Annotator</h1>
+      <p class="page-lead">Open a bundle to review and correct what the pipeline found.</p>
+    </div>
+    <button onclick={onextract} disabled={!!busy}>Extract from a video…</button>
     <button class="primary" onclick={importBundle} disabled={!!busy}>Import bundle…</button>
   </header>
   {#if busy}<p class="muted status">{busy}</p>{/if}
@@ -52,8 +48,9 @@
 
   {#if !bundles.length && !busy}
     <div class="empty">
-      <p>No bundles yet.</p>
+      <p>No bundles yet. Extract one from a video, or import a bundle folder.</p>
       <p class="muted">A bundle is a folder with a <code>manifest.json</code>, made by the hyperstudy-perception pipeline. Importing copies it into the app; the video stays where it is.</p>
+      <button class="primary" onclick={onextract}>Extract from a video…</button>
     </div>
   {:else}
     <ul>
@@ -75,10 +72,9 @@
 </div>
 
 <style>
-  .library { max-width: 980px; margin: 0 auto; padding: 0 20px 40px; }
-  header { display: flex; align-items: center; padding: 18px 0; }
-  h1 { font-size: 18px; margin: 0; }
-  .spacer { flex: 1; }
+  .library { max-width: 980px; padding: 0 20px 40px; }
+  header { display: flex; align-items: flex-end; gap: 8px; padding: 28px 0 20px; }
+  .title { flex: 1; min-width: 0; }
   .status { margin: 0 0 12px; }
   ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
   li { border: 1px solid var(--color-border-default); border-radius: 8px; padding: 12px 14px; background: var(--color-bg-surface);
@@ -88,6 +84,8 @@
   .actions { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 8px; align-items: center; }
   .licence.academic-only { color: var(--color-caution); }
   .licence.commercial-ok { color: var(--color-primary); }
-  .empty { border: 1px dashed var(--color-border-strong); border-radius: 8px; padding: 24px; text-align: center; }
+  .empty { border: 1px dashed var(--color-border-strong); border-radius: 8px; padding: 24px; text-align: center; display: grid; justify-items: center; gap: 4px; }
+  .empty p { margin: 0; }
+  .empty button { margin-top: 10px; }
   code { font-size: 12px; }
 </style>
