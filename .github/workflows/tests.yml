@@ -61,10 +61,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # usually about 30 s; a stall fails here, its log saying where (ci-apt.sh), not at the job's 30 minutes
+      # The packages apt downloads (77 MB), kept between runs: the Ubuntu mirror's speed varies by the run (10.7 MB/s,
+      # or 451 kB/s), so a run downloads only what changed since (ci-apt.sh). apt checks each kept package against the
+      # signed lists it fetches, so one that differs is downloaded again. Keyed on the runner image, which changes weekly.
+      - uses: actions/cache@v4
+        with:
+          path: ~/apt-archives/*.deb
+          key: apt-tauri-libs-${{ env.ImageOS }}-${{ env.ImageVersion }}
+          restore-keys: apt-tauri-libs-${{ env.ImageOS }}-
+      # about 40 s with the packages kept, a few minutes without on a slow mirror; a stall fails here, its log saying
+      # where (ci-apt.sh), not at the job's 30 minutes
       - name: Tauri's Linux libraries
         timeout-minutes: 5
-        run: bash scripts/ci-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        run: APT_ARCHIVES="$HOME/apt-archives" bash scripts/ci-apt.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       # tauri-build checks bundle.externalBin, so the bundled uv must be there before anything compiles (and this
       # checks the sha256 pinned for x86_64-unknown-linux-gnu)
       - run: bash scripts/fetch-uv.sh
