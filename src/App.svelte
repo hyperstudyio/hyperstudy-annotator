@@ -41,18 +41,23 @@
   // the pipeline being set up (first launch, or a new version: its packages and model weights) is, like a run, something
   // a relaunch would stop: listening first, then its status now, so no change is missed
   let setupBusy = $state(false);
+  // the setup status could not be read: said beside Relaunch now, which stays offered (a broken status must not strand
+  // an installed update); the next setup event clears it
+  let setupUnknown = $state<string | null>(null);
   $effect(() => {
     const p = pipeline;
     if (!p) return;
     let off: (() => void) | null = null, gone = false, heard = false;
     const busy = (s: SetupStatus) => s.state === 'installing' || s.state === 'running';
-    p.onSetup((s) => { heard = true; setupBusy = busy(s); })
+    p.onSetup((s) => { heard = true; setupBusy = busy(s); setupUnknown = null; })
       .then((f) => { if (gone) f(); else off = f; return p.setupStatus(); })
-      .then((s) => { if (!gone && !heard) setupBusy = busy(s); }).catch(() => {});
+      .then((s) => { if (!gone && !heard) setupBusy = busy(s); })
+      .catch((e) => { if (!gone && !heard) setupUnknown = String(e); });
     return () => { gone = true; off?.(); };
   });
   const holdRelaunch = $derived(run?.state === 'running' ? 'A run is going on Extract, and a relaunch would stop it. Relaunch once it ends.'
     : setupBusy ? 'The pipeline is being set up (its packages and model weights), and a relaunch would stop that. Relaunch once it is done.' : null);
+  const relaunchCaution = $derived(setupUnknown && `Could not tell whether the pipeline is being set up (${setupUnknown}): a relaunch would stop it if it is.`);
   const startUpdates = (u: Updates) => { updates = u; u.check({ quiet: true }); };
   if (desktop) {
     tauriUpdater().then((api) => startUpdates(new Updates(api))).catch(() => {});
@@ -111,7 +116,7 @@
 
     {#if shown.has('settings')}
       <div class="page" class:on={page === 'settings'}>
-        <Settings api={pipeline} {updates} active={page === 'settings'} {holdRelaunch} {showUpdates} onshown={() => (showUpdates = false)} />
+        <Settings api={pipeline} {updates} active={page === 'settings'} {holdRelaunch} {relaunchCaution} {showUpdates} onshown={() => (showUpdates = false)} />
       </div>
     {/if}
   </main>

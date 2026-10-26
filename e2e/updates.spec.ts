@@ -69,3 +69,22 @@ test('the relaunch waits while a run is going on Extract', async ({ page }) => {
   await rail(page).getByRole('button', { name: 'Relaunch' }).click();
   await expect(updates.getByRole('button', { name: 'Relaunch now' })).toBeEnabled();
 });
+
+// The pipeline's setup (first launch, or a new version: packages and model weights, GBs) is, like a run, something a
+// relaunch would stop, on any page. The page's clock is held, so the stand-in's setup (1.5 s) lasts until the test
+// moves time on.
+test('the relaunch waits while the pipeline is being set up, then is offered', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('/?pipeline-demo=setup-running&update-demo=available');
+  await page.clock.runFor(500);                                               // the launch check
+  await rail(page).getByRole('button', { name: 'Update' }).click();
+  const updates = updatesIn(page);
+  await updates.getByRole('button', { name: 'Install update' }).click();
+  await page.clock.runFor(800);                                               // the download; 1.3 s in, setup still going
+  await expect(updates.getByText('Version 0.0.2 is installed.')).toBeVisible();
+  await expect(updates.getByRole('button', { name: 'Relaunch now' })).toBeDisabled();
+  await expect(updates.getByText(/^The pipeline is being set up .* Relaunch once it is done\.$/)).toBeVisible();
+  await page.clock.runFor(1000);                                              // past the setup's 1.5 s
+  await expect(updates.getByRole('button', { name: 'Relaunch now' })).toBeEnabled();
+  await expect(updates.getByText(/being set up/)).toHaveCount(0);
+});
