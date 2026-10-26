@@ -930,20 +930,15 @@ esac
 
     #[test]
     fn a_command_started_once_quitting_has_begun_is_stopped_too() {
-        // as start_setup does: an upgrade stopped while a version is installed goes on to `doctor`
+        // as start_setup does: an upgrade stopped while a version is installed goes on to `doctor`. That second command
+        // starts only once stop_all has returned, so only Procs being closed can stop it.
         let dir = repo();
-        let second = dir.path().join("second.child");
-        let uv = executable(dir.path(), "two-step-uv", &format!(r#"#!/bin/sh
-case "$*" in
-  *"--json upgrade"*) sleep 30 ;;
-  *"--json doctor"*) sleep 30 &
-    echo $! > '{}'
-    wait ;;
-esac
-"#, second.display()));
+        let uv = executable(dir.path(), "two-step-uv", "#!/bin/sh\ncase \"$*\" in\n  *\"--json upgrade\"*) sleep 30 ;;\n  *\"--json doctor\"*) sleep 37 & wait ;;\nesac\n");
         let (p, procs) = own_procs(Pipeline::checkout(dir.path(), uv).unwrap());
+        let (go, wait_go) = std::sync::mpsc::channel::<()>();
         let thread = std::thread::spawn(move || {
             let _ = p.call(&["upgrade"]);   // stopped: carries on regardless
+            wait_go.recv().unwrap();
             p.call(&["doctor"])
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -951,14 +946,14 @@ esac
             assert!(std::time::Instant::now() < deadline, "the first command never started");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let stopping = std::time::Instant::now();
         assert_eq!(procs.stop_all(std::time::Duration::from_secs(5)), Vec::<u32>::new());
+        assert!(procs.lock().live.is_empty() && procs.lock().closed);
+        let started = std::time::Instant::now();
+        go.send(()).unwrap();
         assert!(thread.join().unwrap().is_err(), "the second command ran to its end");
-        assert!(stopping.elapsed() < std::time::Duration::from_secs(5), "the second command was not stopped: it ran to its end");
-        if let Some(child) = fs::read_to_string(&second).ok().and_then(|t| t.trim().parse().ok()) {
-            assert!(!alive(child), "what the second command started outlived the quit");
-        }
-        assert!(procs.lock().live.is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "the second command was not stopped: it ran to its end");
+        let left = Command::new("pgrep").args(["-f", "sleep 37"]).stdout(Stdio::null()).status().unwrap().success();
+        assert!(!left, "what the second command started outlived the quit");
     }
 
     #[test]
