@@ -58,7 +58,16 @@ jobs:
     uses: ./.github/workflows/release-macos.yml
     with:
       version: ${{ needs.draft.outputs.version }}
-      # no secrets passed: the macOS build reads them from the `release` environment, which only v*.*.* tags may use
+    # Named here, they live only in the `release` environment (v*.*.* tags only): a called workflow gets an
+    # environment's secret only if its caller passes it by name, else it is an empty string. The build job's
+    # `environment: release` is what gives them values.
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
   linux:
     needs: draft

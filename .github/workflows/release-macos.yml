@@ -15,6 +15,13 @@ on:
         description: 'The release (its tag, e.g. v0.0.1) the DMGs are attached to'
         required: true
         type: string
+    secrets:   # passed by name by release.yml; the values come from the `release` environment (build job)
+      APPLE_CERTIFICATE: {required: true}
+      APPLE_CERTIFICATE_PASSWORD: {required: true}
+      APPLE_SIGNING_IDENTITY: {required: true}
+      APPLE_API_KEY: {required: true}
+      APPLE_API_KEY_ID: {required: true}
+      APPLE_API_ISSUER: {required: true}
 
 permissions:
   contents: read

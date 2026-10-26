@@ -13,5 +13,5 @@ export default defineConfig({
   },
   envPrefix: ['VITE_', 'TAURI_ENV_'],
   build: { target: 'safari16', sourcemap: !!process.env.TAURI_ENV_DEBUG },
-  test: { include: ['src/**/*.test.ts'] },
+  test: { include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'] },
 });
