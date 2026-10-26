@@ -9,10 +9,12 @@
   import type { Updates } from '../updates.svelte';
   import { placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type PipelineApi } from '../pipeline';
 
-  let { api, updates = null, active = true, running = false, showUpdates = false, onshown }: {
+  let { api, updates = null, active = true, holdRelaunch = null, relaunchCaution = null, showUpdates = false, onshown }: {
     api: PipelineApi | null; updates?: Updates | null; active?: boolean;
-    /** a pipeline run is going: a relaunch now would stop it */
-    running?: boolean;
+    /** why the relaunch waits (a run going, or the pipeline being set up, which it would stop), or null */
+    holdRelaunch?: string | null;
+    /** what a relaunch might stop that could not be checked: said, without holding it */
+    relaunchCaution?: string | null;
     /** bring the updates into view (the rail's Update item); `onshown` once they are */
     showUpdates?: boolean; onshown?: () => void;
   } = $props();
@@ -124,8 +126,8 @@
           </div>
         {:else}
           <p><strong>Version {u.version} is installed.</strong> Relaunch to finish: your corrections are saved as you make them.</p>
-          <div class="row"><button class="primary" onclick={() => updates.relaunch()} disabled={running}>Relaunch now</button>
-            {#if running}<span class="muted">A run is going on Extract, and a relaunch would stop it. Relaunch once it ends.</span>{/if}</div>
+          <div class="row"><button class="primary" onclick={() => updates.relaunch()} disabled={!!holdRelaunch}>Relaunch now</button>
+            {#if holdRelaunch}<span class="muted">{holdRelaunch}</span>{:else if relaunchCaution}<span class="caution">{relaunchCaution}</span>{/if}</div>
         {/if}
       </div>
     {:else}
@@ -152,6 +154,7 @@
   .cannot { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }
   .cannot li { display: flex; gap: 10px; flex-wrap: wrap; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .caution { color: var(--color-caution); }
   .update { border-color: var(--color-primary); background: var(--color-primary-light); }
   .notes { white-space: pre-line; color: var(--color-text-secondary); max-height: 10em; overflow: auto; }
   .track { position: relative; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .08); overflow: hidden; }
