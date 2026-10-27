@@ -8,10 +8,10 @@
   // opens Extract (and Settings) against a scripted stand-in for the pipeline, and ?update-demo=<available|current|
   // offline|bad-download> the app's updates against one for the releases (updates.fake.ts).
   import Rail, { type Page, type RunStatus, type UpdateBadge } from './lib/components/Rail.svelte';
-  import Library from './lib/components/Library.svelte';
+  import Annotator from './lib/components/Annotator.svelte';
   import Viewer from './lib/components/Viewer.svelte';
   import Settings, { type SettingsSection } from './lib/components/Settings.svelte';
-  import { httpSource, inTauri, tauriSource, type BundleSource } from './lib/source';
+  import { httpSource, inTauri, type BundleSource } from './lib/source';
   import PipelineDialog from './lib/components/PipelineDialog.svelte';
   import { tauriPipeline, type PipelineApi, type SetupStatus } from './lib/pipeline';
   import { tauriUpdater, Updates } from './lib/updates.svelte';
@@ -73,8 +73,8 @@
   }
 
   if (desktop) { tauriPipeline().then((p) => (pipeline = p)).catch((e) => (error = String(e))); library = tauriLibrary(); }
-  else if (q.has('library-demo')) import('./lib/library.fake').then((m) => (library = m.fakeLibrary(q.get('library-demo') === 'empty')));
   else {
+    if (q.has('library-demo')) import('./lib/library.fake').then((m) => (library = m.fakeLibrary(q.get('library-demo') === 'empty')));
     const bundle = q.get('bundle');
     if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (pipeline = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary', remote: q.get('pipeline-demo') === 'remote', machinesError: q.get('pipeline-demo') === 'machines-error', noCloud: q.get('pipeline-demo') === 'no-cloud', keysError: q.get('pipeline-demo') === 'keys-error', missingKey: q.get('pipeline-demo') === 'missing-key',
       setup: q.get('pipeline-demo') === 'setup-running' ? 'running' : q.get('pipeline-demo') === 'setup-failed' ? 'failed' : q.get('pipeline-demo') === 'installing' ? 'installing' : q.get('pipeline-demo') === 'install-failed' ? 'install-failed' : 'done' },
@@ -91,11 +91,13 @@
     e.preventDefault();
   }
 
-  async function openBundle(id: string) {
+  // Extract's Open in Annotator: the Annotator page opens that bundle
+  let openRequest = $state<string | null>(null);
+  function openBundle(id: string) {
     error = null;
     page = 'annotator';
-    if (!desktop) { error = `would open ${id}`; return; }   // browser mode has no library to open from
-    try { source = await tauriSource(id); } catch (e) { error = String(e); }
+    if (library) openRequest = id;
+    else error = `would open ${id}`;   // browser mode without ?library-demo has no library to open from
   }
 </script>
 
@@ -116,17 +118,17 @@
       </div>
     {/if}
 
-    <div class="page" class:on={page === 'annotator'} class:holds-viewer={!!source}>
-      {#if source}
-        <Viewer {source} active={page === 'annotator'} onmodal={(m) => (modal = m)} onback={desktop ? () => (source = null) : undefined} />
-      {:else if library}
-        {#if error}<p class="error note">{error}</p>{/if}
-        <Library {library} onopen={openBundle} onextract={() => (page = 'extract')} active={page === 'annotator'} />
+    <div class="page" class:on={page === 'annotator'} class:holds-viewer={!!source || !!library}>
+      {#if library}
+        <Annotator {library} active={page === 'annotator'} request={openRequest} onrequested={() => (openRequest = null)}
+          onextract={() => (page = 'extract')} onmodal={(m) => (modal = m)} />
+      {:else if source}
+        <Viewer {source} active={page === 'annotator'} onmodal={(m) => (modal = m)} />
       {:else}
         <div class="browser">
           <h1 class="page-title">Annotator</h1>
           {#if error}<p class="error">{error}</p>{/if}
-          <p class="muted">Open a bundle with <code>?bundle=&lt;bundle folder URL&gt;&amp;video=&lt;video URL&gt;</code>. The desktop app imports bundles from disk instead; add <code>?library-demo</code> to try its library against a stand-in.</p>
+          <p class="muted">Open a bundle with <code>?bundle=&lt;bundle folder URL&gt;&amp;video=&lt;video URL&gt;</code>, or add <code>?library-demo</code> to try the library against a stand-in. The desktop app imports bundles from disk.</p>
         </div>
       {/if}
     </div>

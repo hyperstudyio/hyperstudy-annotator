@@ -9,7 +9,7 @@
   import type { RunStatus } from './Rail.svelte';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    settingsFor, spendingCap, totalEstimate, keyRows, keysText, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
+    settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -46,6 +46,9 @@
   let video = $state<string | null>(null);
   let plan = $state<Plan | null>(null);
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
+  // where the steps run, chosen once for the run: this computer, a remote server (ssh-<name>) or the cloud GPU. Each
+  // step that can run there is placed there; a step's own menu (in its details) can still move it.
+  let runtime = $state('native');
   let wanted = $state<Set<string> | null>(null);   // the features on (null: the first plan's defaults)
   let ticked = $state<Ticked>({});   // the ones the user turned on themselves, with what they sent then: all they may send
   let settings = $state<Settings>({});   // settings the user chose: node -> key -> value
@@ -180,7 +183,6 @@
     keysError = [k.status === 'rejected' ? `the keychain: ${k.reason}` : null,
                  c.status === 'rejected' && !olderCli ? `the pipeline's keys: ${c.reason}` : null].filter(Boolean).join('; ') || null;
   };
-  const keysText_ = $derived(keysText(keyRows(keys, cliKeys)));
   // a key a step is missing, as Settings names it (the pipeline names it by its variable)
   const keyLabel = (k: string) => keys.find((x) => x.name === k)?.label ?? k;
   // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps). A
@@ -201,6 +203,7 @@
       return !!h && before.get(backend) === machineId(h) && h.caps.accelerators.includes(accelerator);
     };
     const gone = Object.entries(places).filter(([, p]) => !offered(p)).map(([n]) => n);
+    if (runtime !== 'native' && !runtimes.some((r) => r.value === runtime && !r.off)) runtime = 'native';
     if (gone.length) {
       places = Object.fromEntries(Object.entries(places).filter(([n]) => !gone.includes(n)));
       ticked = Object.fromEntries(Object.entries(ticked).filter(([n]) => !gone.includes(n)));
@@ -218,6 +221,23 @@
     places = { ...places, [node]: place };
     await makePlan(true);
   };
+  // choosing a runtime is choosing, for each step that can run there, to send it its inputs there (as its own menu is)
+  let runtimeLater = false;   // chosen before there was a plan: applied to the first one
+  const chooseRuntime = async (r: string) => {
+    runtime = r;
+    if (!plan) { runtimeLater = r !== 'native'; return; }
+    const next: Places = {}, agreed: Ticked = {};
+    for (const n of plan.nodes) {
+      const to = r === 'native' ? undefined : n.options?.find((o) => o.split(':')[0] === r);
+      if (!to) continue;
+      next[n.id] = to;
+      const t = placeTick(n, to);
+      if (t) agreed[n.id] = t;
+    }
+    places = next;
+    ticked = { ...ticked, ...agreed };
+    await makePlan(true);
+  };
   const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
@@ -230,7 +250,8 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false; },
+    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
+        if (runtimeLater) { runtimeLater = false; chooseRuntime(runtime); } },
       (e) => { plan = null; error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
@@ -242,8 +263,6 @@
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
 
   const name = (p: string | null) => p?.split('/').pop() ?? '';
-  const pipelineName = $derived(doctor?.pipeline?.commit ? `Pipeline ${doctor.pipeline.version}`
-    : `Pipeline ${doctor?.pipeline?.version ?? ''} from ${name(doctor?.pipeline?.root ?? 'a checkout')}`);
   const stem = (file: string) => file.replace(/\.ya?ml$/, '');
   const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
   const STATE_LABEL = { waiting: 'Waiting', cached: 'Cached', running: 'Running', retrying: 'Retrying', succeeded: 'Done', failed: 'Failed', canceled: 'Canceled' };
@@ -266,11 +285,15 @@
   const titleOf = (id: string) => { const n = plan?.nodes.find((x) => x.id === id); return n ? title(n) : id; };
   const LICENCE: Record<string, string> = { 'academic-only': 'academic use only', 'commercial-ok': 'commercial use allowed', 'needs-review': 'licence under review', 'api-terms': "the API provider's terms" };
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
-  // where steps can run, in one line: this computer, the remote servers, the cloud GPU when it is on
   const here = $derived(doctor?.platform.startsWith('darwin') ? 'this Mac' : 'this machine');
-  const machinesText = $derived(olderPipeline ? `${capital(here)} only (this pipeline cannot run steps elsewhere: update hyperstudy-perception)`
-    : list([capital(here), ...(hosts ?? []).map((h) => h.name), ...(cloud?.enabled ? ['the cloud GPU'] : [])]));
-  const runnable = $derived(doctor ? doctor.nodes.filter((n) => n.where).length : 0);
+  // the runtimes the menu offers: one not set up yet is shown, and greyed out, so it can be found in Settings
+  const runtimes = $derived<{ value: string; label: string; off?: boolean }[]>([
+    { value: 'native', label: capital(here) },
+    ...(hosts?.length ? hosts.map((h) => ({ value: `ssh-${h.name}`, label: `${h.name} (remote server)` }))
+      : [{ value: 'ssh', label: olderPipeline ? 'Remote server (update the pipeline)' : 'Remote server (none set up)', off: true }]),
+    ...(cloud?.enabled ? [{ value: 'cloud', label: `Cloud GPU (${cloud.machine})` }]
+      : [{ value: 'cloud', label: !cloud ? 'Cloud GPU (update the pipeline)' : 'Cloud GPU (off)', off: true }]),
+  ]);
   // what leaves this machine, and where to: the API it calls, or the other machine it runs on (its inputs, whatever they hold)
   const leaves = (n: PlanNode) => {
     const to = dest(n);
@@ -284,64 +307,39 @@
   <header>
     <div class="title">
       <h1 class="page-title">Extract</h1>
-      <p class="page-lead">Run the perception pipeline on a video: it finds the shots, speech and faces. The bundle it makes opens in the Annotator.</p>
-      {#if doctor}
-        <p class="pipeline">
-          <span title={doctor.pipeline?.root}>{pipelineName}</span>. {runnable === doctor.nodes.length ? `All ${runnable}` : `${runnable} of ${doctor.nodes.length}`} steps can run on {here}
-          ({list(doctor.accelerators.map((a) => placeName(`native:${a}`)))}){#if runnable < doctor.nodes.length}: <button class="link" onclick={() => onsettings?.('computer')}>see why the others cannot</button>{/if}.
-        </p>
-      {/if}
     </div>
   </header>
 
   {#if setup?.state === 'installing'}
     <div class="empty">
-      <p>Installing the pipeline. The first time, this fetches the pipeline and the Python it runs on; after that, it
-        only checks for a newer version.</p>
+      <p>Installing the pipeline. The first launch takes a minute or two.</p>
     </div>
   {:else if doctor}
-    {#if !video}
-      <!-- where a run starts: an empty frame, and under it the tracks the pipeline will find in it (the mark's lanes) -->
-      <div class="source">
-        <svg class="frame" viewBox="0 0 240 168" aria-hidden="true">
-          <rect x="1" y="1" width="238" height="134" rx="8" class="screen" />
-          <path d="M108 52v32l28-16z" class="play" />
-          <g stroke-width="5" stroke-linecap="round">
-            <path d="M6 146h58m14 0h86m14 0h56" class="lane l1" />
-            <path d="M6 154h30m12 0h120m12 0h54" class="lane l2" />
-            <path d="M6 162h92m14 0h40m12 0h70" class="lane l3" />
-          </g>
-          <path d="M150 140v26" class="playhead" />
-        </svg>
-        <div class="ask">
-          <h2>Choose a video to start</h2>
-          <p class="muted">Any MP4, MOV or WebM. It stays where it is; the bundle refers to it.</p>
-          <button class="primary" onclick={chooseVideo}>Choose a video…</button>
-        </div>
-      </div>
-    {/if}
-    <div class="setup">
-      {#if video}
+    <!-- what goes in: the video (the frame over the tracks it becomes: the mark's lanes) and where it runs -->
+    <div class="source">
+      <svg class="frame" viewBox="0 0 240 168" aria-hidden="true">
+        <rect x="1" y="1" width="238" height="134" rx="8" class="screen" />
+        <path d="M108 52v32l28-16z" class="play" />
+        <g stroke-width="5" stroke-linecap="round">
+          <path d="M6 146h58m14 0h86m14 0h56" class="lane l1" />
+          <path d="M6 154h30m12 0h120m12 0h54" class="lane l2" />
+          <path d="M6 162h92m14 0h40m12 0h70" class="lane l3" />
+        </g>
+        <path d="M150 140v26" class="playhead" />
+      </svg>
+      <div class="setup">
         <span class="label">Video</span>
         <div class="value">
-          <span class="file" title={video}>{name(video)}</span>
-          <button onclick={chooseVideo} disabled={started}>Change…</button>
+          {#if video}<span class="file" title={video}>{name(video)}</span><button onclick={chooseVideo} disabled={started}>Change…</button>
+          {:else}<button class="primary" onclick={chooseVideo}>Choose a video…</button>{/if}
         </div>
-      {/if}
-      <span class="label">Runs on</span>
-      <div class="value">
-        <span>{machinesText}</span>
-        {#if machinesError}<span class="error">{machinesError}</span>{/if}
-        {#if hosts !== null}<button class="link" onclick={() => onsettings?.('servers')} aria-label="Change where steps can run, in Settings">Change in Settings</button>{/if}
-      </div>
-      {#if keys.length || keysError}
-      <span class="label">Keys</span>
-      <div class="value">
-        <span>{keysText_}</span>
-        {#if keysError}<span class="error">{keysError}</span>{/if}
-        {#if keys.length}<button class="link" onclick={() => onsettings?.('keys')} aria-label="Change the keys, in Settings">Change in Settings</button>{/if}
-      </div>
-      {/if}
+        <label class="label" for="runtime">Runtime</label>
+        <div class="value">
+          <select id="runtime" value={runtime} disabled={started} onchange={(e) => chooseRuntime(e.currentTarget.value)}>
+            {#each runtimes as r (r.value + r.label)}<option value={r.value} disabled={r.off}>{r.label}</option>{/each}
+          </select>
+          {#if hosts !== null}<button class="link" onclick={() => onsettings?.('servers')} aria-label="Set up runtimes, in Settings">Settings</button>{/if}
+        </div>
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
       <div class="value graphs">
@@ -355,6 +353,7 @@
         {#if chosenGraph}<p class="muted">{chosenGraph.description}</p>{/if}
       </div>
       {/if}
+      </div>
     </div>
   {/if}
 
@@ -381,10 +380,6 @@
             <span class="where">
               {#if n.cached}<span class="muted">Already done</span>
               {:else if n.service}<span title={n.place ?? undefined}>{n.service} (cloud)</span>
-              {:else if !started && on && (n.options?.length ?? 0) > 1}
-                <select aria-label={`Where ${n.id} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
-                  {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o, plan.places)}</option>{/each}
-                </select>
               {:else if n.place}<span title={n.place}>{placeName(n.place, plan.places)}</span>
               {:else if n.where}{n.where}   <!-- a CLI from before plans named places -->
               {:else}<span class="error">Cannot run here</span>{/if}
@@ -425,6 +420,10 @@
                     <dd>{#each n.downloads as d (d.id)}<span title={d.source ?? undefined}>{d.id}</span> <span class="muted">({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}, {LICENCE[d.licence_mode] ?? d.licence_mode}{d.gated ? ', gated: needs access granted on Hugging Face' : ''})</span><br />{/each}</dd>{/if}
                   <dt>Leaves this machine</dt><dd>{leaves(n)}</dd>
                   {#if n.service}<dt>Runs on</dt><dd>The {n.service}, in the cloud</dd>
+                  {:else if !started && on && (n.options?.length ?? 0) > 1}<dt><label for={`where-${n.id}`}>Runs on</label></dt>
+                    <dd class="setting"><select id={`where-${n.id}`} aria-label={`Where ${n.id} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
+                      {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o, plan.places)}</option>{/each}
+                    </select></dd>
                   {:else if n.options?.length}<dt>Can run on</dt>
                     <dd>{#each n.options as o (o)}<span title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o, plan.places)}</span><br />{/each}</dd>{/if}
                   {#each n.settings ?? [] as st (st.key)}
@@ -453,6 +452,8 @@
       {#if view.status && view.status !== 'succeeded'}<p class="error">The run {view.status}. The step marked failed says why.</p>{/if}
       {#each why as b (b)}<p class="error">{b[0].toUpperCase() + b.slice(1)}.</p>{/each}
       {#if busy}<p class="muted">{busy}</p>{/if}
+      {#if machinesError && !started}<p class="error">Could not list the remote servers or the cloud GPU: {machinesError}</p>{/if}
+      {#if keysError && !started}<p class="error">Could not read {keysError}</p>{/if}
       {#if configBusy && !started}<p class="muted">Settings: {configBusy} Start run waits for it.</p>{/if}
       {#if setup?.notice}<p class="muted">{setup.notice}.</p>{/if}
       {#if setup?.state === 'running'}
@@ -488,11 +489,11 @@
   p { margin: 0; }
 
 
-  /* where a run starts, before a video is chosen: an empty frame over the tracks it will become (the mark's lanes,
-     in its colours), and the one thing to do */
-  .source { display: flex; align-items: center; gap: 28px; margin: 8px 20px 22px; padding: 26px 28px; border-radius: 12px;
+  /* what goes in: the frame over the tracks a video becomes (the mark's lanes, in its colours), beside the video and
+     where it runs */
+  .source { display: flex; align-items: center; gap: 24px; margin: 4px 20px 20px; padding: 18px 22px; border-radius: 12px;
             background: var(--color-bg-surface); border: 1px solid var(--color-border-default); flex-wrap: wrap; }
-  .frame { width: 240px; max-width: 100%; height: auto; flex: none; }
+  .frame { width: 168px; max-width: 100%; height: auto; flex: none; }
   .screen { fill: #0d0d0d; stroke: var(--color-border-strong); stroke-width: 1.5; }
   .play { fill: var(--color-border-strong); }
   .lane { opacity: .85; }
@@ -500,12 +501,10 @@
   .l2 { stroke: var(--color-info); }
   .l3 { stroke: var(--color-caution); }
   .playhead { stroke: var(--color-text-primary); stroke-width: 1.5; stroke-linecap: round; }
-  .ask { display: grid; gap: 6px; justify-items: start; min-width: 220px; flex: 1; }
-  .ask h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.005em; }
-  .ask button { margin-top: 8px; padding: 6px 16px; }
 
   /* setup: what goes in (a video, a graph), label and value side by side */
-  .setup { display: grid; grid-template-columns: max-content 1fr; gap: 12px 14px; align-items: baseline; padding: 4px 20px 18px; }
+  .setup { flex: 1; min-width: 240px; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 14px 16px; align-items: center; }
+  .setup select { max-width: 100%; }
   .label { color: var(--color-text-muted); }
   .value { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .file { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

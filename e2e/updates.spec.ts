@@ -24,7 +24,7 @@ test('with nothing newer the rail stays as it is, and asking says it is up to da
   await page.goto('/?update-demo=current');
   await rail(page).getByRole('button', { name: 'Settings' }).click();
   const updates = updatesIn(page);
-  await expect(updates.getByText(/^HyperStudy Annotator 0\.0\.1\./)).toBeVisible();
+  await expect(updates.getByText(/^Version 0\.0\.1\./)).toBeVisible();
   await expect(updates.getByText(/^Up to date, as of /)).toBeVisible();                       // the launch check's answer
   await expect(rail(page).getByRole('button', { name: 'Update' })).toHaveCount(0);
   await updates.getByRole('button', { name: 'Check for updates' }).click();

@@ -25,7 +25,7 @@
   {#key attempt}
     <Toggle label={`Use ${cloud.machine}, at $${cloud.hourly_usd.toFixed(2)} an hour`} checked={cloud.enabled} disabled={!!busy} onchange={set} />
   {/key}
-  <p class="muted">Started in your AWS account (through SkyPilot) for a step, and deleted after it. Each step shows the most it can cost before it runs.</p>
+  <p class="muted">Started in your AWS account for each step and deleted after it. Extract shows the most a run can cost.</p>
   <div class="status" aria-live="polite">
     {#if busy}<p class="muted">{busy}</p>{/if}
     {#if error}<p class="error">{error}</p>{/if}

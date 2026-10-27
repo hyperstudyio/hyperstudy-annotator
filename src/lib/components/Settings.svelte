@@ -95,6 +95,7 @@
 
   const PLATFORM: Record<string, string> = { darwin: 'Mac', linux: 'Linux', windows: 'Windows' };
   const ARCH: Record<string, string> = { arm64: 'Apple silicon', aarch64: 'Arm', amd64: 'x86-64', x86_64: 'x86-64' };
+  const pipeline = $derived(doctor?.pipeline?.version ? `Pipeline ${doctor.pipeline.version}` : 'The pipeline');
   const computer = $derived.by(() => {
     if (!doctor) return null;
     const [os, arch] = doctor.platform.split('/');
@@ -108,7 +109,6 @@
 <section class="settings" aria-label="Settings">
   <header>
     <h1 class="page-title">Settings</h1>
-    <p class="page-lead">Where the pipeline's steps can run, and the keys they use. Extract uses what is set here.</p>
   </header>
 
   <div class="tabs" role="tablist" aria-label="Settings" tabindex="-1" onkeydown={arrows}>
@@ -126,16 +126,14 @@
     {#if tab === 'keys' && api}
       <section class="group" aria-labelledby="keys-heading">
         <h2 id="keys-heading" class="sr">API keys</h2>
-        <p class="lead">Steps that call a cloud service, or download a model that needs permission, use these. A key saved here is
-          kept in this computer's keychain and never shown again; each step gets only the keys it needs.</p>
         {#if problems.keys}<p class="error">Could not read the keys: {problems.keys}</p>{/if}
         {#if keys.length}<Keys {api} {keys} {cli} onchange={(now) => (keys = now)} onbusy={busy} />
+          <p class="foot muted">Saved keys stay in this computer's keychain, and each step gets only the keys it needs.</p>
         {:else if loaded && !problems.keys}<p class="muted">This pipeline uses no keys.</p>{/if}
       </section>
     {:else if tab === 'servers' && api}
       <section class="group" aria-labelledby="servers-heading">
         <h2 id="servers-heading" class="sr">Remote servers</h2>
-        <p class="lead">Your own machines, reached over SSH. Heavy steps can run on one instead of this computer: choose where each step runs on Extract.</p>
         {#if problems.servers}<p class="error">Could not list the remote servers: {problems.servers}</p>{/if}
         {#if hosts !== null}<Servers {api} {hosts} onchange={(now) => (hosts = now)} onbusy={busy} />
         {:else if loaded}<p class="muted">This pipeline runs every step on this computer. Update hyperstudy-perception to use other machines.</p>{/if}
@@ -143,7 +141,6 @@
     {:else if tab === 'cloud' && api}
       <section class="group" aria-labelledby="cloud-heading">
         <h2 id="cloud-heading" class="sr">Cloud GPU</h2>
-        <p class="lead">A GPU machine rented for a step, when this computer and your servers cannot run it or would be slow.</p>
         {#if problems.cloud}<p class="error">Could not check the cloud GPU: {problems.cloud}</p>{/if}
         {#if cloud}<Cloud {api} {cloud} onchange={(now) => (cloud = now)} onbusy={busy} />
         {:else if loaded && !problems.cloud}<p class="muted">This pipeline cannot start cloud machines yet. Update hyperstudy-perception to use one.</p>{/if}
@@ -151,7 +148,7 @@
     {:else}
       <section class="group" aria-labelledby="updates-heading" bind:this={updatesSection}>
         <h2 id="updates-heading">Updates</h2>
-        <p class="lead">{updates?.version ? `HyperStudy Annotator ${updates.version}` : 'HyperStudy Annotator'}. <button class="link" onclick={() => openExternal(DOCS_URL)}>Read the documentation</button></p>
+        <p>{updates?.version ? `Version ${updates.version}` : 'HyperStudy Annotator'}. <button class="link" onclick={() => openExternal(DOCS_URL)}>Documentation</button></p>
         {#if !updates || !u}
           <p class="muted">The desktop app updates itself. In a browser, add <code>?update-demo</code> to the address to try it against a stand-in.</p>
         {:else if u.kind === 'available' || u.kind === 'downloading' || u.kind === 'ready'}
@@ -189,13 +186,13 @@
         <section class="group" aria-labelledby="computer-heading" bind:this={computerSection}>
           <h2 id="computer-heading">This computer</h2>
           {#if computer}
-            <p class="lead">{computer.kind}: {computer.specs}.</p>
+            <p>{computer.kind}, {computer.specs}.</p>
+            <p class="muted">{pipeline}: {computer.cannot.length ? `${computer.can} of ${doctor!.nodes.length} steps can run here.` : `all ${doctor!.nodes.length} steps can run here.`}</p>
             {#if computer.cannot.length}
-              <p>{computer.can} of {doctor!.nodes.length} pipeline steps can run here. These cannot:</p>
               <ul class="cannot">
                 {#each computer.cannot as n (n.ref)}<li><span>{n.description || n.ref}</span> <span class="muted">{n.why_not}</span></li>{/each}
               </ul>
-            {:else}<p class="muted">All {doctor!.nodes.length} pipeline steps can run here.</p>{/if}
+            {/if}
           {:else if problems.computer}<p class="error">Could not check this computer: {problems.computer}</p>
           {:else}<p class="muted">Checking…</p>{/if}
         </section>
@@ -220,8 +217,7 @@
   h2 { font-size: 15px; font-weight: 600; margin: 0; }
   /* a tab's own heading says what its tab already says: kept for screen readers, not drawn twice */
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .sr + .lead { margin-top: 0; }
-  .lead { margin: -6px 0 2px; color: var(--color-text-secondary); max-width: 64ch; }
+  .foot { font-size: 12px; }
   p { margin: 0; }
   .panel { padding: 12px 14px; border: 1px solid var(--color-border-default); background: var(--color-bg-surface); border-radius: 8px; display: grid; gap: 8px; }
   .cannot { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }

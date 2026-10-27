@@ -6,6 +6,7 @@
   import { plural } from '../model/session.svelte';
   import type { FoundFile } from '../source';
   import type { LicenceMode } from '../types';
+  import { LICENCE_TEXT } from '../library';
 
   let { onback }: { onback?: () => void } = $props();
   const s = useSession(), source = useSource();
@@ -63,11 +64,11 @@
   {#if onback}<button onclick={onback} title="Back to all bundles">All bundles</button>{/if}
   <h1>{source.title}</h1>
   <span class="sub" title={sources}>{sub}</span>
-  {#if strictest}<span class="licence {strictest}" title="Most restrictive licence mode among this bundle's layers">{strictest}</span>{/if}
+  {#if strictest}<span class="licence {strictest}" title="The most restrictive licence among this bundle's layers">{LICENCE_TEXT[strictest]}</span>{/if}
   <span class="count">{plural(s.ops.length, 'correction')}</span>
   <button disabled={!s.ops.length} onclick={() => s.undo()} title="Undo the last change (Cmd+Z)">Undo</button>
-  <button onclick={importFile} title="Load corrections from a file (made by this app or the annotator prototype); they replace the ones here">Import…</button>
-  <button class="primary" onclick={exportFile} title="Save this bundle's corrections to a file">Export…</button>
+  <button onclick={importFile} title="Load corrections from a file (made by this app or the annotator prototype); they replace the ones here">Import corrections…</button>
+  <button class="primary" onclick={exportFile} title="Save this bundle's corrections to a file">Export corrections…</button>
 </header>
 {#if pending}
   <div class="banner">

@@ -52,21 +52,19 @@
       {/each}
     </ul>
   {:else if !adding}
-    <p class="muted">None yet. A server with an NVIDIA GPU can take the heavy steps, such as face tracks.</p>
+    <p class="muted">None yet. A server with an NVIDIA GPU can run the heavy steps.</p>
   {/if}
 
   {#if adding}
     <form class="add" aria-label="Add a remote server" onsubmit={(e) => { e.preventDefault(); add(); }}>
       <h3>Add a remote server</h3>
       <label for="server-name">Name</label>
-      <div class="field"><input id="server-name" bind:value={name} autocomplete="off" spellcheck="false" required use:focus />
-        <span class="muted">What the step menus on Extract call it.</span></div>
+      <div class="field"><input id="server-name" bind:value={name} placeholder="gpu1" autocomplete="off" spellcheck="false" required use:focus /></div>
       <label for="server-dest">SSH destination</label>
       <div class="field"><input id="server-dest" bind:value={dest} placeholder="user@host" autocomplete="off" spellcheck="false" required />
-        <span class="muted">As you would give it to <code>ssh</code>: a user and host, or a Host in ~/.ssh/config. It is reached with your own SSH keys; nothing asks for a password.</span></div>
+        <span class="muted">As you would give it to <code>ssh</code>. Your SSH keys and ~/.ssh/config are used.</span></div>
       <label for="server-root">Folder on it</label>
-      <div class="field"><input id="server-root" bind:value={root} placeholder=".cache/hyperstudy-perception" autocomplete="off" spellcheck="false" />
-        <span class="muted">Where the pipeline and the videos sent to it are kept. Leave it empty for the one shown.</span></div>
+      <div class="field"><input id="server-root" bind:value={root} placeholder=".cache/hyperstudy-perception" autocomplete="off" spellcheck="false" /></div>
       {#if taken}<p class="hint error">{name.trim()} is already a remote server here: remove it first to add another machine under that name.</p>{/if}
       <div class="buttons">
         <button type="submit" class="primary" disabled={!!busy || !name.trim() || !dest.trim() || taken}>Add server</button>
