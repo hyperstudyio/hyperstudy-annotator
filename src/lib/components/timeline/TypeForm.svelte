@@ -5,7 +5,7 @@
   // use; and it cannot be deleted (Session.usesOf).
   import { useSession, useSource } from '../../model/context';
   import { VALUE_KINDS } from '../../model/session.svelte';
-  import { applyTypeFields, kindChange, newType, type AnnotationType, type TypeFields, type ValueKind } from '../../model/corrections';
+  import { applyTypeFields, newType, type AnnotationType, type TypeFields, type ValueKind } from '../../model/corrections';
   import type { TypesElsewhere } from '../../source';
 
   let { type, close }: { type?: AnnotationType; close: () => void } = $props();
@@ -64,7 +64,7 @@
   </label>
   <label class="field">Value
     <select aria-label="Value kind" value={t.kind} disabled={locked} title={locked ? `${lockedWhy}: it stays as it is` : undefined}
-      onchange={(e) => set(kindChange(e.currentTarget.value as ValueKind))}>
+      onchange={(e) => set({ kind: e.currentTarget.value as ValueKind })}>
       {#each Object.entries(VALUE_KINDS) as [k, v] (k)}<option value={k}>{v}</option>{/each}
     </select>
   </label>

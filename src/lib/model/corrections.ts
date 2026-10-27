@@ -20,12 +20,14 @@ export function newType(draft: AnnotationType, id: string): AnnotationType {
   return { id, name: name.trim(), kind, target, options: kind === 'category' ? [...options] : [],
     ...(kind === 'number' && min !== undefined ? { min } : {}), ...(kind === 'number' && max !== undefined ? { max } : {}) };
 }
-/** The edit that changes a type's kind: what the old kind used (its categories, its range) goes with it. */
-export function kindChange(kind: ValueKind): TypeFields {
-  return { kind, ...(kind === 'category' ? {} : { options: [] }), ...(kind === 'number' ? {} : { min: null, max: null }) };
-}
 export function applyTypeFields(t: AnnotationType, fields: TypeFields) {
   for (const [k, v] of Object.entries(fields)) { if (v === null) delete t[k as 'min' | 'max']; else Object.assign(t, { [k]: v }); }
+}
+/** Only what the type's kind uses: categories for a category, a range for a number. The fold keeps every type so, as
+ *  it is made and after each edit, whatever the ops hold (a kind changed, or a log saved before this rule). */
+function onlyWhatItsKindUses(t: AnnotationType) {
+  if (t.kind !== 'category') t.options = [];
+  if (t.kind !== 'number') { delete t.min; delete t.max; }
 }
 export interface Note { id: string; type: string; start: number; end: number; value: boolean | string | number | null; person: string | null }
 
@@ -107,10 +109,10 @@ export function fold(ops: Op[]): Corrected {
       case 'entity.include': S.included[op.id] = op.included; break;
       case 'category.include': S.category[`${op.kind}:${op.label}`] = op.included; break;
       // a copy, so a later edit does not change the op; v1 imports stored types without options
-      case 'annotation.type': S.types.push({ ...op.type, options: op.type.options ?? [] }); break;
+      case 'annotation.type': { const t = { ...op.type, options: op.type.options ?? [] }; onlyWhatItsKindUses(t); S.types.push(t); break; }
       case 'annotation.type_edit': {
         const t = S.types.find((x) => x.id === op.id);
-        if (t) applyTypeFields(t, op.fields);
+        if (t) { applyTypeFields(t, op.fields); onlyWhatItsKindUses(t); }
         break;
       }
       case 'annotation.type_delete': S.types = S.types.filter((x) => x.id !== op.id); break;

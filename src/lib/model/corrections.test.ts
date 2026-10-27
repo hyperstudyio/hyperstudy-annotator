@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, kindChange, lastBatch, newType, readCorrectionsFile, typesIn, unknownRefs, type AnnotationType, type Op } from './corrections';
+import { FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, newType, readCorrectionsFile, typesIn, unknownRefs, type AnnotationType, type Op } from './corrections';
 
 const SHA = 'a'.repeat(64);
 
@@ -139,13 +139,15 @@ test('a new type keeps only what its kind uses: categories for a category, a ran
   expect(newType({ ...draft, kind: 'category' }, 'type:3').options).toEqual(['a', 'b']);
 });
 
-test("changing a type's kind drops what the old kind used, through the log", () => {
+test("a type keeps only what its kind uses, whatever its ops say: a kind changed, or a log saved before this rule", () => {
   const n: AnnotationType = { id: 'type:1', name: 'x', kind: 'number', target: 'scene', options: [], min: 0, max: 5 };
-  const c: AnnotationType = { ...n, id: 'type:2', kind: 'category', options: ['a', 'b'], min: undefined, max: undefined };
-  const S = fold(JSON.parse(JSON.stringify([
-    { op: 'annotation.type', type: n }, { op: 'annotation.type_edit', id: 'type:1', fields: kindChange('binary') },
-    { op: 'annotation.type', type: c }, { op: 'annotation.type_edit', id: 'type:2', fields: kindChange('number') },
-  ])) as Op[]);
-  expect(S.types[0]).toEqual({ id: 'type:1', name: 'x', kind: 'binary', target: 'scene', options: [] });
-  expect(S.types[1]).toEqual({ id: 'type:2', name: 'x', kind: 'number', target: 'scene', options: [] });
+  const S = fold([
+    { op: 'annotation.type', type: n }, { op: 'annotation.type_edit', id: 'type:1', fields: { kind: 'binary' } },
+    { op: 'annotation.type', type: { ...n, id: 'type:2', kind: 'category', options: ['a', 'b'] } },
+    { op: 'annotation.type_edit', id: 'type:2', fields: { kind: 'number' } },
+    { op: 'annotation.type', type: { ...n, id: 'type:3', kind: 'text', options: ['stale'] } },   // as an older log may hold
+    { op: 'annotation.type_edit', id: 'type:1', fields: { kind: 'number' } },   // back: the range does not return
+  ]);
+  const plain = { name: 'x', target: 'scene', options: [] };
+  expect(S.types).toEqual([{ id: 'type:1', kind: 'number', ...plain }, { id: 'type:2', kind: 'number', ...plain }, { id: 'type:3', kind: 'text', ...plain }]);
 });
