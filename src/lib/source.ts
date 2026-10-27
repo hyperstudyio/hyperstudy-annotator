@@ -5,7 +5,7 @@
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { Unmatched } from './model/carryover';
-import type { Op } from './model/corrections';
+import { typesIn, type AnnotationType, type Op } from './model/corrections';
 import type { BundleSummary, Manifest } from './types';
 
 /** The op log of one bundle. Every method returns what the store holds afterwards, so the caller can tell when
@@ -67,7 +67,11 @@ export interface BundleSource {
   pickCorrectionsFile(): Promise<string | null>;
   /** Save an exported corrections file (a save dialog in the app, a download in a browser). */
   saveCorrectionsFile(name: string, text: string): Promise<boolean>;
+  /** The annotation types the library's other videos define, to copy from one. */
+  typesElsewhere(): Promise<TypesElsewhere>;
 }
+
+export type TypesElsewhere = { title: string; types: AnnotationType[] }[];
 
 export const inTauri = () => '__TAURI_INTERNALS__' in window;
 
@@ -114,6 +118,10 @@ export async function tauriSource(id: string): Promise<BundleSource> {
       append: (ops) => api.appendCorrections(id, ops),
       truncate: (keep) => api.truncateCorrections(id, keep),
       replace: (ops) => api.replaceCorrections(id, ops),
+    },
+    async typesElsewhere() {
+      const others = (await api.list()).filter((b) => b.id !== id && b.corrections > 0);
+      return typesIn(await Promise.all(others.map(async (b) => ({ title: b.title, ops: await api.loadCorrections(b.id) }))));
     },
     lineage: {
       record: () => api.getCarryover(id),
@@ -173,6 +181,17 @@ export class LocalCorrectionStore implements CorrectionStore {
   }
 }
 
+/** Browser mode's other videos: the other logs this browser keeps, named by the title kept when each was opened. */
+export function localTypesElsewhere(own: string, storage: Storage = localStorage): TypesElsewhere {
+  const prefix = 'hyperstudy-annotator:corrections:', logs: { title: string; ops: Op[] }[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (!key?.startsWith(prefix) || key === own) continue;
+    logs.push({ title: storage.getItem(key.replace(':corrections:', ':title:')) ?? key.slice(prefix.length, prefix.length + 12), ops: JSON.parse(storage.getItem(key) ?? '[]') });
+  }
+  return typesIn(logs);
+}
+
 /** Browser mode's lineage: `previous` is the URL of the earlier bundle, whose log is the video's usual one; this
  *  version's log and its carry-over record are kept under this bundle's URL. */
 function localLineage(base: string, previousUrl: string, videoUrl: string | null, store: CorrectionStore, storage: Storage = localStorage): Lineage {
@@ -220,13 +239,16 @@ export async function httpSource(bundleUrl: string, videoUrl: string | null, pre
     if (!r.ok) throw new Error(`${path}: ${r.status}`);
     return (await r.json()) as T;
   };
+  const title = manifest.video.filename?.replace(/\.[^.]+$/, '') ?? base.split('/').pop() ?? 'bundle';
+  try { localStorage.setItem(store.key.replace(':corrections:', ':title:'), title); } catch { /* the title only names it to others */ }
   return {
-    title: manifest.video.filename?.replace(/\.[^.]+$/, '') ?? base.split('/').pop() ?? 'bundle',
+    title,
     manifest,
     bundleSha256: await sha256Hex(manifestText),
     videoUrl,
     corrections: store,
     lineage: previousUrl ? localLineage(base, previousUrl, videoUrl, store) : undefined,
+    async typesElsewhere() { return localTypesElsewhere(store.key); },
     async layer<T>(name: string) {
       const entry = manifest.layers[name];
       return entry ? getJson<T>(entry.file) : null;

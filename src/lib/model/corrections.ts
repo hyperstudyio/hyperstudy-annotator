@@ -31,6 +31,8 @@ export type Op = { at?: string; carried_from?: { bundle: string; index: number }
   | { op: 'entity.include'; id: string; included: boolean }
   | { op: 'category.include'; kind: string; label: string; included: boolean }
   | { op: 'annotation.type'; type: AnnotationType }
+  | { op: 'annotation.type_edit'; id: string; fields: Partial<Omit<AnnotationType, 'id'>> }
+  | { op: 'annotation.type_delete'; id: string }
   | { op: 'annotation.add'; note: Note }
   | { op: 'annotation.edit'; id: string; fields: Partial<Omit<Note, 'id' | 'type'>> }
   | { op: 'annotation.delete'; id: string }
@@ -87,13 +89,21 @@ export function fold(ops: Op[]): Corrected {
       case 'shot.caption': S.caption[op.shot] = op.caption; break;
       case 'entity.include': S.included[op.id] = op.included; break;
       case 'category.include': S.category[`${op.kind}:${op.label}`] = op.included; break;
-      case 'annotation.type': S.types.push(op.type); break;
+      case 'annotation.type': S.types.push({ ...op.type, options: [...op.type.options] }); break;
+      case 'annotation.type_edit': { const t = S.types.find((x) => x.id === op.id); if (t) Object.assign(t, op.fields); break; }
+      case 'annotation.type_delete': S.types = S.types.filter((x) => x.id !== op.id); break;
       case 'annotation.add': S.notes.set(op.note.id, { ...op.note }); break;
       case 'annotation.edit': { const n = S.notes.get(op.id); if (n) Object.assign(n, op.fields); break; }
       case 'annotation.delete': S.notes.delete(op.id); break;
     }
   }
   return S;
+}
+
+/** The annotation types other videos' logs define, by video (to copy from one); videos with none are left out. */
+export function typesIn(logs: { title: string; ops: Op[] }[]): { title: string; types: AnnotationType[] }[] {
+  return logs.map(({ title, ops }) => ({ title, types: fold(ops).types.filter((t, i, all) => all.findIndex((x) => x.id === t.id) === i) }))
+    .filter((x) => x.types.length);
 }
 
 /** Ops from the last commit: they share its timestamp. */

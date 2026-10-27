@@ -17,6 +17,8 @@
 {#if type}
   <h3>Value</h3>
   <ValueEditor {type} value={n.value} onchange={(value) => edit({ value })} />
+  {#if type.kind === 'binary'}<div class="meta keys">Keys <kbd>y</kbd> <kbd>n</kbd></div>
+  {:else if type.kind === 'category' && type.options.length}<div class="meta keys">Keys <kbd>1</kbd>–<kbd>{Math.min(9, type.options.length)}</kbd>, in this order</div>{/if}
   {#if type.target === 'person'}
     <h3>About</h3>
     <PersonSelect current={n.person ? s.root(n.person) : null} onpick={(person) => edit({ person })} allowSpecial={false} allowNew={false} placeholder="Choose a person…" label="About" />
@@ -31,4 +33,5 @@
 
 <style>
   .normal { font-weight: 400; }
+  .keys { margin-top: 6px; font-size: 12px; }
 </style>

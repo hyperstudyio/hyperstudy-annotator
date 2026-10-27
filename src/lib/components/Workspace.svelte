@@ -65,11 +65,13 @@
     }
     else if (k === 'j' || k === 'k') { s.tab = 'review'; s.nextInQueue(k === 'j' ? 1 : -1); }
     else if (k === 'Escape') { if (pb.clip) pb.stop(); s.selection = null; s.marking = null; }
-    else if (k === '[') {
-      if (!s.S.types.length) { s.tab = 'notes'; s.toast('Add an annotation type first'); return; }
-      s.marking = pb.time; s.toast('Start marked; press ] at the end');
+    else if (k === '[' || k === 'a') {
+      if (!s.currentType()) { s.toast('Add an annotation type first: + beside Annotations on the timeline'); return; }
+      if (k === 'a') s.annotateHere();
+      else { s.marking = pb.time; s.toast('Start marked; press ] at the end'); }
     }
-    else if (k === ']') { if (s.marking !== null && s.activeType) { const a = s.marking, b = pb.time; s.addNote(s.activeType, Math.min(a, b), Math.max(a, b)); } }
+    else if (k === ']') { const type = s.currentType(); if (s.marking !== null && type) { const a = s.marking, b = pb.time; s.addNote(type.id, Math.min(a, b), Math.max(a, b)); } }
+    else if (sel?.kind === 'note' && s.valueFromKey(k) !== undefined) s.commit({ op: 'annotation.edit', id: sel.id, fields: { value: s.valueFromKey(k)! } });
     else if (utt && /^[1-9]$/.test(k)) { const c = s.bundle.prediction.get(utt.id)?.candidates[Number(k) - 1]; if (c) s.setSpeaker(utt, { kind: 'face', face: c.face }); }
     else if (utt && k === 'o') s.setSpeaker(utt, { kind: 'offscreen', voice: utt.voice });
     else if (utt && k === 'm') s.setSpeaker(utt, { kind: 'multiple' });

@@ -15,7 +15,7 @@ export type OverlayKey = 'boxes' | 'objects' | 'skeleton' | 'hands' | 'landmarks
  *  one colour for all. `opacity` 0.1-1; `width` multiplies its lines (0.5-3). */
 export interface OverlayStyle { colour: string | null; opacity: number; width: number }
 export const DEFAULT_STYLE: OverlayStyle = { colour: null, opacity: 1, width: 1 };
-export type Tab = 'inspect' | 'review' | 'people' | 'notes';
+export type Tab = 'inspect' | 'review' | 'people';
 
 export interface ViewState {
   collapsed: string[];
