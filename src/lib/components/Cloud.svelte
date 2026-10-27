@@ -4,7 +4,6 @@
   // sends a step's inputs. RunPod is set up with its API key (kept in the keychain, KeyRow: replaced or tested there,
   // never removed on its own); AWS uses the AWS credentials on this computer, through SkyPilot. Adding one checks it can
   // be used first; Test checks again, changing nothing (`perception cloud check`); Remove takes RunPod's key with it.
-  import { untrack } from 'svelte';
   import KeyRow from './KeyRow.svelte';
   import { openExternal } from '../links';
   import { keyRows, provider, tooOld, type CheckResult, type CliKeys, type CloudProviderName, type CloudStatus, type KeyStatus, type PipelineApi } from '../pipeline';
@@ -45,16 +44,25 @@
       if (saved) onkeys(await api.setKey('RUNPOD_API_KEY', value));
       try { onchange(await api.cloud(true, p)); }
       catch (e) { if (saved) onkeys(await api.removeKey('RUNPOD_API_KEY')); throw e; }
-    })) adding = null;
+    })) { changed(p); adding = null; }
   };
-  // what a Test said, until what it was said of changes: a key saved or removed, the provider added or removed
-  let tested = $state<Partial<Record<CloudProviderName, CheckResult>>>({});
-  $effect(() => { void keys; void added.length; untrack(() => { tested = {}; }); });
+  // What a Test said is shown only while what it was said of is unchanged: the provider (each time it is added or
+  // removed, and RunPod's key each time it is saved here) and where RunPod's key is found. A Test that answers after
+  // the key changed, or about another provider, is not shown as the new one's.
+  let changes = $state<Record<CloudProviderName, number>>({ aws: 0, runpod: 0 });
+  const changed = (p: CloudProviderName) => { changes = { ...changes, [p]: changes[p] + 1 }; };
+  const about = (p: CloudProviderName) => `${changes[p]}|${p === 'runpod' ? `${runpodKey?.stored}|${runpodKey?.elsewhere ?? ''}` : ''}`;
+  let results = $state<Partial<Record<CloudProviderName, { about: string; said: CheckResult }>>>({});
+  const tested = $derived(Object.fromEntries((Object.keys(results) as CloudProviderName[])
+    .filter((p) => results[p]!.about === about(p)).map((p) => [p, results[p]!.said])) as Partial<Record<CloudProviderName, CheckResult>>);
   const test = async (p: CloudProviderName) => {
-    busy = `Testing ${NAMES[p]}…`; error = null; tested = { ...tested, [p]: undefined };
-    try { tested = { ...tested, [p]: await api.checkCloud(p) }; } catch (e) { error = tooOld(e, 'test cloud providers'); } finally { busy = null; }
+    const of = about(p);
+    busy = `Testing ${NAMES[p]}…`; error = null;
+    try { results = { ...results, [p]: { about: of, said: await api.checkCloud(p) } }; } catch (e) { error = tooOld(e, 'test cloud providers'); } finally { busy = null; }
   };
+  const keyChanged = (now: KeyStatus[]) => { changed('runpod'); onkeys(now); };
   const remove = (p: CloudProviderName) => act(`Removing ${NAMES[p]}…`, async () => {
+    changed(p);
     onchange(await api.cloud(false, p));
     if (p === 'runpod' && runpodKey?.stored) onkeys(await api.removeKey('RUNPOD_API_KEY'));
   });
@@ -86,7 +94,7 @@
           </div>
           {#if tested[p]}<p class="tested" class:ok={tested[p]!.ok} class:error={!tested[p]!.ok} role="status">{tested[p]!.ok ? `✓ ${NAMES[p]} can be used` : tested[p]!.detail}.</p>{/if}
           {#if p === 'runpod' && runpodKey}
-            <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} removable={false} onchange={onkeys} {onbusy} /></ul>
+            <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} removable={false} onchange={keyChanged} {onbusy} /></ul>
           {:else if p === 'aws'}
             <p class="muted">Uses the AWS credentials on this computer.</p>
           {/if}
