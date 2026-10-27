@@ -400,3 +400,14 @@ describe("an annotation's menu", () => {
     expect(s.S.notes.has(id)).toBe(true);
   });
 });
+
+test('a delete pressed twice before the first is saved deletes once, so one undo brings the annotation back', async () => {
+  const { s } = session();
+  await s.addType({ id: 'type:x', name: 'X', kind: 'binary', target: 'scene', options: [] });
+  await s.addNote('type:x', 1, 2);
+  const id = s.selection!.id, before = s.ops.length;
+  await Promise.all([s.deleteNote(id), s.deleteNote(id)]);   // a held ⌫, or Delete clicked twice
+  expect(s.ops.length).toBe(before + 1);
+  await s.undo();
+  expect(s.S.notes.has(id)).toBe(true);
+});

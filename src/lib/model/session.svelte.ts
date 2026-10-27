@@ -517,10 +517,16 @@ export class Session {
     const order = this.people;
     return [...secs.keys()].sort((a, b) => secs.get(b)! - secs.get(a)! || order.indexOf(a) - order.indexOf(b));
   }
+  #deleting = new Set<string>();
+  /** Delete an annotation once, however often asked before the first is saved (a held ⌫, Delete clicked twice): a
+   *  second delete op would be what one undo takes back, leaving it deleted. It leaves the selection and its menu at
+   *  once, so nothing offers to delete it again meanwhile. */
   async deleteNote(id: string) {
-    await this.commit({ op: 'annotation.delete', id });
+    if (this.#deleting.has(id) || !this.S.notes.has(id)) return;
+    this.#deleting.add(id);
     if (this.selection?.kind === 'note' && this.selection.id === id) this.selection = null;
     if (this.noteMenu === id) this.noteMenu = null;
+    try { await this.commit({ op: 'annotation.delete', id }); } finally { this.#deleting.delete(id); }
   }
   /** The type keys and drags annotate with: the one last added, edited or used, else the first. */
   currentType(): AnnotationType | null { return (this.activeType && this.typeOf(this.activeType)) || this.S.types[0] || null; }
