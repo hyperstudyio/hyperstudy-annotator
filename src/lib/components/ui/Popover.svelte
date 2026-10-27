@@ -7,6 +7,7 @@
   // there, it keeps the page's order by hand: Tab past either end closes it and returns to the button, focus leaving it
   // closes it, and it does not open, or stays open, while the button is out of reach (inert: a dialog is open).
   import type { Snippet } from 'svelte';
+  import { placeBy, type Placement } from './place';
 
   let { label, button, children, align = 'left', width = 240, title, buttonClass = '', chevron = true }: {
     /** what the button is called, for screen readers (its own text may be only part of it) */
@@ -20,18 +21,9 @@
   let root = $state<HTMLElement>();
   let panelEl = $state<HTMLElement>();
   const toBody = (el: HTMLElement) => { document.body.append(el); return { destroy: () => el.remove() }; };
-  // under the button, or above it when there is more room there (an ⓘ near the foot of the timeline); never past the
-  // window: what does not fit scrolls inside the panel
-  let at = $state<{ top: number | null; bottom: number | null; left: number; max: number }>({ top: 0, bottom: null, left: 0, max: 480 });
+  let at = $state<Placement>({ top: 0, bottom: null, left: 0, max: 480 });
   const close = () => { open = false; };
-  const place = () => {
-    if (!root) return;
-    const r = root.getBoundingClientRect(), w = Math.min(width, window.innerWidth - 16);
-    const left = Math.max(8, Math.min(align === 'right' ? r.right - w : r.left, window.innerWidth - w - 8));
-    const below = window.innerHeight - r.bottom - 12, above = r.top - 12;
-    at = below >= Math.min(320, above) ? { top: r.bottom + 4, bottom: null, left, max: Math.min(480, below) }
-      : { top: null, bottom: window.innerHeight - r.top + 4, left, max: Math.min(480, above) };
-  };
+  const place = () => { if (root) at = placeBy(root.getBoundingClientRect(), width, align); };
   const trigger = () => root?.querySelector('.trigger') as HTMLElement | null;
   const unreachable = () => !!root?.closest('[inert]');
   const toggle = () => { if (open) { open = false; return; } if (unreachable()) return; place(); open = true; };
