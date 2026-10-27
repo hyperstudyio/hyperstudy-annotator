@@ -256,12 +256,12 @@ describe('what an earlier edit left out', () => {
     expect(s.includedSound(x)).toBe(true);
   });
 
-  test("Review's Not there is said as Review's, and put right by marking the sound real", async () => {
+  test("a sound marked not there (by Review, or an edit from before it) is put right by marking it real", async () => {
     const { s } = session();
     const x = s.bundle.sounds[0];
     await s.commit({ op: 'entity.include', id: x.id, included: false });
     const out = s.leftOut({ kind: 'sound', id: x.id })!;
-    expect(out.why).toBe('Marked not there in Review.');
+    expect(out.why).toBe('Marked not there.');
     expect(out.action).toBe('Mark real');
     await s.commit(out.putBack);
     expect(s.S.included[x.id]).toBe(true);

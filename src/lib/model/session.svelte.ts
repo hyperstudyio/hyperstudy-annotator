@@ -326,13 +326,14 @@ export class Session {
   }
 
   /** Why the selection is left out of what agents receive, when an edit left it out (made before the annotator stopped
-   *  deciding that, or Review's "Not there"), and the edit that puts it back; null when nothing did. Not a person is
+   *  deciding that, or Review's "Not there"), and the edit that puts it back; null when nothing did. A sound's own
+   *  exclusion is said as "not there" whichever made it: the op does not record which. Not a person is
    *  not this: it is put right by naming who the face is. */
   leftOut(sel: Selection): { why: string; putBack: Op; action?: string } | null {
     const I = this.S.included, b = this.bundle;
     const byPerson = (p: string) => I[p] === false && p !== NOT_PERSON
       ? { why: `${this.nameOf(p)} was left out by an earlier edit.`, putBack: { op: 'entity.include', id: p, included: true } as Op } : null;
-    if (I[sel.id] === false && sel.kind === 'sound') return { why: 'Marked not there in Review.', putBack: { op: 'entity.include', id: sel.id, included: true }, action: 'Mark real' };
+    if (I[sel.id] === false && sel.kind === 'sound') return { why: 'Marked not there.', putBack: { op: 'entity.include', id: sel.id, included: true }, action: 'Mark real' };
     if (I[sel.id] === false) return { why: 'Left out by an earlier edit.', putBack: { op: 'entity.include', id: sel.id, included: true } };
     switch (sel.kind) {
       case 'person': return byPerson(sel.id);
