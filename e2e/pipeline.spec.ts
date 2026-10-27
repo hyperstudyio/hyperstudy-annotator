@@ -331,6 +331,23 @@ test('each place says where it is, how long the step would take and what it cost
   expect(box!.x + box!.width).toBeLessThanOrEqual(cell!.x + cell!.width);   // the longest option stays inside its column
 });
 
+test('a place that cannot be planned is said why and undone: the steps stay, with the place they had, and can be moved again', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await expect(menu).toHaveValue('native:mps');
+  await page.evaluate(() => { (window as unknown as { __refusePlace?: string }).__refusePlace = 'ssh-lab:cuda'; });
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(dialog.getByText('not a node and a place: "faces" = "ssh-lab:cuda"')).toBeVisible();
+  await expect(menu).toHaveValue('native:mps');                                   // the choice before, and its plan
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await page.evaluate(() => { delete (window as unknown as { __refusePlace?: string }).__refusePlace; });
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await expect(dialog.getByText(/not a node and a place/)).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  expect((await runs(page))[0].places).toEqual({ faces: 'ssh-lab:cuda' });
+});
+
 test('moving a step to a lab server is the choice to send it its inputs: it stays on, and the run may send them there only', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   const faces = dialog.getByRole('listitem', { name: 'faces' });

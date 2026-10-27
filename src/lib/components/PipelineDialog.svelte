@@ -216,20 +216,28 @@
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
   const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; fromDefaults = {}; open = null; await makePlan(); };
   // choosing another machine is the choice to send this step's inputs there (what the plan says it would send)
-  const choosePlace = async (node: string, place: string) => {
+  // `menu`: the control it was chosen in. Undone, the plan (where its value comes from) is unchanged, so nothing would
+  // redraw the menu: its value is put back here
+  const choosePlace = async (node: string, place: string, menu: HTMLSelectElement) => {
+    const before = { places, ticked }, shown = plan?.nodes.find((n) => n.id === node)?.place;
     const agreed = plan && placeTick(plan.nodes.find((n) => n.id === node)!, place);
     if (agreed) ticked = { ...ticked, [node]: agreed };
     places = { ...places, [node]: place };
-    await makePlan(true);
+    await makePlan(true, () => { ({ places, ticked } = before); if (shown) menu.value = shown; });
   };
-  const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
+  const chooseSetting = async (node: string, key: string, value: string, menu: HTMLSelectElement) => {
+    const before = settings, shown = plan?.nodes.find((n) => n.id === node)?.settings?.find((x) => x.key === key)?.value;
+    settings = { ...settings, [node]: { ...settings[node], [key]: value } };
+    await makePlan(true, () => { settings = before; if (shown != null) menu.value = shown; });
+  };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
   // Only the newest plan request may set the plan, so a slow one cannot show one graph while another would run.
   const newestPlan = latestOnly();
   // `keep`: a new place or setting replans the same steps, so the plan stays on screen (and the control just changed
-  // keeps the keyboard) while Start run waits for the new one
-  const makePlan = async (keep = false) => {
+  // keeps the keyboard) while Start run waits for the new one. `undo` puts that choice back if it cannot be planned:
+  // the plan on screen is the one made before it, so the step list, and the menu to choose again, stay
+  const makePlan = async (keep = false, undo?: () => void) => {
     if (!keep) plan = null;
     error = null;
     if (!graph || !video) return;
@@ -245,7 +253,7 @@
         }
         plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
       },
-      (e) => { plan = null; error = String(e); busy = null; planning = false; });
+      (e) => { if (undo && plan) undo(); else plan = null; error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = []; arrived = []; now = Date.now();
@@ -362,7 +370,7 @@
               {#if n.cached}<span class="muted">Already done</span>
               {:else if n.service}{n.service}
               {:else if n.place && !started && on && (n.options?.length ?? 0) > 1}
-                <select aria-label={`Where ${title(n)} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
+                <select aria-label={`Where ${title(n)} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value, e.currentTarget)}>
                   {#each n.options ?? [] as o (o)}<option value={o}>{placeLabel(n, o, plan.places)}</option>{/each}
                 </select>
               {:else if n.place}{placeName(n.place, plan.places)}
@@ -408,7 +416,7 @@
                   {#each n.settings ?? [] as st (st.key)}
                     <dt><label for={`set-${n.id}-${st.key}`}>{capital(st.key)}</label></dt>
                     <dd class="setting">
-                      <select id={`set-${n.id}-${st.key}`} value={st.value} disabled={started} onchange={(e) => chooseSetting(n.id, st.key, e.currentTarget.value)}>
+                      <select id={`set-${n.id}-${st.key}`} value={st.value} disabled={started} onchange={(e) => chooseSetting(n.id, st.key, e.currentTarget.value, e.currentTarget)}>
                         {#each st.choices as c (c)}<option value={c}>{choiceLabel(st, c)}</option>{/each}
                       </select>
                       {#if st.description}<span class="muted">{st.description}</span>{/if}
