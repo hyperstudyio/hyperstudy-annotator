@@ -9,6 +9,12 @@ export interface OverlayLayers {
   landmarks: boolean; gaze: boolean; smooth: boolean;
 }
 export type GazeSource = 'gaze_lle' | 'pyfeat';
+/** The overlays that can be styled. */
+export type OverlayKey = 'boxes' | 'objects' | 'skeleton' | 'hands' | 'landmarks' | 'gaze';
+/** How an overlay is drawn: `colour` null is each person's (or object's) own colour, the one the timeline uses; else
+ *  one colour for all. `opacity` 0.1-1; `width` multiplies its lines (0.5-3). */
+export interface OverlayStyle { colour: string | null; opacity: number; width: number }
+export const DEFAULT_STYLE: OverlayStyle = { colour: null, opacity: 1, width: 1 };
 export type Tab = 'inspect' | 'review' | 'people' | 'notes';
 
 export interface ViewState {
@@ -19,6 +25,8 @@ export interface ViewState {
   groupOrder: string[];
   rowOrder: Record<string, string[]>;   // group -> row ids, for rows the viewer moved
   layers: OverlayLayers;
+  /** the overlays styled differently from DEFAULT_STYLE */
+  styles: Partial<Record<OverlayKey, OverlayStyle>>;
   gazeSource: GazeSource;
   drawerClosed: boolean;
   drawerW: number | null;
@@ -28,6 +36,7 @@ export interface ViewState {
 export const defaultView = (): ViewState => ({
   collapsed: [], hidden: [], hiddenGroups: [], heights: {}, groupOrder: [], rowOrder: {},
   layers: { boxes: true, objects: true, skeleton: false, hands: false, unlinkedHands: false, landmarks: false, gaze: false, smooth: true },
+  styles: {},
   // Gaze-LLE is the default: on OOO it read more accurately by eye than PaGE and the py-feat ray (user review 2026-10-23)
   gazeSource: 'gaze_lle',
   drawerClosed: false, drawerW: null, timelineH: null,
@@ -96,6 +105,10 @@ export class View {
   }
   setLayer(key: keyof OverlayLayers, on: boolean) { this.s.layers[key] = on; this.save(); }
   setGazeSource(src: GazeSource) { this.s.gazeSource = src; this.save(); }
+  setStyle(key: OverlayKey, patch: Partial<OverlayStyle>) { this.s.styles = { ...this.s.styles, [key]: { ...this.styleOf(key), ...patch } }; this.save(); }
+  styleOf(key: OverlayKey): OverlayStyle { return { ...DEFAULT_STYLE, ...this.s.styles?.[key] }; }
+  /** Every overlay drawn as it is at first: on or off as before, each in its default style. */
+  resetStyles() { this.s.styles = {}; this.save(); }
   toggleDrawer() { this.s.drawerClosed = !this.s.drawerClosed; this.save(); }
   setDrawerW(w: number | null) { this.s.drawerW = w === null ? null : Math.max(DRAWER_W[0], Math.min(DRAWER_W[1], Math.round(w))); }
   setTimelineH(h: number | null) { this.s.timelineH = h === null ? null : Math.round(h); }

@@ -191,3 +191,33 @@ test('Export saves the annotated result, with the edits, as <title>.annotated.js
   expect(Array.isArray(saved.edits)).toBe(true);
 });
 
+
+test('an overlay is a row you click to turn on, lit when on, and its style (colour, opacity, width) is kept', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  await page.getByRole('button', { name: 'What the video shows' }).click();
+  const menu = page.getByRole('dialog', { name: 'What the video shows' });
+  await expect(menu.getByRole('checkbox')).toHaveCount(0);   // rows, not checkboxes
+  const faces = menu.getByRole('button', { name: 'Faces', exact: true });
+  const was = await faces.getAttribute('aria-pressed');
+  await faces.click();
+  await expect(faces).toHaveAttribute('aria-pressed', was === 'true' ? 'false' : 'true');
+  await faces.click();   // back as it was
+  await expect(faces).toHaveAttribute('aria-pressed', was ?? 'false');
+  if (was !== 'true') await faces.click();   // on, to style it
+  await expect(faces).toHaveAttribute('aria-pressed', 'true');
+  await menu.getByRole('button', { name: 'How faces are drawn' }).click();
+  await menu.getByLabel('Faces: opacity').fill('0.5');
+  await expect(menu.getByText('50%')).toBeVisible();
+  await menu.getByLabel('Faces: one colour').evaluate((el: HTMLInputElement) => { el.value = '#ff00ff'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await expect(menu.getByRole('button', { name: 'By person' })).toHaveAttribute('aria-pressed', 'false');
+  await page.reload();   // kept for this video, in this browser
+  await loaded(page);
+  await page.getByRole('button', { name: 'What the video shows' }).click();
+  await menu.getByRole('button', { name: 'How faces are drawn' }).click();
+  await expect(menu.getByText('50%')).toBeVisible();
+  await menu.getByRole('button', { name: 'Reset' }).click();
+  await expect(menu.getByText('100%')).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'By person' })).toHaveAttribute('aria-pressed', 'true');
+});
