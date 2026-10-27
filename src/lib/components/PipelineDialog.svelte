@@ -6,16 +6,19 @@
   // choice to send it; such features start off. A pipeline with no full graph offers its graphs instead.
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
-  import Keys from './Keys.svelte';
-  import Machines from './Machines.svelte';
   import type { RunStatus } from './Rail.svelte';
+  import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
     settingsFor, spendingCap, totalEstimate, keyRows, keysText, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
-  let { api, visible = true, onnew, onopen, onstatus }: {
+  let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
     /** the page is on screen (it stays mounted while hidden, so a run goes on) */
     visible?: boolean;
+    /** a key, server or the cloud being changed in Settings (what, said in the footer): Start run waits for it */
+    configBusy?: string | null;
+    /** keys and machines are set in Settings, not here: open it at that part */
+    onsettings?: (section: SettingsSection) => void;
     /** start over, after a run has ended */
     onnew: () => void;
     onopen: (bundleId: string) => void;
@@ -31,16 +34,12 @@
   // other machines steps can run on (null: this pipeline predates them, perception #15/#16)
   let hosts = $state<Host[] | null>(null);
   let cloud = $state<CloudStatus | null>(null);
-  let manage = $state(false);
   let machinesError = $state<string | null>(null);
   let olderPipeline = $state(false);   // it does not know `hosts` or `cloud`
-  let machinesBusy = $state(false);    // a machine action under way: Start run waits for it
-  let keysBusy = $state(false);        // a key being saved or removed: Start run waits for it (the run would race the key)
   // the keys the app keeps (in the keychain: whether each is stored, never its value), and where the CLI finds keys on
   // its own (null: a pipeline from before `perception keys`)
   let keys = $state<KeyStatus[]>([]);
   let cliKeys = $state<CliKeys | null>(null);
-  let manageKeys = $state(false);
   let keysError = $state<string | null>(null);
   let graphs = $state<GraphPreset[]>([]);
   let graph = $state<string | null>(null);
@@ -78,7 +77,7 @@
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
   const settingUp = $derived(setup?.state === 'installing' || setup?.state === 'running');   // Start run waits for it
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !machinesBusy && !keysBusy && !settingUp);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !configBusy && !settingUp);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -115,6 +114,12 @@
     if (!visible) return;
     if (!shown) { shown = true; return; }
     untrack(() => { revisit(); });
+  });
+  // a change in Settings that was still under way when this page came back: what it left is loaded once it is done
+  let waited = false;
+  $effect(() => {
+    if (configBusy) { waited = true; return; }
+    if (waited && untrack(() => visible)) { waited = false; untrack(() => { revisit(); }); }
   });
   const revisit = async () => {
     const [h, c] = await Promise.allSettled([api.hosts(), api.cloud()]);
@@ -158,7 +163,7 @@
     const older = (r: PromiseSettledResult<unknown>, cmd: string) => r.status === 'rejected' && new RegExp(`invalid choice: '${cmd}'`).test(String(r.reason));
     // each on its own: a pipeline can have lab servers (perception #15) before the cloud (#16)
     if (h.status === 'fulfilled') hosts = h.value;
-    else if (older(h, 'hosts')) { hosts = null; manage = false; olderPipeline = true; }
+    else if (older(h, 'hosts')) { hosts = null; olderPipeline = true; }
     if (c.status === 'fulfilled') cloud = c.value;
     else if (older(c, 'cloud')) cloud = null;
     machinesError = [h, c].filter((r) => r.status === 'rejected' && !older(r, 'hosts') && !older(r, 'cloud'))
@@ -176,11 +181,8 @@
                  c.status === 'rejected' && !olderCli ? `the pipeline's keys: ${c.reason}` : null].filter(Boolean).join('; ') || null;
   };
   const keysText_ = $derived(keysText(keyRows(keys, cliKeys)));
-  // a key stored or removed: what steps are missing changes, so plan again (keeping the choices)
-  const keysChanged = async (now: KeyStatus[]) => {
-    keys = now;
-    if (plan && !started) await makePlan(true);
-  };
+  // a key a step is missing, as Settings names it (the pipeline names it by its variable)
+  const keyLabel = (k: string) => keys.find((x) => x.name === k)?.label ?? k;
   // a machine added or removed, the cloud turned on or off: the step menus change, so plan again (keeping the steps). A
   // step placed on a machine that is gone, or is now another machine (a name given a new address or folder), goes back
   // to this machine, and the agreement its place gave goes with it: choosing the machine again is a new choice.
@@ -205,9 +207,6 @@
     }
     await makePlan(true);
   };
-  const machinesText = $derived(olderPipeline ? 'This machine only (this pipeline cannot run steps elsewhere: update hyperstudy-perception)'
-    : [doctor?.platform.startsWith('darwin') ? 'This Mac' : 'This machine', ...(hosts ?? []).map((h) => `${h.name} (SSH)`),
-       cloud?.enabled ? 'Cloud GPU' : null].filter(Boolean).join(', '));
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
@@ -261,12 +260,17 @@
   const chosenGraph = $derived(graphs.find((g) => g.file === graph));
   const stepCount = $derived(active?.nodes.filter((n) => !n.cached).length ?? 0);
   // a range only when running side by side could save real time (within a tenth, one number says it)
-  const timeText = $derived(!total ? '' : total.fastest >= total.seconds * 0.9
+  const timeText = $derived(!total || total.seconds === 0 ? '' : total.fastest >= total.seconds * 0.9
     ? `about ${duration(total.seconds)}` : `${duration(total.fastest)} to ${duration(total.seconds)}`);
   const title = (n: PlanNode) => n.title || n.id;
   const titleOf = (id: string) => { const n = plan?.nodes.find((x) => x.id === id); return n ? title(n) : id; };
   const LICENCE: Record<string, string> = { 'academic-only': 'academic use only', 'commercial-ok': 'commercial use allowed', 'needs-review': 'licence under review', 'api-terms': "the API provider's terms" };
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
+  // where steps can run, in one line: this computer, the remote servers, the cloud GPU when it is on
+  const here = $derived(doctor?.platform.startsWith('darwin') ? 'this Mac' : 'this machine');
+  const machinesText = $derived(olderPipeline ? `${capital(here)} only (this pipeline cannot run steps elsewhere: update hyperstudy-perception)`
+    : list([capital(here), ...(hosts ?? []).map((h) => h.name), ...(cloud?.enabled ? ['the cloud GPU'] : [])]));
+  const runnable = $derived(doctor ? doctor.nodes.filter((n) => n.where).length : 0);
   // what leaves this machine, and where to: the API it calls, or the other machine it runs on (its inputs, whatever they hold)
   const leaves = (n: PlanNode) => {
     const to = dest(n);
@@ -280,10 +284,11 @@
   <header>
     <div class="title">
       <h1 class="page-title">Extract</h1>
-      <p class="page-lead">Run the perception pipeline on a video. The bundle it makes opens in the Annotator.</p>
+      <p class="page-lead">Run the perception pipeline on a video: it finds the shots, speech and faces. The bundle it makes opens in the Annotator.</p>
       {#if doctor}
         <p class="pipeline">
-          <span title={doctor.pipeline?.root}>{pipelineName}</span>, {doctor.nodes.filter((n) => n.where).length} of {doctor.nodes.length} nodes can run on this {doctor.platform.startsWith('darwin') ? 'Mac' : 'machine'} ({doctor.accelerators.map((a) => placeName(`native:${a}`)).join(', ')})
+          <span title={doctor.pipeline?.root}>{pipelineName}</span>. {runnable === doctor.nodes.length ? `All ${runnable}` : `${runnable} of ${doctor.nodes.length}`} steps can run on {here}
+          ({list(doctor.accelerators.map((a) => placeName(`native:${a}`)))}){#if runnable < doctor.nodes.length}: <button class="link" onclick={() => onsettings?.('computer')}>see why the others cannot</button>{/if}.
         </p>
       {/if}
     </div>
@@ -295,31 +300,47 @@
         only checks for a newer version.</p>
     </div>
   {:else if doctor}
-    <div class="setup">
-      <span class="label">Video</span>
-      <div class="value">
-        {#if video}<span class="file" title={video}>{name(video)}</span>{:else}<span class="muted">None chosen</span>{/if}
-        <button onclick={chooseVideo} disabled={started}>{video ? 'Change…' : 'Choose…'}</button>
+    {#if !video}
+      <!-- where a run starts: an empty frame, and under it the tracks the pipeline will find in it (the mark's lanes) -->
+      <div class="source">
+        <svg class="frame" viewBox="0 0 240 168" aria-hidden="true">
+          <rect x="1" y="1" width="238" height="134" rx="8" class="screen" />
+          <path d="M108 52v32l28-16z" class="play" />
+          <g stroke-width="5" stroke-linecap="round">
+            <path d="M6 146h58m14 0h86m14 0h56" class="lane l1" />
+            <path d="M6 154h30m12 0h120m12 0h54" class="lane l2" />
+            <path d="M6 162h92m14 0h40m12 0h70" class="lane l3" />
+          </g>
+          <path d="M150 140v26" class="playhead" />
+        </svg>
+        <div class="ask">
+          <h2>Choose a video to start</h2>
+          <p class="muted">Any MP4, MOV or WebM. It stays where it is; the bundle refers to it.</p>
+          <button class="primary" onclick={chooseVideo}>Choose a video…</button>
+        </div>
       </div>
-      <span class="label">Machines</span>
+    {/if}
+    <div class="setup">
+      {#if video}
+        <span class="label">Video</span>
+        <div class="value">
+          <span class="file" title={video}>{name(video)}</span>
+          <button onclick={chooseVideo} disabled={started}>Change…</button>
+        </div>
+      {/if}
+      <span class="label">Runs on</span>
       <div class="value">
         <span>{machinesText}</span>
         {#if machinesError}<span class="error">{machinesError}</span>{/if}
-        {#if hosts !== null}<button onclick={() => (manage = !manage)} aria-expanded={manage} aria-controls="machines" aria-label={manage ? 'Done with machines' : 'Manage machines'} disabled={started}>{manage ? 'Done' : 'Manage…'}</button>{/if}
+        {#if hosts !== null}<button class="link" onclick={() => onsettings?.('servers')} aria-label="Change where steps can run, in Settings">Change in Settings</button>{/if}
       </div>
-      {#if manage && hosts !== null}
-        <div class="machines-row" id="machines"><Machines {api} {hosts} {cloud} disabled={started} onchange={machinesChanged} onbusy={(b) => (machinesBusy = b)} /></div>
-      {/if}
       {#if keys.length || keysError}
       <span class="label">Keys</span>
       <div class="value">
         <span>{keysText_}</span>
         {#if keysError}<span class="error">{keysError}</span>{/if}
-        {#if keys.length}<button onclick={() => (manageKeys = !manageKeys)} aria-expanded={manageKeys} aria-controls="keys" aria-label={manageKeys ? 'Done with keys' : 'Manage keys'} disabled={started}>{manageKeys ? 'Done' : 'Manage…'}</button>{/if}
+        {#if keys.length}<button class="link" onclick={() => onsettings?.('keys')} aria-label="Change the keys, in Settings">Change in Settings</button>{/if}
       </div>
-      {#if manageKeys}
-        <div class="machines-row" id="keys"><Keys {api} {keys} cli={cliKeys} disabled={started} onchange={keysChanged} onbusy={(b) => (keysBusy = b)} /></div>
-      {/if}
       {/if}
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
@@ -343,7 +364,7 @@
         {#if started}{headline}
         {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
       </h3>
-      {#if total?.unknown.length && !started}<p class="muted">Not counting {list(total.unknown)}, which {total.unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
+      {#if total?.unknown.length && !started}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(total.unknown.map(titleOf))}, which {total.unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
       <ol class="steps">
         {#each started ? active?.nodes ?? [] : plan.nodes as n (n.id)}
           {@const s = view.nodes[n.id]}
@@ -386,7 +407,7 @@
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
                 {#if n.cost_usd}<span>{machineCost(plan, n) ? 'Up to ' : ''}${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
-                {#each n.missing_secrets as k (k)}<span class="error">Needs {k}</span>{/each}
+                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.('keys')}>add it in Settings</button></span>{/each}
               {:else if before.length}
                 <span class="muted" id={`before-${n.id}`}>Turn on {list(before.map(titleOf))} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
               {/if}
@@ -432,6 +453,7 @@
       {#if view.status && view.status !== 'succeeded'}<p class="error">The run {view.status}. The step marked failed says why.</p>{/if}
       {#each why as b (b)}<p class="error">{b[0].toUpperCase() + b.slice(1)}.</p>{/each}
       {#if busy}<p class="muted">{busy}</p>{/if}
+      {#if configBusy && !started}<p class="muted">Settings: {configBusy} Start run waits for it.</p>{/if}
       {#if setup?.notice}<p class="muted">{setup.notice}.</p>{/if}
       {#if setup?.state === 'running'}
         <p class="muted">Setting up this version of the pipeline: each step's packages and model weights (a few GB the first time).
@@ -466,10 +488,25 @@
   p { margin: 0; }
 
 
+  /* where a run starts, before a video is chosen: an empty frame over the tracks it will become (the mark's lanes,
+     in its colours), and the one thing to do */
+  .source { display: flex; align-items: center; gap: 28px; margin: 8px 20px 22px; padding: 26px 28px; border-radius: 12px;
+            background: var(--color-bg-surface); border: 1px solid var(--color-border-default); flex-wrap: wrap; }
+  .frame { width: 240px; max-width: 100%; height: auto; flex: none; }
+  .screen { fill: #0d0d0d; stroke: var(--color-border-strong); stroke-width: 1.5; }
+  .play { fill: var(--color-border-strong); }
+  .lane { opacity: .85; }
+  .l1 { stroke: var(--color-primary); }
+  .l2 { stroke: var(--color-info); }
+  .l3 { stroke: var(--color-caution); }
+  .playhead { stroke: var(--color-text-primary); stroke-width: 1.5; stroke-linecap: round; }
+  .ask { display: grid; gap: 6px; justify-items: start; min-width: 220px; flex: 1; }
+  .ask h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.005em; }
+  .ask button { margin-top: 8px; padding: 6px 16px; }
+
   /* setup: what goes in (a video, a graph), label and value side by side */
-  .setup { display: grid; grid-template-columns: 64px 1fr; gap: 12px 14px; align-items: baseline; padding: 4px 20px 18px; }
+  .setup { display: grid; grid-template-columns: max-content 1fr; gap: 12px 14px; align-items: baseline; padding: 4px 20px 18px; }
   .label { color: var(--color-text-muted); }
-  .machines-row { grid-column: 1 / -1; }
   .value { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .file { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .graphs { flex-direction: column; align-items: flex-start; gap: 6px; }

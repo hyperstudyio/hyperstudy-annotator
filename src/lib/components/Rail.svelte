@@ -108,14 +108,16 @@
 </nav>
 
 <style>
-  .rail { width: 64px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 0 10px;
+  /* as wide as its widest label: the app's web view can draw the labels larger than a browser does, and a fixed width
+     cut "Annotator" off at the window's edge */
+  .rail { width: max-content; min-width: 64px; flex: none; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 12px 4px 10px;
           background: var(--color-bg-base); border-right: 1px solid var(--color-border-default); }
-  .mark { margin-bottom: 14px; }
+  .mark { margin: 0 auto 14px; }
   ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .spacer { flex: 1; }
 
-  .item { position: relative; width: 56px; padding: 7px 0 6px; display: flex; flex-direction: column; align-items: center; gap: 3px;
-          background: none; border: 0; border-radius: 8px; color: var(--color-text-muted); }
+  .item { position: relative; width: 100%; min-width: 56px; padding: 7px 6px 6px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+          background: none; border: 0; border-radius: 8px; color: var(--color-text-muted); white-space: nowrap; }
   .item:hover:not(:disabled) { background: var(--color-bg-surface); color: var(--color-text-secondary); }
   .item:focus-visible { outline: 2px solid var(--color-info); outline-offset: -2px; }
   .item.active { background: var(--color-bg-elevated); color: var(--color-text-primary); }

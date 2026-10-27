@@ -205,12 +205,13 @@ Checked:
   kinds, so `--allow-uploads` is passed whenever anything was agreed). The run's cap is the graph's (it covers the
   APIs) raised by each cloud machine's price (`spendingCap`, sent as `--max-cost-usd`).
 
-- **Machines** (with perception #15, #16): the dialog's Machines row lists the machines steps can run on and opens a
-  panel to add, check, clean and remove lab servers (`perception hosts`, reached with the user's own SSH keys) and to
-  turn the cloud GPU on or off (`perception cloud`, which checks AWS through SkyPilot first). A change plans again, so
-  the step menus follow; choosing a place there is still what sends a step's inputs. Names, destinations and folders
-  are checked in Rust before the CLI sees them (`host_args`, positional words after `--`). A pipeline from before these
-  says so on the row.
+- **Machines** (with perception #15, #16): set in Settings, which has a tab for remote servers (add, check, clear the
+  cache on and remove them: `perception hosts`, reached with the user's own SSH keys) and one for the cloud GPU (on or
+  off: `perception cloud`, which checks AWS through SkyPilot first). Extract's "Runs on" row only lists them and links
+  there; back on Extract it loads them again and plans again, so the step menus follow, and Start run waits while a
+  change in Settings is under way. Choosing a place in a step menu is still what sends a step's inputs. Names,
+  destinations and folders are checked in Rust before the CLI sees them (`host_args`, positional words after `--`). A
+  pipeline from before these says so on the row.
 
 Not yet:
 - the native window checked by hand.

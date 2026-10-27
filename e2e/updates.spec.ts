@@ -56,7 +56,7 @@ test('a download that fails its signature check is not installed, says why, and 
 test('the relaunch waits while a run is going on Extract', async ({ page }) => {
   await page.goto('/?pipeline-demo=slow-start&update-demo=available');
   const extract = page.getByRole('region', { name: 'Extract' });
-  await extract.getByRole('button', { name: 'Choose…' }).click();             // the video
+  await extract.getByRole('button', { name: 'Choose a video…' }).click();             // the video
   await extract.getByRole('button', { name: 'Start run' }).click();
   await expect(extract.getByRole('button', { name: 'Cancel run' })).toBeVisible();
   await rail(page).getByRole('button', { name: 'Update' }).click();
