@@ -17,16 +17,21 @@ export function saveDefault(step: string, key: string, value: string, storage: S
   return now;
 }
 
-/** The settings a plan should have that it does not: each default the run has not chosen otherwise, that is one of the
- *  step's choices and not already its value. Empty when the plan already has them (so planning again stops). */
-export function defaultsToApply(plan: Plan, chosen: Settings, defaults: StepDefaults): Settings {
+/** The defaults a plan's steps take, by step id: each one the run has not chosen otherwise and that is one of the
+ *  step's choices. Kept apart from the run's own choices (Extract merges them under those when it plans and runs), so
+ *  a default changed in Settings is what the next plan takes. */
+export function defaultsFor(plan: Plan, chosen: Settings, defaults: StepDefaults): Settings {
   const out: Settings = {};
   for (const n of plan.nodes) {
     for (const s of n.settings ?? []) {
       const d = defaults[n.uses]?.[s.key];
-      if (d === undefined || d === s.value || !s.choices.includes(d) || chosen[n.id]?.[s.key] !== undefined) continue;
+      if (d === undefined || !s.choices.includes(d) || chosen[n.id]?.[s.key] !== undefined) continue;
       out[n.id] = { ...out[n.id], [s.key]: d };
     }
   }
   return out;
 }
+
+/** The run's own choices over the defaults. */
+export const withDefaults = (defaults: Settings, chosen: Settings): Settings =>
+  Object.fromEntries([...new Set([...Object.keys(defaults), ...Object.keys(chosen)])].map((n) => [n, { ...defaults[n], ...chosen[n] }]));

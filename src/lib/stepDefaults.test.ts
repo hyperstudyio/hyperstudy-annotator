@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { defaultsToApply, loadDefaults, saveDefault } from './stepDefaults';
+import { defaultsFor, loadDefaults, saveDefault, withDefaults } from './stepDefaults';
 import type { Plan } from './pipeline';
 
 const captions = (value: string) => ({ id: 'captions', uses: 'vlm.shot-captions@1.0.0',
@@ -7,14 +7,19 @@ const captions = (value: string) => ({ id: 'captions', uses: 'vlm.shot-captions@
 const plan = (value: string) => ({ nodes: [captions(value), { id: 'asr', uses: 'audio.asr@1.0.0', settings: [] }] }) as unknown as Plan;
 const opus = { 'vlm.shot-captions@1.0.0': { model: 'claude-opus-5-5' } };
 
-test("a default the run has not chosen otherwise is applied by the step's id, once", () => {
-  expect(defaultsToApply(plan('claude-haiku-5-5'), {}, opus)).toEqual({ captions: { model: 'claude-opus-5-5' } });
-  expect(defaultsToApply(plan('claude-opus-5-5'), {}, opus)).toEqual({});                      // planned with it: done
-  expect(defaultsToApply(plan('claude-haiku-5-5'), { captions: { model: 'claude-haiku-5-5' } }, opus)).toEqual({});   // this run's own choice
+test("a default the run has not chosen otherwise is the step's, by its id, whatever the plan has now", () => {
+  expect(defaultsFor(plan('claude-haiku-5-5'), {}, opus)).toEqual({ captions: { model: 'claude-opus-5-5' } });
+  expect(defaultsFor(plan('claude-opus-5-5'), {}, opus)).toEqual({ captions: { model: 'claude-opus-5-5' } });   // the same: planning stops
+  expect(defaultsFor(plan('claude-haiku-5-5'), { captions: { model: 'claude-haiku-5-5' } }, opus)).toEqual({});   // this run's own choice
+});
+
+test("the run's own choices are over the defaults", () => {
+  expect(withDefaults({ captions: { model: 'claude-opus-5-5', effort: 'high' } }, { captions: { effort: 'low' }, asr: { x: '1' } }))
+    .toEqual({ captions: { model: 'claude-opus-5-5', effort: 'low' }, asr: { x: '1' } });
 });
 
 test('a default that is no longer one of the choices is left out', () => {
-  expect(defaultsToApply(plan('claude-haiku-5-5'), {}, { 'vlm.shot-captions@1.0.0': { model: 'claude-sonnet-4' } })).toEqual({});
+  expect(defaultsFor(plan('claude-haiku-5-5'), {}, { 'vlm.shot-captions@1.0.0': { model: 'claude-sonnet-4' } })).toEqual({});
 });
 
 test('defaults are kept per user, and none kept is the pipeline’s own', () => {

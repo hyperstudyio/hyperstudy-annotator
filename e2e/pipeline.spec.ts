@@ -789,3 +789,31 @@ test('a key saved in the keychain always has a row, where it can be removed, eve
   await hf.getByRole('button', { name: 'Remove the Hugging Face key' }).click();
   await expect(unused).toHaveCount(0);
 });
+
+test('a key saved earlier has a row even when the pipeline cannot list its steps, so it can be removed', async ({ page }) => {
+  await page.goto('/?pipeline-demo=old-cli-hf');   // a Hugging Face key from 0.0.2, and a pipeline before steps were listed
+  const settings = await settingsAt(page, /^Models$/);
+  const hf = settings.getByRole('listitem', { name: 'Hugging Face key' });
+  await expect(hf).toContainText('Saved in the keychain');
+  await hf.getByRole('button', { name: 'Remove the Hugging Face key' }).click();
+  await expect(hf).toHaveCount(0);
+});
+
+test('changing the captions default in Settings changes what Extract plans next, even after it planned with the old one', async ({ page }) => {
+  await page.goto('/?pipeline-demo');
+  let settings = await settingsAt(page, /^Models$/);
+  await settings.getByRole('combobox', { name: 'Shot captions: model' }).selectOption('claude-opus-5-5');
+  await toExtract(page);
+  const extract = page.getByRole('region', { name: 'Extract' });
+  await extract.getByRole('button', { name: 'Choose a video…' }).click();
+  await extract.getByRole('checkbox', { name: 'Run Shot captions' }).check();
+  const captions = extract.getByRole('listitem', { name: 'captions' });
+  await expect(captions).toContainText('$6.24');                                          // Opus
+  settings = await settingsAt(page, /^Models$/);
+  await settings.getByRole('combobox', { name: 'Shot captions: model' }).selectOption('claude-haiku-5-5');
+  await toExtract(page);
+  await expect(captions).toContainText('$0.16');                                          // Haiku: the new default, not the old one kept
+  await extract.getByRole('button', { name: 'Start run' }).click();
+  const runs = await page.evaluate(() => (window as unknown as { __pipelineRuns: { settings: Record<string, Record<string, string>> }[] }).__pipelineRuns);
+  expect(runs.at(-1)!.settings.captions?.model ?? 'claude-haiku-5-5').toBe('claude-haiku-5-5');
+});

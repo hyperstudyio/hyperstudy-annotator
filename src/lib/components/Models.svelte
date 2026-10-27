@@ -31,9 +31,12 @@
   const gated = $derived((models?.models ?? []).filter((m) => m.gated));
   const used = $derived(new Set(steps.flatMap((s) => s.secrets)));
   const hf = $derived(key('HF_TOKEN'));
-  // a key the app keeps that no step names: from an older pipeline (no steps listed: the Anthropic key, as before)
-  const leftover = $derived(models?.nodes ? rows.filter((r) => r.stored && !used.has(r.name) && r.name !== 'RUNPOD_API_KEY' && !(r.name === 'HF_TOKEN' && gated.length)) : []);
+  // a pipeline that does not list its steps: the Anthropic key, as before
   const anthropicOld = $derived(!models?.nodes ? key('ANTHROPIC_API_KEY') : undefined);
+  // every other key saved that no step here names (0.0.2 listed every key): it still reaches the pipeline's commands,
+  // so it always has a row, where it can be removed (RunPod's is in Compute, with RunPod)
+  const leftover = $derived(rows.filter((r) => r.stored && r.name !== 'RUNPOD_API_KEY' && !used.has(r.name)
+    && !(r.name === 'HF_TOKEN' && gated.length) && !(anthropicOld && r.name === 'ANTHROPIC_API_KEY')));
   let defaults = $state(loadDefaults());
   const valueOf = (s: StepInfo, k: string, fallback: string | null) => defaults[s.node]?.[k] ?? fallback ?? '';
   const choose = (s: StepInfo, k: string, v: string) => { defaults = saveDefault(s.node, k, v); };

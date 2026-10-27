@@ -7,7 +7,7 @@
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
   import type { RunStatus } from './Rail.svelte';
-  import { defaultsToApply, loadDefaults } from '../stepDefaults';
+  import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
     settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
@@ -49,7 +49,10 @@
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
   let wanted = $state<Set<string> | null>(null);   // the features on (null: the first plan's defaults)
   let ticked = $state<Ticked>({});   // the ones the user turned on themselves, with what they sent then: all they may send
-  let settings = $state<Settings>({});   // settings the user chose: node -> key -> value
+  let settings = $state<Settings>({});   // settings the user chose for this run: node -> key -> value
+  // the defaults chosen in Settings > Models for the plan's steps, apart from this run's choices: found again from each
+  // plan, so a default changed in Settings is what the next plan and run take
+  let fromDefaults = $state<Settings>({});
   let open = $state<string | null>(null);   // the step whose details show
   let msgs = $state.raw<PipelineMessage[]>([]);
   let arrived = $state.raw<number[]>([]);   // when each message came: a step's progress is its time running against its estimate
@@ -211,7 +214,7 @@
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
-  const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; open = null; await makePlan(); };
+  const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; fromDefaults = {}; open = null; await makePlan(); };
   // choosing another machine is the choice to send this step's inputs there (what the plan says it would send)
   const choosePlace = async (node: string, place: string) => {
     const agreed = plan && placeTick(plan.nodes.find((n) => n.id === node)!, place);
@@ -231,11 +234,12 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    newestPlan(api.plan(graph, video, places, settings), (p) => {
-        // the defaults chosen in Settings > Models, where this run has not chosen otherwise: planned again with them
-        const missing = defaultsToApply(p, settings, loadDefaults());
-        if (Object.keys(missing).length) {
-          settings = Object.fromEntries([...new Set([...Object.keys(settings), ...Object.keys(missing)])].map((n) => [n, { ...settings[n], ...missing[n] }]));
+    newestPlan(api.plan(graph, video, places, withDefaults(fromDefaults, settings)), (p) => {
+        // the defaults chosen in Settings > Models, where this run has not chosen otherwise: planned again when they are
+        // not the ones this plan had (the first plan, or a default changed in Settings since)
+        const now = defaultsFor(p, settings, loadDefaults());
+        if (JSON.stringify(now) !== JSON.stringify(fromDefaults)) {
+          fromDefaults = now;
           makePlan(true);
           return;
         }
@@ -246,7 +250,7 @@
   const run = () => step('Starting…', async () => {
     started = true; msgs = []; arrived = []; now = Date.now();
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
-    try { stop = await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, settingsFor(settings, pick.chosen), spendingCap(active!, pick.chosen), on); }
+    try { stop = await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, settingsFor(withDefaults(fromDefaults, settings), pick.chosen), spendingCap(active!, pick.chosen), on); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
