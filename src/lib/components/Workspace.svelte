@@ -3,7 +3,7 @@
   // piece HyperStudy embeds: give it a Session and the BundleSource it came from.
   // Keys (the prototype's settled scheme): Space play/pause the whole video · Shift+Space play the selection · L loop
   // on/off · ←/→ previous/next segment in the selected row · Shift+←/→ one second · , . shots · j k review queue ·
-  // e include · [ ] annotate · 1-9 o m u x speaker · Esc stop and deselect · Cmd+Z undo · \ the panel.
+  // [ ] annotate · 1-9 o m u x speaker · Esc stop and deselect · Cmd+Z undo · \ the panel.
   import type { Snippet } from 'svelte';
   import { provideSession } from '../model/context';
   import type { Session } from '../model/session.svelte';
@@ -70,7 +70,6 @@
       s.marking = pb.time; s.toast('Start marked; press ] at the end');
     }
     else if (k === ']') { if (s.marking !== null && s.activeType) { const a = s.marking, b = pb.time; s.addNote(s.activeType, Math.min(a, b), Math.max(a, b)); } }
-    else if (k === 'e' && sel && sel.kind !== 'note') s.commit({ op: 'entity.include', id: sel.id, included: !s.included(sel) });
     else if (utt && /^[1-9]$/.test(k)) { const c = s.bundle.prediction.get(utt.id)?.candidates[Number(k) - 1]; if (c) s.setSpeaker(utt, { kind: 'face', face: c.face }); }
     else if (utt && k === 'o') s.setSpeaker(utt, { kind: 'offscreen', voice: utt.voice });
     else if (utt && k === 'm') s.setSpeaker(utt, { kind: 'multiple' });

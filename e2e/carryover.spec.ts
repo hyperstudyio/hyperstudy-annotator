@@ -26,8 +26,9 @@ test('while the carry-over offer is open, workspace keys do nothing and focus is
   await expect(page.locator('.viewer')).toHaveAttribute('inert', '');
   await expect(offer).toBeVisible();                                   // the log is still empty: the offer stands
   await offer.getByRole('button', { name: 'Start fresh' }).click();
-  await page.getByRole('navigation', { name: 'Panel' }).getByRole('button', { name: 'Details' }).click();
-  await expect(page.getByText('None yet. Edits are saved as you make them.')).toBeVisible();   // nothing was committed under it
+  // nothing was committed under it: this run's log, as browser mode keeps it, is still empty
+  const log = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '[]'), `hyperstudy-annotator:corrections:${sha}:${RUN}/bundle-l4`);
+  expect(log).toEqual([]);
 });
 
 test('what could not be carried over is listed with a Dismiss button that says which correction it removes', async ({ page }) => {
@@ -65,8 +66,7 @@ test('the "which run?" question for a file found next to the bundle is asked onl
     localStorage.setItem(record, JSON.stringify({ from_bundle_id: 'x', status: 'declined', carried: 0, unmatched: [], created_at: '' }));
   }, [`hyperstudy-annotator:corrections:${sha}:${RUN}/bundle-l4`, `hyperstudy-annotator:carryover:${RUN}/bundle-l4`]);
   await page.goto(URL);
-  await page.getByRole('navigation', { name: 'Panel' }).getByRole('button', { name: 'Details' }).click();
-  await expect(page.getByText('1 edit, saved as you make them.')).toBeVisible();
+  await expect(page.locator('.bar.caption[title="mine"]')).toHaveCount(1);   // this run's own edit is loaded: the log is not empty
   await fileServed;   // the found-file check has the file; two frames for it to finish and render
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   await expect(page.getByText(/do not say which of this video's \d+ runs/)).toHaveCount(0);

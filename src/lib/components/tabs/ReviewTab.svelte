@@ -82,8 +82,8 @@
       <span class="meta">{fmt(x.start)}</span>
       <button class="link grow left" onclick={() => s.select('sound', x.id)}>{x.label}</button>
       <button onclick={() => s.playback.playClip(x)}>Play</button>
-      <button class:on={s.S.included[x.id] === true} onclick={() => s.commit({ op: 'entity.include', id: x.id, included: true })}>Keep</button>
-      <button class:on={s.S.included[x.id] === false} onclick={() => s.commit({ op: 'entity.include', id: x.id, included: false })}>Exclude</button>
+      <button class:on={s.S.included[x.id] === true} onclick={() => s.commit({ op: 'entity.include', id: x.id, included: true })} title="This sound is there">Real</button>
+      <button class:on={s.S.included[x.id] === false} onclick={() => s.commit({ op: 'entity.include', id: x.id, included: false })} title="Nothing like this sound is there: it is left out of the export's included sounds">Not there</button>
     </div>
   {/each}
 </div>

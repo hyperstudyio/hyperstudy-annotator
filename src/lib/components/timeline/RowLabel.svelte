@@ -8,8 +8,10 @@
   import Crop from '../ui/Crop.svelte';
   import Swatch from '../ui/Swatch.svelte';
   import Name from '../ui/Name.svelte';
+  import ModelInfo from './ModelInfo.svelte';
 
-  let { row, ongrip, onhide }: { row: Row; ongrip?: (e: PointerEvent) => void; onhide?: () => void } = $props();
+  // `info`: a timeline group whose models an ⓘ beside the label lists (the shot rows, which are in no group)
+  let { row, ongrip, onhide, info }: { row: Row; ongrip?: (e: PointerEvent) => void; onhide?: () => void; info?: string } = $props();
   const s = useSession();
   const L = $derived(row.label);
   const clickable = $derived(L.kind === 'person' || L.kind === 'object' || L.kind === 'type');
@@ -53,6 +55,7 @@
   {:else}
     <span class="text">{L.text}</span>
   {/if}
+  {#if info}<ModelInfo group={info} title={L.kind === 'text' ? L.text : info} />{/if}
   {#if onhide}
     <button class="hide" title="Hide this row" aria-label="Hide this row" onclick={(e) => { e.stopPropagation(); onhide(); }}>
       <svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M2 2l6 6M8 2 2 8" stroke="currentColor" stroke-width="1.5" /></svg>

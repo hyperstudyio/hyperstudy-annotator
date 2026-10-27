@@ -1,7 +1,7 @@
 <script lang="ts">
   // The video's name (the app's switcher between videos, when it gives one) and Export, which saves the annotated
   // result: the pipeline's layers with your edits applied. Everything else about the video is the Details tab. Imports
-  // edits from a file when the Details tab asks (s.importEdits), and offers to import the annotator prototype's edits
+  // edits from a file when asked (the switcher's Import edits…, File > Import Edits…: app:import-edits), and offers to import the annotator prototype's edits
   // when its file sits next to the bundle; the questions an import can raise are asked here, under the header.
   // In the interface the bundle is the video's annotation, and the op log is its edits.
   import { useSession, useSource } from '../model/context';
@@ -58,8 +58,7 @@
     try { if (await source.saveCorrectionsFile(`${source.title}.annotated.json`, serialiseAnnotated(annotated(s, { title: source.title })))) s.toast(`Exported ${source.title}`); }
     catch (e) { s.toast(`Could not save: ${e}`); }
   }
-  // svelte-ignore state_referenced_locally
-  s.importEdits = importFile;
+  $effect(() => { window.addEventListener('app:import-edits', importFile); return () => window.removeEventListener('app:import-edits', importFile); });
   $effect(() => { window.addEventListener('app:export', exportFile); return () => window.removeEventListener('app:export', exportFile); });   // File > Export…
 </script>
 

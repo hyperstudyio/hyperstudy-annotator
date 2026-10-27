@@ -13,6 +13,7 @@
   import { fmt } from '../../geometry';
   import { plural, NEUTRAL } from '../../model/session.svelte';
   import Popover from '../ui/Popover.svelte';
+  import ModelInfo from './ModelInfo.svelte';
   import RowLabel from './RowLabel.svelte';
   import PlotCanvas from './PlotCanvas.svelte';
 
@@ -274,14 +275,25 @@
 
       {#if s.bundle.shots.length}
         <div class="lane">
-          <RowLabel row={{ id: 'shots', label: { kind: 'text', text: 'Shots' }, bars: [] }} />
+          <RowLabel row={{ id: 'shots', label: { kind: 'text', text: 'Shots' }, bars: [] }} info="shots" />
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div class="lane-body" style="width:{duration * pps}px; height:{ROW_H + 2}px" onpointerdown={(e) => bodyDown(e, { id: 'shots', label: { kind: 'text', text: '' }, bars: [] })}>
             {@render bars(s.bundle.shots.map((x) => ({ key: x.id, start: x.start, end: x.end, text: String(x.index + 1), sel: { kind: 'shot', id: x.id },
-              flags: ['shot', ...(x.index % 2 ? ['odd' as const] : []), ...(s.isSel('shot', x.id) ? ['selected' as const] : []), ...(s.includedId(x.id) ? [] : ['excluded' as const])],
-              title: `Shot ${x.index + 1}: ${fmt(x.start)}–${fmt(x.end)}\n${s.S.caption[x.id] ?? x.caption?.description ?? ''}` })))}
+              flags: ['shot', ...(x.index % 2 ? ['odd' as const] : []), ...(s.isSel('shot', x.id) ? ['selected' as const] : [])],
+              title: `Shot ${x.index + 1}: ${fmt(x.start)}–${fmt(x.end)}` })))}
           </div>
         </div>
+        {#if s.bundle.shots.some((x) => x.caption?.description || s.S.caption[x.id])}
+          <!-- each shot's caption in its own span: the words to read along, the whole of it on hover; a click opens it to edit -->
+          <div class="lane">
+            <RowLabel row={{ id: 'captions', label: { kind: 'text', text: 'Captions' }, bars: [] }} />
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="lane-body" style="width:{duration * pps}px; height:{ROW_H + 2}px" onpointerdown={(e) => bodyDown(e, { id: 'captions', label: { kind: 'text', text: '' }, bars: [] })}>
+              {@render bars(s.bundle.shots.map((x) => { const c = s.S.caption[x.id] ?? x.caption?.description ?? ''; return { key: `caption-${x.id}`, start: x.start, end: x.end, text: (x.end - x.start) * pps >= 40 ? c : '',
+                sel: { kind: 'shot', id: x.id }, flags: ['caption', ...(s.isSel('shot', x.id) ? ['selected' as const] : [])], title: c || `Shot ${x.index + 1} has no caption` }; }))}
+            </div>
+          </div>
+        {/if}
       {/if}
 
       {#each arranged as { group, collapsed, hiddenHere, rows } (group.key)}
@@ -295,6 +307,7 @@
             <svg class="chev" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d={collapsed ? 'M3 1l4 4-4 4' : 'M1 3l4 4 4-4'} fill="none" stroke="currentColor" stroke-width="1.6" /></svg>
             <span class="text">{group.label}</span>
             <span class="count">{group.count}</span>
+            <ModelInfo group={group.key} title={group.label} />
             {#if hiddenHere.length}<button class="link restore" title="Show hidden rows" onclick={(e) => { e.stopPropagation(); s.view.showRows(hiddenHere); }}>+{hiddenHere.length} hidden</button>{/if}
           </div>
           <div class="lane-body" style="width:{duration * pps}px; height:{collapsed ? 24 : 22}px">
@@ -373,6 +386,7 @@
          text-overflow: clip; cursor: pointer; color: #111; border: 0; text-align: left; background: #8a8a8a; }
   .bar:hover { filter: brightness(1.12); }
   .bar.vis { height: 6px; opacity: .55; border-radius: 3px; }
+  .bar.caption { background: var(--color-bg-elevated); color: var(--color-text-secondary); text-align: left; text-overflow: ellipsis; border: 1px solid var(--color-border-default); }
   .bar.speech { height: 10px; border-radius: 3px; padding: 0; }   /* when a person speaks; the words are in the transcript row */
   .bar.draggable { cursor: grab; }
   .bar.excluded { background: transparent !important; border: 1px dashed var(--color-text-muted); color: var(--color-text-muted); }

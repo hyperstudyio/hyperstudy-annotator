@@ -9,7 +9,7 @@ import { fmt } from '../geometry';
 import type { ProsodyCaption, Span, Utterance } from '../types';
 
 export const ROW_H = 22;
-export type BarFlag = 'excluded' | 'unconfirmed' | 'flagged' | 'selected' | 'vis' | 'speech' | 'shot' | 'odd' | 'neutral';
+export type BarFlag = 'excluded' | 'unconfirmed' | 'flagged' | 'selected' | 'vis' | 'speech' | 'shot' | 'odd' | 'neutral' | 'caption';
 
 export interface Bar extends Span {
   key: string;

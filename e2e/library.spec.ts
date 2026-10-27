@@ -16,8 +16,8 @@ async function needsData(page: Page) {
   const res = await page.request.get('/devdata/runs/ooo-genz-clip1/bundle/manifest.json');
   test.skip(!res.ok(), 'the bake-off data is not served at /devdata');
 }
-/** The viewer, loaded: its shot, under the video. */
-const loaded = (page: Page) => expect(page.getByRole('heading', { level: 2, name: /^Shot 1 of / })).toBeVisible();
+/** The viewer, loaded: Inspect waiting for a selection, beside the video. */
+const loaded = (page: Page) => expect(page.getByText('Select a face on the video, or anything on the timeline, to edit it here.')).toBeVisible();
 const panel = (page: Page) => page.getByRole('navigation', { name: 'Panel' });
 
 test('the page is the annotator: it opens the newest bundle, not a list to get through first', async ({ page }) => {
@@ -72,7 +72,7 @@ test('a bundle without its video asks for it, then opens', async ({ page }) => {
   await expect(page.getByText('ooo-genz-clip2 needs its video.')).toBeVisible();
   await page.getByRole('button', { name: 'Locate video…' }).click();
   await expect(page.getByText('ooo-genz-clip2 needs its video.')).toHaveCount(0);
-  await expect(page.getByRole('heading', { level: 2, name: /^Shot 1 of / })).toBeVisible();   // the viewer, loaded
+  await loaded(page);
   await expect(await video(page, 'ooo-genz-clip2')).not.toContainText('No video');
 });
 
@@ -102,19 +102,48 @@ test('the rail is as wide as its labels, however large the system draws them', a
 
 // --- the viewer: its panel, its timeline's layers, and the export ------------------------------------------------------
 
-test('the Details tab says what the video is, what may be done with it, and its layers', async ({ page }) => {
+test('a timeline group says which models made it, each linked to its page, and what its licence allows', async ({ page }) => {
   await needsData(page);
   await page.goto('/?library-demo');
   await loaded(page);
-  await panel(page).getByRole('button', { name: 'Details' }).click();
-  await expect(panel(page).getByRole('button', { name: 'Details' })).toHaveAttribute('aria-pressed', 'true');
-  const manifest = await (await page.request.get('/devdata/runs/ooo-genz-clip1/bundle/manifest.json')).json();
-  await expect(page.getByRole('heading', { level: 2, name: manifest.video.filename ?? 'This video' })).toBeVisible();
-  await expect(page.locator('p.licence')).toHaveText('Academic use only');          // the strictest of its layers
-  await expect(page.getByRole('heading', { name: 'Layers' })).toBeVisible();
-  for (const name of Object.keys(manifest.layers))
-    await expect(page.locator('.layers').getByText(name.charAt(0).toUpperCase() + name.slice(1), { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Import edits from a file…' })).toBeVisible();
+  const info = page.getByRole('button', { name: 'The models behind Audio & speech', exact: true });
+  await page.locator('[data-group-header="audio"] .lane-label').hover();
+  await info.click();
+  const models = page.getByRole('dialog', { name: 'The models behind Audio & speech' });
+  await expect(models.getByRole('button', { name: 'nvidia/parakeet-tdt-0.6b-v3' })).toBeVisible();   // a link: its page is known
+  await expect(models.getByText('mlx-community conversion')).toBeVisible();                         // the rest of its id, as a note
+  await expect(models.getByText('Commercial use allowed').first()).toBeVisible();
+  // drawn above the timeline's labels, not under them
+  const box = (await models.boundingBox())!;
+  const top = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('[role=dialog]'), [box.x + 8, box.y + box.height / 2]);
+  expect(top).toBe(true);
+});
+
+test('Inspect edits the one thing selected; Back returns to what was selected before', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  await expect(page.getByText(/agents/i)).toHaveCount(0);
+  await page.locator('.bar.caption').nth(10).click();   // a shot's caption, on the timeline
+  await expect(page.getByRole('textbox', { name: 'Shot caption' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'People in this shot' })).toHaveCount(0);   // the timeline shows them
+  const shot = await page.getByRole('heading', { level: 2, name: /^Shot \d+ of / }).textContent();
+  await page.locator('.bar.speech, .bar.vis').first().click();   // something else on the timeline
+  await expect(page.getByRole('heading', { level: 2, name: /^Shot \d+ of / })).toHaveCount(0);
+  await page.getByRole('button', { name: '← Back' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: shot! })).toBeVisible();
+});
+
+test('People opens a person in place, and All people goes back to the list', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  await panel(page).getByRole('button', { name: 'People' }).click();
+  await page.locator('.drawer-panel .item').first().click();
+  await expect(panel(page).getByRole('button', { name: 'People' })).toHaveAttribute('aria-pressed', 'true');   // still People
+  await expect(page.getByRole('heading', { name: 'Appearances' })).toBeVisible();
+  await page.getByRole('button', { name: '← All people' }).click();
+  await expect(page.getByText('Who face clustering found.', { exact: false })).toBeVisible();
 });
 
 test('the keyboard keys show only when asked for, by ? or its button', async ({ page }) => {
@@ -162,17 +191,3 @@ test('Export saves the annotated result, with the edits, as <title>.annotated.js
   expect(Array.isArray(saved.edits)).toBe(true);
 });
 
-test('an on/off switch in the panel looks on when on and off when off (the switcher\'s style is its own)', async ({ page }) => {
-  await page.goto('/?library-demo');
-  await needsData(page);
-  await loaded(page);
-  const toggle = page.locator('.toggle', { hasText: 'Send this caption to agents' });
-  const track = toggle.locator('.switch');
-  const colour = () => track.evaluate((el) => getComputedStyle(el).backgroundColor);
-  const before = await colour();
-  const was = await toggle.locator('input').isChecked();
-  await toggle.click();
-  await expect(toggle.locator('input')).toBeChecked({ checked: !was });
-  await expect.poll(colour).not.toBe(before);   // after its 0.15 s transition
-  expect(before).not.toBe('rgba(0, 0, 0, 0)');   // drawn either way, not see-through
-});

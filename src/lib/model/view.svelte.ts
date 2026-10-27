@@ -9,7 +9,7 @@ export interface OverlayLayers {
   landmarks: boolean; gaze: boolean; smooth: boolean;
 }
 export type GazeSource = 'gaze_lle' | 'pyfeat';
-export type Tab = 'inspect' | 'review' | 'people' | 'notes' | 'data';
+export type Tab = 'inspect' | 'review' | 'people' | 'notes';
 
 export interface ViewState {
   collapsed: string[];

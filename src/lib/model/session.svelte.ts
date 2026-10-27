@@ -82,8 +82,6 @@ export class Session {
   modal = $state(false);
   /** The panel shows the keyboard keys (? toggles it). */
   help = $state(false);
-  /** Pick an edits file and import it (the header owns the import and its questions; the Details tab asks for it). */
-  importEdits: (() => void) | null = null;
   /** What this version carried over from an earlier one (the ops it could not match wait for review). */
   carry = $state<CarryRecord | null>(null);
   /** The name being edited, as "<id>@<area>" (a rename link opens the editor of the name in that area). */
@@ -336,7 +334,8 @@ export class Session {
 
   select(kind: SelKind, id: string, { seek = true } = {}) {
     this.selection = { kind, id };
-    if (!(this.tab === 'review' && (kind === 'utt' || kind === 'sound'))) this.tab = 'inspect';
+    // Review keeps its place while you work down its list, and People opens a person where you are
+    if (!(this.tab === 'review' && (kind === 'utt' || kind === 'sound')) && !(this.tab === 'people' && kind === 'person')) this.tab = 'inspect';
     if (seek) { const span = this.spanOf(this.selection); if (span) this.playback.seek(span.start, { keepClip: true }); }
   }
 

@@ -1,11 +1,10 @@
 <script lang="ts">
-  // A gesture, a facing event or a gaze event: who, when, how sure, and whether agents receive it.
+  // A gesture, a facing event or a gaze event: who, when and how sure.
   import { useSession } from '../../model/context';
   import { fmt } from '../../geometry';
   import { facingLabel, gazeLabel } from '../../timeline/rows';
   import type { SelKind } from '../../model/session.svelte';
   import type { FacingEvent, GazeEvent, GestureEvent } from '../../types';
-  import Toggle from '../ui/Toggle.svelte';
 
   let { kind, id }: { kind: Extract<SelKind, 'gesture' | 'facing' | 'gaze'>; id: string } = $props();
   const s = useSession();
@@ -47,6 +46,4 @@
     <div class="meta">{model}</div>
   {/if}
   {#if kind === 'gesture' && (e as GestureEvent).score !== undefined}<div class="meta">score {Number((e as GestureEvent).score).toFixed(2)}</div>{/if}
-  <h3>Send to agents</h3>
-  <Toggle label="Include this (switch off if it is wrong)" checked={s.includedId(id)} onchange={(v) => s.commit({ op: 'entity.include', id, included: v })} />
 {/if}

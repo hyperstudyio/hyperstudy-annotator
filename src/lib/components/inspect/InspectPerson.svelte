@@ -3,7 +3,6 @@
   import { fmt } from '../../geometry';
   import { NOT_PERSON, UNKNOWN } from '../../model/corrections';
   import { coVisible, plural } from '../../model/session.svelte';
-  import Toggle from '../ui/Toggle.svelte';
   import Crop from '../ui/Crop.svelte';
   import Swatch from '../ui/Swatch.svelte';
   import Name from '../ui/Name.svelte';
@@ -50,7 +49,7 @@
   </div>
 {/each}
 {#if p === UNKNOWN}<div class="callout">Faces the clustering could not match to anyone. Open each track to assign it.</div>{/if}
-{#if p === NOT_PERSON}<div class="callout">Detections that are not a person: false detections, or faces in pictures and on screens. Agents never receive these.</div>{/if}
+{#if p === NOT_PERSON}<div class="callout">Detections that are not a person: false detections, or faces in pictures and on screens.</div>{/if}
 {#if !s.special(p)}
   {#each sameName as q (q)}
     <div class="callout info">
@@ -78,8 +77,6 @@
     <button onclick={notPerson}>Not a person</button>
     <span class="meta">false detection, or a face in a picture or on a screen</span>
   </div>
-  <h3>Send to agents</h3>
-  <Toggle label={`Include ${s.nameOf(p)}`} checked={s.includedPerson(p)} onchange={(v) => s.commit({ op: 'entity.include', id: p, included: v })} />
 {/if}
 <h3>Appearances</h3>
 <div class="list">

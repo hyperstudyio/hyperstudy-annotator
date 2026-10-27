@@ -77,6 +77,7 @@
       </ul>
       <div class="menu-sep"></div>
       <button class="menu-item" onclick={() => { close(); importBundle(); }} disabled={!!busy}><span class="tick"></span>Import…</button>
+      {#if source}<button class="menu-item" onclick={() => { close(); window.dispatchEvent(new Event('app:import-edits')); }}><span class="tick"></span>Import edits into this video…</button>{/if}
       <button class="menu-item" onclick={() => { close(); onextract(); }}><span class="tick"></span>Extract from a video…</button>
     {/snippet}
   </Popover>
