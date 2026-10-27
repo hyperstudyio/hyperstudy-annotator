@@ -20,6 +20,10 @@ export function newType(draft: AnnotationType, id: string): AnnotationType {
   return { id, name: name.trim(), kind, target, options: kind === 'category' ? [...options] : [],
     ...(kind === 'number' && min !== undefined ? { min } : {}), ...(kind === 'number' && max !== undefined ? { max } : {}) };
 }
+/** The edit that changes a type's kind: what the old kind used (its categories, its range) goes with it. */
+export function kindChange(kind: ValueKind): TypeFields {
+  return { kind, ...(kind === 'category' ? {} : { options: [] }), ...(kind === 'number' ? {} : { min: null, max: null }) };
+}
 export function applyTypeFields(t: AnnotationType, fields: TypeFields) {
   for (const [k, v] of Object.entries(fields)) { if (v === null) delete t[k as 'min' | 'max']; else Object.assign(t, { [k]: v }); }
 }
