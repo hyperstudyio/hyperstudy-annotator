@@ -4,6 +4,8 @@
   // sends a step's inputs. RunPod is set up with its API key (kept in the keychain, KeyRow: replaced or tested there,
   // never removed on its own); AWS uses the AWS credentials on this computer, through SkyPilot. Adding one checks it can
   // be used first; Test checks again, changing nothing (`perception cloud check`); Remove takes RunPod's key with it.
+  // RunPod's Test is its key's: `cloud check runpod` and `keys check RUNPOD_API_KEY` make the same request (RunPod
+  // lists your pods with the key), so a second Test beside it would only repeat it. AWS has no key row: its Test is here.
   import KeyRow from './KeyRow.svelte';
   import { openExternal } from '../links';
   import { keyRows, provider, tooOld, type CheckResult, type CliKeys, type CloudProviderName, type CloudStatus, type KeyStatus, type PipelineApi } from '../pipeline';
@@ -47,8 +49,8 @@
     })) { changed(p); adding = null; }
   };
   // What a Test said is shown only while what it was said of is unchanged: the provider (each time it is added or
-  // removed, and RunPod's key each time it is saved here) and where RunPod's key is found. A Test that answers after
-  // the key changed, or about another provider, is not shown as the new one's.
+  // removed, and RunPod's key each time it is saved here) and where RunPod's key is found. RunPod's own Test, shown
+  // while its key has gone, says so: adding the key is the next thing done, and the answer is not the new key's.
   let changes = $state<Record<CloudProviderName, number>>({ aws: 0, runpod: 0 });
   const changed = (p: CloudProviderName) => { changes = { ...changes, [p]: changes[p] + 1 }; };
   const about = (p: CloudProviderName) => `${changes[p]}|${p === 'runpod' ? `${runpodKey?.stored}|${runpodKey?.elsewhere ?? ''}` : ''}`;
@@ -69,6 +71,9 @@
     if (p === 'runpod' && runpodKey?.stored) onkeys(await api.removeKey('RUNPOD_API_KEY'));
   });
   // RunPod's machine is whichever of its GPUs is free: its price is the most of theirs
+  // a provider set up with a key is tested through its key's row, while the key is there to test (stored, or found by
+  // the CLI); a key gone since RunPod was added leaves RunPod's own Test, which says so
+  const keyed = (p: CloudProviderName) => p === 'runpod' && !!runpodKey && (runpodKey.stored || !!runpodKey.elsewhere);
   const price = (p: CloudProviderName) => `${p === 'runpod' ? 'up to ' : ''}$${provider(cloud, p)!.hourly_usd.toFixed(2)} an hour`;
   const focus = (el: HTMLElement) => { el.focus(); };
 </script>
@@ -91,7 +96,7 @@
           <div class="head">
             <strong>{NAMES[p]}</strong>
             <span class="muted">{provider(cloud, p)!.machine.replace(/^(RunPod, |AWS )/, '')}, {price(p)}</span>
-            <button class="plain" onclick={() => test(p)} disabled={!!busy} aria-label={`Test ${NAMES[p]}`} title="Check it can be used now, changing nothing">Test</button>
+            {#if !keyed(p)}<button class="plain" onclick={() => test(p)} disabled={!!busy} aria-label={`Test ${NAMES[p]}`} title="Check it can be used now, changing nothing">Test</button>{/if}
             <button class="plain danger" onclick={() => remove(p)} disabled={!!busy} aria-label={`Remove ${NAMES[p]}`} title={p === 'runpod' ? 'Its API key is removed with it' : undefined}>Remove</button>
           </div>
           {#if tested[p]}<p class="tested" class:ok={tested[p]!.ok} class:error={!tested[p]!.ok} role="status">{tested[p]!.ok ? `✓ ${NAMES[p]} can be used` : tested[p]!.detail}.</p>{/if}

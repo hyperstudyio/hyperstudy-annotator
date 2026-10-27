@@ -47,7 +47,9 @@ dialogs by hand, is still open).
   effort: kept per user by step ref, applied by Extract where a run has not chosen otherwise, stepDefaults.ts), and what
   it needs: its provider's key, or access to a gated model and the Hugging Face key. A key no step uses is listed apart
   so it can be removed. Every key, cloud provider and server has a Test (`perception keys check`, `cloud check`,
-  `hosts check`; perception #3), and a cloud provider has one Remove, which takes its key. A server is added from a host
+  `hosts check`; perception #3), and a cloud provider has one Remove, which takes its key. A provider set up with a key
+  (RunPod) has one Test, its key's: `cloud check runpod` and `keys check RUNPOD_API_KEY` make the same request (RunPod
+  lists your pods with the key), so a second would only repeat it. Its own Test shows only while the key is gone. A server is added from a host
   in ~/.ssh/config (or user@host), tested before it is added (`hosts probe`: nothing added, nothing made there), with
   user, port, key file and folder under Advanced; ssh is the user's own, in batch mode (no passwords).
 - **The annotator's panel (2026-10-26, Luke).** Inspect edits the one thing selected (who a face is, who speaks and what

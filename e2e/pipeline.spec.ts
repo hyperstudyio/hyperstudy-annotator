@@ -719,9 +719,9 @@ test('the menu on a step\'s row moves it and plans again; a step with one place 
   await expect(asr.locator('.where')).toHaveText('Apple GPU');
 });
 
-// --- cloud GPU providers, added in Settings > Machines ----------------------------------------------------------------
+// --- cloud GPU providers, added in Settings > Compute -----------------------------------------------------------------
 
-test('a cloud provider is tested and removed from its own row: its key is not removed apart from it', async ({ page }) => {
+test('RunPod has one Test and one Remove: Test is its key\'s (the same request), Remove takes the key with it', async ({ page }) => {
   await page.goto('/?pipeline-demo=remote');
   const settings = await settingsAt(page, /^Compute$/);
   const cloud = settings.getByRole('region', { name: 'Cloud GPU' });
@@ -732,10 +732,28 @@ test('a cloud provider is tested and removed from its own row: its key is not re
   const runpod = cloud.getByRole('listitem', { name: 'RunPod', exact: true });
   await expect(runpod.getByRole('button', { name: /^Remove/ })).toHaveCount(1);         // one Remove: RunPod's, not its key's
   await expect(runpod.getByRole('button', { name: 'Remove the RunPod key' })).toHaveCount(0);
-  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
-  await expect(runpod.getByRole('status').filter({ hasText: 'can be used' })).toHaveText('✓ RunPod can be used.');
-  await runpod.getByRole('button', { name: 'Test the RunPod key' }).click();          // the key alone, with RunPod
+  await expect(runpod.getByRole('button', { name: /^Test/ })).toHaveCount(1);           // one Test: the key's
+  await expect(runpod.getByRole('button', { name: 'Test RunPod' })).toHaveCount(0);
+  await runpod.getByRole('button', { name: 'Test the RunPod key' }).click();
   await expect(runpod.getByRole('status').filter({ hasText: 'accepted' })).toHaveText('✓ RunPod accepted the key.');
+  const aws = cloud.getByRole('listitem', { name: 'AWS', exact: true });               // no key of its own: Test is AWS's
+  await expect(aws.getByRole('button', { name: /^Test/ })).toHaveCount(1);
+  await expect(aws.getByRole('button', { name: 'Test AWS' })).toHaveCount(1);
+});
+
+test('RunPod whose key has gone keeps a Test of its own, which says the key is missing', async ({ page }) => {
+  await page.goto('/?pipeline-demo=runpod-key-gone');
+  const settings = await settingsAt(page, /^Compute$/);
+  const runpod = settings.getByRole('region', { name: 'Cloud GPU' }).getByRole('listitem', { name: 'RunPod', exact: true });
+  await expect(runpod.getByRole('listitem', { name: 'RunPod key' })).toContainText('Not set.');
+  await expect(runpod.getByRole('button', { name: 'Test the RunPod key' })).toHaveCount(0);   // nothing for the key to test
+  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
+  await expect(runpod.locator('p.tested')).toHaveText('no RunPod API key.');
+  await runpod.getByRole('button', { name: 'Add the RunPod key' }).click();         // the next thing done
+  await runpod.getByRole('textbox', { name: 'RunPod key' }).fill('rp-good');
+  await runpod.getByRole('button', { name: 'Save' }).click();
+  await expect(runpod.getByRole('listitem', { name: 'RunPod key' })).toContainText('Saved in the keychain');
+  await expect(runpod.locator('p.tested')).toHaveCount(0);                            // said of the key before
 });
 
 test('RunPod is added with its key, is then a place for a step, and removing it removes its key', async ({ page }) => {
@@ -830,7 +848,7 @@ test('a default the pipeline no longer offers is not shown as chosen: the step s
   await expect(settings.getByRole('listitem', { name: 'Shot captions' })).toContainText('Claude Haiku 5.5');
 });
 
-test("a cloud provider's Test result goes when its key is replaced, or it is removed and added again", async ({ page }) => {
+test("RunPod's Test result goes when its key is replaced, or RunPod is removed and added again", async ({ page }) => {
   await page.goto('/?pipeline-demo=remote');
   const settings = await settingsAt(page, /^Compute$/);
   const cloud = settings.getByRole('region', { name: 'Cloud GPU' });
@@ -842,21 +860,21 @@ test("a cloud provider's Test result goes when its key is replaced, or it is rem
   };
   await add('rp-good');
   const runpod = cloud.getByRole('listitem', { name: 'RunPod', exact: true });
-  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
-  const said = runpod.locator('p.tested');
-  await expect(said).toHaveText('✓ RunPod can be used.');
+  await runpod.getByRole('button', { name: 'Test the RunPod key' }).click();
+  const said = runpod.getByRole('status').filter({ hasText: 'accepted' });
+  await expect(said).toHaveText('✓ RunPod accepted the key.');
   await runpod.getByRole('button', { name: 'Replace the RunPod key' }).click();
   await runpod.getByRole('textbox', { name: 'RunPod key' }).fill('rp-other');
   await runpod.getByRole('button', { name: 'Save' }).click();
   await expect(said).toHaveCount(0);                                                     // said of the key before
-  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
+  await runpod.getByRole('button', { name: 'Test the RunPod key' }).click();
   await expect(said).toHaveCount(1);
   await cloud.getByRole('button', { name: 'Remove RunPod' }).click();
   await add('rp-good');
   await expect(said).toHaveCount(0);                                                     // said of the RunPod removed
 });
 
-test("a cloud Test still running when the key is replaced does not show its answer as the new key's", async ({ page }) => {
+test("RunPod's key cannot be replaced while its Test is running, so an answer is never the new key's", async ({ page }) => {
   await page.goto('/?pipeline-demo=remote');
   const settings = await settingsAt(page, /^Compute$/);
   const cloud = settings.getByRole('region', { name: 'Cloud GPU' });
@@ -866,17 +884,11 @@ test("a cloud Test still running when the key is replaced does not show its answ
   const runpod = cloud.getByRole('listitem', { name: 'RunPod', exact: true });
   await page.evaluate(() => { const w = window as unknown as { __holdCheck?: Promise<void>; release?: () => void };
     w.__holdCheck = new Promise((r) => { w.release = r; }); });
-  await runpod.getByRole('button', { name: 'Test RunPod' }).click();                 // the old key's answer, held back
-  await runpod.getByRole('button', { name: 'Replace the RunPod key' }).click();
-  await runpod.getByRole('textbox', { name: 'RunPod key' }).fill('rejected-new');
-  await runpod.getByRole('button', { name: 'Save' }).click();
-  await expect(runpod).toContainText('Saved in the keychain');
+  await runpod.getByRole('button', { name: 'Test the RunPod key' }).click();           // its answer, held back
+  await expect(runpod.getByText('Testing the RunPod key…')).toBeVisible();
+  await expect(runpod.getByRole('button', { name: 'Replace the RunPod key' })).toBeDisabled();
   await page.evaluate(() => (window as unknown as { release: () => void }).release());
-  await expect(runpod.getByText('Testing RunPod…')).toHaveCount(0);
-  await expect(runpod.locator('p.tested')).toHaveCount(0);                            // said of the old key: not shown
-  await page.evaluate(() => { delete (window as unknown as { __holdCheck?: unknown }).__holdCheck; });
-  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
-  await expect(runpod.locator('p.tested')).toHaveText(/did not accept the key/);       // the new key's own answer
+  await expect(runpod.getByRole('status').filter({ hasText: 'accepted' })).toHaveText('✓ RunPod accepted the key.');
 });
 
 test("testing AWS keeps its answer when RunPod's key changes", async ({ page }) => {

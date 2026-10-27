@@ -111,7 +111,7 @@ const KEYS = [
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hfStored = false, oldChecks = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hfStored = false, oldChecks = false, runpodKeyGone = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown }[] = [],
                              added: { name: string; dest: string; overrides?: SshOverrides }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
@@ -130,7 +130,8 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   const stored = new Map<string, string>(hfStored ? [['HF_TOKEN', 'hf_saved_in_0_0_2']] : []);
   const keyStatus = (): KeyStatus[] => KEYS.map((k) => ({ ...k, stored: stored.has(k.name) }));
   const cloud: CloudStatus = { enabled: remote_, machine: 'AWS g6.2xlarge, NVIDIA L4', region: 'us-east-1', hourly_usd: 0.9776,
-    runpod: { enabled: false, machine: 'RunPod, one of L4, RTX 4090, RTX A5000', region: 'any', hourly_usd: 0.69 } };
+    // runpodKeyGone: RunPod added with a key the CLI found then, gone since (unset, or taken out of the keychain elsewhere)
+    runpod: { enabled: runpodKeyGone, machine: 'RunPod, one of L4, RTX 4090, RTX A5000', region: 'any', hourly_usd: 0.69 } };
   const unchecked = (cmd: string) => { if (oldChecks) throw new Error(`the pipeline failed: perception: error: argument action: invalid choice: '${cmd}'`); };
   const older = (cmd = 'hosts') => { if (oldCli || (cmd === 'cloud' && noCloud)) throw new Error(`the pipeline failed: perception: error: argument cmd: invalid choice: '${cmd}'`); };
   let listener: ((m: PipelineMessage) => void) | null = null;
@@ -204,6 +205,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     },
     async checkKey(name) {
       unchecked('check');
+      await (globalThis as { __holdCheck?: Promise<void> }).__holdCheck;
       const key = stored.get(name), who = KEYS.find((k) => k.name === name)!.label;
       return !key ? { ok: false, detail: `${name} is not set` } : key.startsWith('rejected') ? { ok: false, detail: `${who} refused the key` } : { ok: true, detail: `${who} accepted the key` };
     },
