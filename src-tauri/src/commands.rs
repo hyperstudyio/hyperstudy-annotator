@@ -372,13 +372,34 @@ pub async fn pipeline_host(state: State<'_, AppState>, action: String, name: Str
     blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "hosts")).await
 }
 
-/// Whether a cloud GPU is offered to nodes that can use one, and at what price (`perception cloud status|on|off`).
-/// Turning it on checks that SkyPilot can reach AWS with the user's credentials first.
+/// Which cloud GPU providers are offered to nodes that can use one, and at what price (`perception cloud
+/// status|on|off [aws|runpod]`). Turning one on checks it can be used first: AWS through SkyPilot with the user's
+/// credentials, RunPod with its API key (from the keychain, in the CLI's environment).
 #[tauri::command]
-pub async fn pipeline_cloud(state: State<'_, AppState>, on: Option<bool>) -> Result<Value> {
+pub async fn pipeline_cloud(state: State<'_, AppState>, on: Option<bool>, provider: Option<String>) -> Result<Value> {
+    let args = cloud_args(on, provider.as_deref())?;
     let p = pipeline(&state)?;
+    blocking(move || p.one(&args, "cloud")).await
+}
+
+/// The CLI's arguments for `pipeline_cloud`: only the providers the pipeline knows reach its command line. AWS is the
+/// CLI's default and is not named, so a pipeline from before RunPod (no provider argument) still turns it on and off.
+pub fn cloud_args(on: Option<bool>, provider: Option<&str>) -> Result<Vec<&'static str>> {
     let action = match on { None => "status", Some(true) => "on", Some(false) => "off" };
-    blocking(move || p.one(&["cloud", action], "cloud")).await
+    let provider = match provider {
+        None | Some("aws") => None,
+        Some("runpod") => Some("runpod"),
+        Some(other) => return Err(Error::Bundle(format!("not a cloud provider the pipeline has: {other:?}"))),
+    };
+    Ok(std::iter::once("cloud").chain(std::iter::once(action)).chain(provider).collect())
+}
+
+/// The models the pipeline's steps use (`perception models list`): each one's step, licence, size and whether it is
+/// gated (its page asks you to accept terms before it can be downloaded).
+#[tauri::command]
+pub async fn pipeline_models(state: State<'_, AppState>) -> Result<Value> {
+    let p = pipeline_alone(&state)?;   // no keys: listing models needs none
+    blocking(move || p.one(&["models", "list"], "models")).await
 }
 
 // --- the user's keys (keys.rs): stored in the keychain; the web view learns only whether each is ---
@@ -561,6 +582,16 @@ mod tests {
 
     fn idle() -> (Mutex<SetupStatus>, Mutex<Option<String>>) {
         (Mutex::new(SetupStatus { state: SetupState::Done, installed: true, ..Default::default() }), Mutex::new(None))
+    }
+
+    #[test]
+    fn only_known_cloud_providers_reach_the_command_line() {
+        assert_eq!(cloud_args(None, None).unwrap(), ["cloud", "status"]);
+        assert_eq!(cloud_args(Some(true), Some("runpod")).unwrap(), ["cloud", "on", "runpod"]);
+        assert_eq!(cloud_args(Some(false), Some("aws")).unwrap(), ["cloud", "off"]);   // the default: an older pipeline has no argument for it
+        for bad in ["gcp", "--json", "runpod; rm", ""] {
+            assert!(cloud_args(Some(true), Some(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

@@ -137,11 +137,11 @@ export async function tauriSource(id: string): Promise<BundleSource> {
     assetUrl: (path) => convertFileSrc(`${bundle_dir}/${path}`),
     findPrototypeCorrections: () => api.findPrototypeCorrections(id),
     async pickCorrectionsFile() {
-      const path = await open({ title: 'Import a corrections file', filters: [{ name: 'Corrections', extensions: ['json'] }] });
+      const path = await open({ title: 'Import edits from a file', filters: [{ name: 'Edits', extensions: ['json'] }] });
       return typeof path === 'string' ? api.readCorrectionsFile(path) : null;
     },
     async saveCorrectionsFile(name, text) {
-      const path = await save({ title: 'Export corrections', defaultPath: name, filters: [{ name: 'Corrections', extensions: ['json'] }] });
+      const path = await save({ title: 'Export', defaultPath: name, filters: [{ name: 'Annotations', extensions: ['json'] }] });
       if (!path) return false;
       await api.writeCorrectionsFile(path, text);
       return true;

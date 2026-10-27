@@ -31,6 +31,17 @@ dialogs by hand, is still open).
   for it. Nothing else is needed on the machine: the pipeline reads video with PyAV, and each release pins its
   dependencies to what its CI tested. Offline, the installed version runs and the page says the check failed. No folder
   is chosen, so the guard against one inside the app's data went too; `PERCEPTION_REPO` runs a checkout (development).
+- **One annotation per video, in the interface (2026-10-26, Luke).** The bundle (what the pipeline made) and the op
+  log (the user's edits) stay separate underneath: edits carry over to a re-run, say which labels are human, and undo.
+  The interface shows one thing: a video's annotation, saved as you edit. **Export** saves the annotated result,
+  `perception-annotated/1` (`model/annotated.ts`): every layer an edit can change written with the edits applied, each
+  record marked `source` model or human with the fields a person changed and the model's values, the waveform left
+  out, and the op log as `edits`. An exported file imports as the edits it carries. **Import** brings in a bundle; the
+  open video's name is the switcher between videos (no drawer); both are also in the Mac File menu (⌘O, ⌘E).
+- **Settings by purpose (2026-10-26, Luke).** Models (what the steps' models need: shot captions' provider and its
+  key; gated models' access and the Hugging Face key, shown only when a step uses one), Machines (this computer,
+  remote servers, cloud GPU providers you add: RunPod with its API key, AWS with the credentials on the computer), App.
+  A key appears where it is used, not in a list of keys. Where a step runs is chosen on its own row on Extract.
 
 ## What exists
 
@@ -205,12 +216,14 @@ Checked:
   kinds, so `--allow-uploads` is passed whenever anything was agreed). The run's cap is the graph's (it covers the
   APIs) raised by each cloud machine's price (`spendingCap`, sent as `--max-cost-usd`).
 
-- **Machines** (with perception #15, #16): the dialog's Machines row lists the machines steps can run on and opens a
-  panel to add, check, clean and remove lab servers (`perception hosts`, reached with the user's own SSH keys) and to
-  turn the cloud GPU on or off (`perception cloud`, which checks AWS through SkyPilot first). A change plans again, so
-  the step menus follow; choosing a place there is still what sends a step's inputs. Names, destinations and folders
-  are checked in Rust before the CLI sees them (`host_args`, positional words after `--`). A pipeline from before these
-  says so on the row.
+- **Machines** (with perception #15, #16): set in Settings > Machines: remote servers (add, check, clear the cache on
+  and remove them: `perception hosts`, reached with the user's own SSH keys) and cloud GPU providers (RunPod with its
+  API key, AWS with the computer's credentials: `perception cloud on|off [runpod]`, which checks the provider first).
+  On Extract, a step that can run in more than one place has a menu on its row: choosing another machine is the choice
+  to send that step its inputs there. Back on Extract it loads the
+  machines again and plans again, and Start run waits while a change in Settings is under way. Names,
+  destinations and folders are checked in Rust before the CLI sees them (`host_args`, positional words after `--`). A
+  pipeline from before these says so on the row.
 
 Not yet:
 - the native window checked by hand.
@@ -220,7 +233,7 @@ Not yet:
 - Long films: per-frame samples in a binary sidecar (Parquet) instead of JSON (2 minutes of faces is ~14 MB of
   JSON); timeline performance at 2 hours.
 - Playback: webview codec support differs by platform; a re-encoded H.264 proxy when a video does not play.
-- Licences: academic-only layers carry a warning when exported or shared.
+- Licences: academic-only layers carry a warning when exported or shared (the export records the strictest licence; nothing warns yet).
 - Distribution: Windows build (fetch-uv.sh
   does not fetch the Windows .zip yet), auto-update, bundle schema migrations.
 - Several annotators on one video: merging op logs, agreement statistics.

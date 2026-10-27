@@ -46,8 +46,16 @@ export interface Host {
   name: string; dest: string; root: string; probed_at: number;
   caps: { platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number; tools: Record<string, string | null> };
 }
-/** Whether a cloud GPU is offered to nodes that can use one (`perception cloud`), the machine and its price. */
-export interface CloudStatus { enabled: boolean; machine: string; region: string; hourly_usd: number }
+/** A cloud GPU provider (`perception cloud`): whether it is offered to nodes that can use one, its machine and price. */
+export interface CloudProvider { enabled: boolean; machine: string; region: string; hourly_usd: number }
+/** The cloud GPU providers: AWS (its fields at the top level, as before RunPod) and RunPod (a pipeline from before it
+ *  has no `runpod`). */
+export interface CloudStatus extends CloudProvider { runpod?: CloudProvider }
+export type CloudProviderName = 'aws' | 'runpod';
+/** A provider's status, by name. */
+export const provider = (c: CloudStatus, name: CloudProviderName): CloudProvider | undefined => name === 'aws' ? c : c.runpod;
+/** A model one of the pipeline's steps uses (`perception models`): gated ones need access granted on their page. */
+export interface ModelInfo { node: string; id: string; source: string | null; size_gb: number | null; gated: boolean; licence_mode: string }
 /** A key the app keeps for the pipeline (in the system keychain): what it is for and whether one is stored. The app
  *  never sends a key's value to this page. */
 export interface KeyStatus { name: string; label: string; purpose: string; url: string; stored: boolean }
@@ -91,8 +99,10 @@ export interface PipelineApi {
   hosts(): Promise<Host[]>;
   /** Add (`dest`, optional `root`), check, clean or remove a lab server; the hosts after it. */
   host(action: HostAction, name: string, dest?: string, root?: string): Promise<Host[]>;
-  /** The cloud GPU's status, or (with `on`) turn it on or off (perception #16). */
-  cloud(on?: boolean): Promise<CloudStatus>;
+  /** The cloud GPU providers' status, or (with `on`) turn one on or off (`provider`: AWS when not given). */
+  cloud(on?: boolean, provider?: CloudProviderName): Promise<CloudStatus>;
+  /** The models the steps use (`perception models list`). */
+  models(): Promise<ModelInfo[]>;
   /** The keys the app keeps, stored or not (never their values); store one, or remove it. */
   keys(): Promise<KeyStatus[]>;
   setKey(name: string, value: string): Promise<KeyStatus[]>;
@@ -293,7 +303,7 @@ export function placeName(place: string, places?: Record<string, PlaceInfo>): st
   const what = ACCELERATORS[accelerator] ?? accelerator;
   if (backend === 'native' || backend === 'self') return what;
   const title = places?.[place]?.title;
-  if (backend === 'cloud') return title ?? 'Cloud GPU';
+  if (backend === 'cloud' || backend === 'runpod') return title ?? 'Cloud GPU';
   return `${what} on ${title ?? backend.replace(/^ssh-/, '')}`;
 }
 
@@ -397,7 +407,8 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
     hosts: async () => (await invoke<{ hosts: Host[] }>('pipeline_hosts')).hosts,
     host: async (action, name, dest, root) => (await invoke<{ hosts: Host[] }>('pipeline_host', { action, name, dest, root })).hosts,
-    cloud: (on) => invoke<CloudStatus>('pipeline_cloud', { on }),
+    cloud: (on, provider) => invoke<CloudStatus>('pipeline_cloud', { on, provider }),
+    models: async () => (await invoke<{ models: ModelInfo[] }>('pipeline_models')).models,
     keys: () => invoke<KeyStatus[]>('keys_status'),
     setKey: (name, value) => invoke<KeyStatus[]>('key_set', { name, value }),
     removeKey: (name) => invoke<KeyStatus[]>('key_remove', { name }),

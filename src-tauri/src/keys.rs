@@ -22,7 +22,7 @@ pub struct KnownKey {
 }
 
 pub const KNOWN: &[KnownKey] = &[
-    KnownKey { name: "RUNPOD_API_KEY", label: "RunPod", purpose: "Cloud GPU pods (Machines)",
+    KnownKey { name: "RUNPOD_API_KEY", label: "RunPod", purpose: "Cloud GPU pods",
                url: "https://console.runpod.io/user/settings" },
     KnownKey { name: "ANTHROPIC_API_KEY", label: "Anthropic", purpose: "Shot captions (Claude)",
                url: "https://console.anthropic.com/settings/keys" },

@@ -24,7 +24,7 @@ test('with nothing newer the rail stays as it is, and asking says it is up to da
   await page.goto('/?update-demo=current');
   await rail(page).getByRole('button', { name: 'Settings' }).click();
   const updates = updatesIn(page);
-  await expect(updates.getByText(/^HyperStudy Annotator 0\.0\.1\./)).toBeVisible();
+  await expect(updates.getByText(/^Version 0\.0\.1\./)).toBeVisible();
   await expect(updates.getByText(/^Up to date, as of /)).toBeVisible();                       // the launch check's answer
   await expect(rail(page).getByRole('button', { name: 'Update' })).toHaveCount(0);
   await updates.getByRole('button', { name: 'Check for updates' }).click();
@@ -56,7 +56,7 @@ test('a download that fails its signature check is not installed, says why, and 
 test('the relaunch waits while a run is going on Extract', async ({ page }) => {
   await page.goto('/?pipeline-demo=slow-start&update-demo=available');
   const extract = page.getByRole('region', { name: 'Extract' });
-  await extract.getByRole('button', { name: 'Choose…' }).click();             // the video
+  await extract.getByRole('button', { name: 'Choose a video…' }).click();             // the video
   await extract.getByRole('button', { name: 'Start run' }).click();
   await expect(extract.getByRole('button', { name: 'Cancel run' })).toBeVisible();
   await rail(page).getByRole('button', { name: 'Update' }).click();

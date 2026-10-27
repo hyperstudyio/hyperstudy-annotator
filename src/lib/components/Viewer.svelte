@@ -1,11 +1,12 @@
 <script lang="ts">
   // Loads a bundle and its corrections, then shows the workspace.
+  import type { Snippet } from 'svelte';
   import { Bundle } from '../model/bundle';
   import { Session } from '../model/session.svelte';
   import type { BundleSource } from '../source';
   import Workspace from './Workspace.svelte';
 
-  let { source, onback, active = true, onmodal }: { source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void } = $props();
+  let { source, onback, active = true, onmodal, title }: { source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void; title?: Snippet } = $props();
   let session = $state<Session | null>(null);
   let error = $state<string | null>(null);
 
@@ -22,10 +23,10 @@
 </script>
 
 {#if session}
-  <Workspace {session} {source} {onback} {active} {onmodal} />
+  <Workspace {session} {source} {onback} {active} {onmodal} {title} />
 {:else}
   <div class="loading">
-    {#if error}<p class="error">{error}</p>{#if onback}<button onclick={onback}>Back to all bundles</button>{/if}
+    {#if error}<p class="error">{error}</p>{#if onback}<button onclick={onback}>Back to all videos</button>{/if}
     {:else}<p class="muted">Loading {source.title}…</p>{/if}
   </div>
 {/if}

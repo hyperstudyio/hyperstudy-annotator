@@ -4,7 +4,7 @@
 import { Bundle, extent } from './bundle';
 import { iou } from '../geometry';
 import {
-  FORMAT, ImportError, NOT_PERSON, RunUnknownError, UNKNOWN, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
+  FORMAT, ImportError, NOT_PERSON, RunUnknownError, UNKNOWN, editsFile, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
   type AnnotationType, type CorrectionsFile, type Note, type Op,
 } from './corrections';
 import { View, type Tab } from './view.svelte';
@@ -80,6 +80,10 @@ export class Session {
   lightbox = $state<Lightbox | null>(null);
   /** A dialog is open that needs an answer first: the workspace's keys do nothing meanwhile. */
   modal = $state(false);
+  /** The panel shows the keyboard keys (? toggles it). */
+  help = $state(false);
+  /** Pick an edits file and import it (the header owns the import and its questions; the Details tab asks for it). */
+  importEdits: (() => void) | null = null;
   /** What this version carried over from an earlier one (the ops it could not match wait for review). */
   carry = $state<CarryRecord | null>(null);
   /** The name being edited, as "<id>@<area>" (a rename link opens the editor of the name in that area). */
@@ -140,7 +144,7 @@ export class Session {
     load: (v: EarlierVersion) => Promise<Bundle> = async (v) => Bundle.load(await v.open()),
     { thisRun = false }: { thisRun?: boolean } = {}): Promise<Op[]> {
     let doc: CorrectionsFile;
-    try { doc = JSON.parse(text); } catch { throw new ImportError('that file is not JSON'); }
+    try { doc = editsFile(JSON.parse(text)); } catch { throw new ImportError('that file is not JSON'); }
     const ops = readCorrectionsFile(doc, this.bundle.sha256);
     if (doc.bundle && this.bundle.key && doc.bundle !== this.bundle.key) {
       const v = lineage ? await lineage.find(doc.bundle) : null;
