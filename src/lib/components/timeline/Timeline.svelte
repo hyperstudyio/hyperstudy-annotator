@@ -5,11 +5,15 @@
   //   drag speech onto a person's row: change the speaker              drag across an annotation row: add a span
   //   pinch (ctrl+wheel): zoom about the pointer                      drag a label's grip: reorder groups / rows
   //   drag a row's bottom edge: resize it                             drag the top edge: timeline height
+  //   drag an annotation: move it; drag its end: change its length     (edges snap to cuts, the playhead and other
+  //   annotations' ends; ⌥ places freely)
   import { flushSync, tick } from 'svelte';
   import { useSession } from '../../model/context';
   import { GROUP_KEYS } from '../../model/view.svelte';
   import { arrange, buildGroups, rowHeight, speakerForDrop, ROW_H, type Bar, type Row } from '../../timeline/rows';
   import { LABEL_W, ZOOM_MAX, fitPps, scrollToKeep, tickStep, timeAtX } from '../../timeline/scale';
+  import { SNAP_PX, partAt, retime, snap, type RetimeMode } from '../../timeline/retime';
+  import type { Span } from '../../types';
   import { fmt } from '../../geometry';
   import { plural, NEUTRAL } from '../../model/session.svelte';
   import Popover from '../ui/Popover.svelte';
@@ -45,7 +49,8 @@
     | { kind: 'range'; start: number; x: number; moved: boolean; now: number }
     | { kind: 'speech'; utt: string; text: string; colour: string; x: number; y: number; moved: boolean; over: string | null; px: number; py: number }
     | { kind: 'reorder'; what: 'group' | 'row'; id: string; group: string; at: number | null; lineY: number | null }
-    | { kind: 'resize'; id: string; y: number; h0: number; now: number };
+    | { kind: 'resize'; id: string; y: number; h0: number; now: number }
+    | { kind: 'retime'; note: string; mode: RetimeMode; x: number; t0: number; from: Span; span: Span; at: number | null; times: number[]; moved: boolean; px: number; py: number };
   let gesture = $state<Gesture | null>(null);
   let resizingTimeline = $state(false);
 
@@ -69,6 +74,16 @@
     if (e.button !== 0 || !bar.drag) return;
     e.preventDefault(); e.stopPropagation();
     gesture = { kind: 'speech', utt: bar.drag.utt, text: bar.drag.ghost, colour: bar.colour ?? NEUTRAL, x: e.clientX, y: e.clientY, moved: false, over: null, px: e.clientX, py: e.clientY };
+  }
+  function retimeDown(e: PointerEvent, bar: Bar) {
+    const n = bar.retime ? s.S.notes.get(bar.retime) : undefined;
+    if (e.button !== 0 || !n) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect(), from = { start: n.start, end: n.end };
+    // what an edge snaps to: shot cuts, the playhead, the other annotations' ends
+    const times = [...s.bundle.shots.flatMap((x) => [x.start, x.end]), pb.time,
+      ...[...s.S.notes.values()].filter((x) => x.id !== n.id).flatMap((x) => [x.start, x.end])];
+    gesture = { kind: 'retime', note: n.id, mode: partAt(e.clientX - r.left, r.width), x: e.clientX, t0: timeOf(e), from, span: from, at: null, times, moved: false, px: e.clientX, py: e.clientY };
   }
   function gripDown(e: PointerEvent, what: 'group' | 'row', id: string, group: string) {
     e.preventDefault(); e.stopPropagation();
@@ -118,6 +133,14 @@
         break;
       }
       case 'resize': g.now = Math.round(g.h0 + e.clientY - g.y); break;
+      case 'retime': {
+        if (!g.moved && Math.abs(e.clientX - g.x) < DRAG_PX) return;
+        g.moved = true; g.px = e.clientX; g.py = e.clientY;
+        const moved = retime(g.mode, g.from, timeOf(e) - g.t0, duration);
+        const snapped = e.altKey ? { span: moved, at: null } : snap(g.mode, moved, g.times, SNAP_PX / pps, duration);
+        g.span = snapped.span; g.at = snapped.at;
+        break;
+      }
     }
   }
 
@@ -160,11 +183,18 @@
         break;
       }
       case 'resize': if (g.now !== g.h0) s.view.setHeight(g.id, g.now); break;
+      case 'retime': {
+        if (!g.moved) { s.select('note', g.note); s.clickPlay(); break; }   // a click: as any bar
+        if (g.span.start !== g.from.start || g.span.end !== g.from.end)
+          await s.commit({ op: 'annotation.edit', id: g.note, fields: { start: g.span.start, end: g.span.end } });
+        s.select('note', g.note, { seek: false });
+        break;
+      }
     }
   }
 
   function barClick(bar: Bar) {
-    if (!bar.sel || bar.drag) return;   // speech is handled on pointerup (a click there, a drag elsewhere)
+    if (!bar.sel || bar.drag || bar.retime) return;   // speech and annotations are handled on pointerup (a click, or a drag)
     s.select(bar.sel.kind, bar.sel.id);
     s.clickPlay();
   }
@@ -230,7 +260,9 @@
     return null;
   });
   const heightOf = (row: Row) => (gesture?.kind === 'resize' && gesture.id === row.id ? gesture.now : rowHeight(row, s.view.s.heights));
-  const barStyle = (bar: Bar) => `left:${bar.start * pps}px; width:${Math.max(3, (bar.end - bar.start) * pps - 1)}px; top:${bar.top ?? (bar.row ?? 0) * ROW_H + 3}px;${bar.colour ? ` background:${bar.colour};` : ''}`;
+  // an annotation being dragged is drawn where it would go
+  const spanOf = (bar: Bar): Span => (gesture?.kind === 'retime' && gesture.note === bar.retime ? gesture.span : bar);
+  const barStyle = (b: Bar, bar = { ...b, ...spanOf(b) }) => `left:${bar.start * pps}px; width:${Math.max(3, (bar.end - bar.start) * pps - 1)}px; top:${bar.top ?? (bar.row ?? 0) * ROW_H + 3}px;${bar.colour ? ` background:${bar.colour};` : ''}`;
 </script>
 
 <svelte:window {onpointermove} {onpointerup} />
@@ -241,13 +273,16 @@
       <div class="bar summary" style="left:{bar.start * pps}px; width:{Math.max(3, (bar.end - bar.start) * pps - 1)}px; top:3px; background:{bar.colour}"></div>
     {:else}
       <!-- no focus on click: a focused button would also take the Space meant for play/pause -->
-      <button class="bar {bar.flags.join(' ')}" class:draggable={!!bar.drag} style={barStyle(bar)} title={bar.title} tabindex="-1"
-        onmousedown={(e) => e.preventDefault()} onpointerdown={bar.drag ? (e) => speechDown(e, bar) : undefined} onclick={() => barClick(bar)}>{bar.text ?? ''}</button>
+      <button class="bar {bar.flags.join(' ')}" class:draggable={!!bar.drag} class:retimable={!!bar.retime} style={barStyle(bar)}
+        title={bar.retime ? `${bar.title} · drag to move, drag an end to change its length` : bar.title} tabindex="-1" onmousedown={(e) => e.preventDefault()}
+        onpointerdown={bar.drag ? (e) => speechDown(e, bar) : bar.retime ? (e) => retimeDown(e, bar) : undefined} onclick={() => barClick(bar)}
+        >{#if bar.retime}<span class="end-grip start" aria-hidden="true"></span>{/if}{bar.text ?? ''}{#if bar.retime}<span class="end-grip end" aria-hidden="true"></span>{/if}</button>
     {/if}
   {/each}
 {/snippet}
 
-<section class="timeline" class:busy={gesture?.kind === 'reorder' || gesture?.kind === 'speech'} style="--label-w:{LABEL_W}px; --tl-h:{s.view.s.timelineH ? `${s.view.s.timelineH}px` : '42vh'}">
+<section class="timeline" class:busy={gesture?.kind === 'reorder' || gesture?.kind === 'speech'} class:retiming={gesture?.kind === 'retime' && gesture.moved}
+  style:--retime-cursor={gesture?.kind === 'retime' ? (gesture.mode === 'move' ? 'grabbing' : 'ew-resize') : undefined} style="--label-w:{LABEL_W}px; --tl-h:{s.view.s.timelineH ? `${s.view.s.timelineH}px` : '42vh'}">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="timeline-resize" class:active={resizingTimeline} title="Drag to give the timeline more or less height · double-click to reset" onpointerdown={startTimelineResize} ondblclick={onresetheight}></div>
   <div class="tl-tools">
@@ -351,11 +386,16 @@
       {#if marking}<div class="marking" style="left:{LABEL_W + marking.start * pps}px; width:{(marking.end - marking.start) * pps}px"></div>{/if}
       {#if range}<div class="clip-span" style="left:{LABEL_W + range.start * pps}px; width:{(range.end - range.start) * pps}px"></div>{/if}
       <div class="playhead" style="left:{LABEL_W + pb.time * pps}px"></div>
+      {#if gesture?.kind === 'retime' && gesture.at !== null}<div class="snap-line" style="left:{LABEL_W + gesture.at * pps}px"></div>{/if}
       {#if gesture?.kind === 'reorder' && gesture.lineY !== null}<div class="reorder-line" style="top:{gesture.lineY}px"></div>{/if}
     </div>
   </div>
 </section>
 
+{#if gesture?.kind === 'retime' && gesture.moved}
+  <!-- above the pointer: annotation rows are often at the foot of the window -->
+  <div class="retime-tip" style="left:{gesture.px + 12}px; top:{gesture.py - 36}px">{fmt(gesture.span.start)}–{fmt(gesture.span.end)} · {(gesture.span.end - gesture.span.start).toFixed(1)} s</div>
+{/if}
 {#if gesture?.kind === 'speech' && gesture.moved}
   <div class="ghost" style="left:{gesture.px + 12}px; top:{gesture.py + 8}px; background:{gesture.colour}">{gesture.text}</div>
 {/if}
@@ -363,6 +403,7 @@
 <style>
   .timeline { grid-column: 1; border-top: 1px solid var(--color-border-default); background: var(--color-bg-surface); position: relative; min-width: 0; }
   .timeline.busy, .timeline.busy * { cursor: grabbing !important; user-select: none; }
+  .timeline.retiming, .timeline.retiming * { cursor: var(--retime-cursor) !important; user-select: none; }
   .timeline-resize { position: absolute; top: -4px; left: 0; right: 0; height: 7px; cursor: row-resize; z-index: 6; }
   .timeline-resize:hover, .timeline-resize.active { background: var(--color-primary-light); }
   .tl-tools { display: flex; align-items: center; gap: 10px; padding: 6px 16px; color: var(--color-text-secondary); min-width: 0; }
@@ -399,7 +440,15 @@
   .bar.vis { height: 6px; opacity: .55; border-radius: 3px; }
   .bar.caption { background: var(--color-bg-elevated); color: var(--color-text-secondary); text-align: left; text-overflow: ellipsis; border: 1px solid var(--color-border-default); }
   .bar.speech { height: 10px; border-radius: 3px; padding: 0; }   /* when a person speaks; the words are in the transcript row */
-  .bar.draggable { cursor: grab; }
+  .bar.draggable, .bar.retimable { cursor: grab; }
+  /* an annotation's ends: drag to change its length (a third of a narrow bar, so its middle can still be taken) */
+  .end-grip { position: absolute; top: 0; bottom: 0; width: min(6px, 33%); cursor: ew-resize; }
+  .end-grip.start { left: 0; }
+  .end-grip.end { right: 0; }
+  .bar.retimable:hover .end-grip, .bar.retimable.selected .end-grip { background: rgba(255, 255, 255, .35); }
+  .snap-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-primary); z-index: 7; pointer-events: none; }
+  .retime-tip { position: fixed; z-index: 30; pointer-events: none; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-variant-numeric: tabular-nums;
+                background: var(--color-bg-elevated); border: 1px solid var(--color-border-strong); color: var(--color-text-primary); }
   .bar.excluded { background: transparent !important; border: 1px dashed var(--color-text-muted); color: var(--color-text-muted); }
   .bar.unconfirmed { outline: 1px dashed var(--color-text-muted); outline-offset: -1px; }
   .bar.flagged { box-shadow: inset 0 -3px 0 var(--color-caution); }

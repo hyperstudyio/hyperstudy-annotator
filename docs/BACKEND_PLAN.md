@@ -51,7 +51,9 @@ dialogs by hand, is still open).
 - **Annotating on the timeline (2026-10-27, Luke).** There is no Annotate tab. Annotation types are made with + beside
   the Annotations group (or copied from another video in the library) and edited from their row's name; A annotates the
   selection (else the shot under the playhead) with the type last used, `[` `]` mark a span while playing, and a drag
-  across a type's row adds one. The selected annotation's value is set in Inspect or by keys: y/n, 1–9 for categories.
+  across a type's row adds one. An annotation's middle drags it along the row and its ends change its length (2026-10-27):
+  edges snap to shot cuts, the playhead and other annotations' ends, ⌥ places freely, and one drag is one edit (one
+  undo). The selected annotation's value is set in Inspect or by keys: y/n, 1–9 for categories.
   Types stay per video (ops `annotation.type`, `annotation.type_edit`, `annotation.type_delete` in its log); a copy keeps
   the type's id, so the videos' annotations of it are one type when analysed together. While annotations use a type, its
   kind, what it is about and the categories in use stay as they are, and it cannot be deleted.

@@ -110,3 +110,66 @@ test('a cleared range bound stays cleared after a reload', async ({ page }) => {
   await expect(edit.getByLabel('Minimum')).toHaveValue('');
   await expect(edit.getByLabel('Maximum')).toHaveValue('10');
 });
+
+test("an annotation is moved by its middle and lengthened or shortened by its ends; ends snap to cuts unless ⌥ is held", async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Engaged');
+  await form.getByRole('button', { name: 'Add type' }).click();
+  await page.keyboard.press('a');   // the first shot, 0:00.0–0:02.8
+  const span = page.locator('.drawer-panel .meta').filter({ hasText: '–' }).first();
+  await expect(span).toContainText('0:00.0–0:02.8');
+  await page.locator('.zoom input').fill('12');
+  const bar = typeRow(page, 'Engaged').locator('.bar');
+  await bar.scrollIntoViewIfNeeded();
+  const secs = (text: string) => text.match(/(\d+):(\d+\.\d)–(\d+):(\d+\.\d)/)!.slice(1).map(Number);
+  const read = async () => { const [a, b, c, d] = secs(await span.innerText()); return { start: a * 60 + b, end: c * 60 + d }; };
+  const drag = async (fromX: number, dx: number, alt = false) => {
+    const box = (await bar.boundingBox())!, y = box.y + box.height / 2;
+    await page.mouse.move(box.x + fromX(box.width), y);
+    if (alt) await page.keyboard.down('Alt');
+    await page.mouse.down();
+    for (let i = 1; i <= 5; i++) await page.mouse.move(box.x + fromX(box.width) + (dx * i) / 5, y);
+    await page.mouse.up();
+    if (alt) await page.keyboard.up('Alt');
+  };
+  const at = (w: number) => w / 2;
+  const endOf = (w: number) => w - 2;
+
+  await drag(at, 120, true);   // the middle: moved, its length kept
+  let now = await read();
+  expect(now.start).toBeGreaterThan(0.5);
+  expect(now.end - now.start).toBeCloseTo(2.8, 1);
+  const moved = now;
+
+  await drag(endOf, -40, true);   // the end: shorter, the start stays
+  now = await read();
+  expect(now.start).toBe(moved.start);
+  expect(now.end).toBeLessThan(moved.end);
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/retimed.png` });
+
+  await page.keyboard.press('Meta+z');   // one drag is one undo
+  await expect.poll(read).toEqual(moved);
+
+  // the end, to 3 px from the cut at 2.8 s: the snap line shows there while dragging, and not with ⌥ held
+  const pps = ((await bar.boundingBox())!.width + 1) / (moved.end - moved.start);
+  const box = (await bar.boundingBox())!, y = box.y + box.height / 2, x0 = box.x + box.width - 2, x1 = x0 - (moved.end - 2.8) * pps + 3;
+  await page.mouse.move(x0, y);
+  await page.mouse.down();
+  await page.mouse.move((x0 + x1) / 2, y);
+  await page.mouse.move(x1, y);
+  const line = page.locator('.snap-line');
+  await expect(line).toHaveCount(1);
+  const lineX = (await line.boundingBox())!.x;
+  const cutX = (await page.locator('.tl-content').boundingBox())!.x + 168 + 2.8 * pps;
+  expect(Math.abs(lineX - cutX)).toBeLessThan(2);
+  await page.keyboard.down('Alt');
+  await page.mouse.move(x1 + 1, y);
+  await expect(line).toHaveCount(0);
+  await page.keyboard.up('Alt');
+  await page.mouse.move(x1, y);
+  await page.mouse.up();
+  await expect(span).toContainText('–0:02.8');
+});
