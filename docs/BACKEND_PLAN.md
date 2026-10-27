@@ -42,6 +42,14 @@ dialogs by hand, is still open).
   key; gated models' access and the Hugging Face key, shown only when a step uses one), Machines (this computer,
   remote servers, cloud GPU providers you add: RunPod with its API key, AWS with the credentials on the computer), App.
   A key appears where it is used, not in a list of keys. Where a step runs is chosen on its own row on Extract.
+- **Settings: Models and Compute (2026-10-27, Luke).** Machines is called Compute. Models lists every step with its
+  models (linked), where it runs, a licence that limits use, the choices it offers as defaults (the captions model and
+  effort: kept per user by step ref, applied by Extract where a run has not chosen otherwise, stepDefaults.ts), and what
+  it needs: its provider's key, or access to a gated model and the Hugging Face key. A key no step uses is listed apart
+  so it can be removed. Every key, cloud provider and server has a Test (`perception keys check`, `cloud check`,
+  `hosts check`; perception #3), and a cloud provider has one Remove, which takes its key. A server is added from a host
+  in ~/.ssh/config (or user@host), tested before it is added (`hosts probe`: nothing added, nothing made there), with
+  user, port, key file and folder under Advanced; ssh is the user's own, in batch mode (no passwords).
 - **The annotator's panel (2026-10-26, Luke).** Inspect edits the one thing selected (who a face is, who speaks and what
   was said, a caption, a name, a value) and is empty until something is; Back returns to the previous selection. What
   the timeline already shows (who is in a shot, on-screen text) is not repeated there, and captions are a timeline row.

@@ -7,6 +7,7 @@
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
   import type { RunStatus } from './Rail.svelte';
+  import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
     settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
@@ -48,7 +49,10 @@
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
   let wanted = $state<Set<string> | null>(null);   // the features on (null: the first plan's defaults)
   let ticked = $state<Ticked>({});   // the ones the user turned on themselves, with what they sent then: all they may send
-  let settings = $state<Settings>({});   // settings the user chose: node -> key -> value
+  let settings = $state<Settings>({});   // settings the user chose for this run: node -> key -> value
+  // the defaults chosen in Settings > Models for the plan's steps, apart from this run's choices: found again from each
+  // plan, so a default changed in Settings is what the next plan and run take
+  let fromDefaults = $state<Settings>({});
   let open = $state<string | null>(null);   // the step whose details show
   let msgs = $state.raw<PipelineMessage[]>([]);
   let arrived = $state.raw<number[]>([]);   // when each message came: a step's progress is its time running against its estimate
@@ -210,7 +214,7 @@
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
-  const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; open = null; await makePlan(); };
+  const chooseGraph = async (file: string) => { graph = file; places = {}; wanted = null; ticked = {}; settings = {}; fromDefaults = {}; open = null; await makePlan(); };
   // choosing another machine is the choice to send this step's inputs there (what the plan says it would send)
   const choosePlace = async (node: string, place: string) => {
     const agreed = plan && placeTick(plan.nodes.find((n) => n.id === node)!, place);
@@ -230,14 +234,23 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
+    newestPlan(api.plan(graph, video, places, withDefaults(fromDefaults, settings)), (p) => {
+        // the defaults chosen in Settings > Models, where this run has not chosen otherwise: planned again when they are
+        // not the ones this plan had (the first plan, or a default changed in Settings since)
+        const now = defaultsFor(p, settings, loadDefaults());
+        if (JSON.stringify(now) !== JSON.stringify(fromDefaults)) {
+          fromDefaults = now;
+          makePlan(true);
+          return;
+        }
+        plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
       },
       (e) => { plan = null; error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = []; arrived = []; now = Date.now();
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
-    try { stop = await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, settingsFor(settings, pick.chosen), spendingCap(active!, pick.chosen), on); }
+    try { stop = await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, settingsFor(withDefaults(fromDefaults, settings), pick.chosen), spendingCap(active!, pick.chosen), on); }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
@@ -330,7 +343,7 @@
         {#if started}{headline}
         {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
       </h3>
-      {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('machines')}>Add a remote server or cloud GPU</button></p>{/if}
+      {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('compute')}>Add a remote server or cloud GPU</button></p>{/if}
       {#if total?.unknown.length && !started}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(total.unknown.map(titleOf))}, which {total.unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
       <ol class="steps">
         {#each started ? active?.nodes ?? [] : plan.nodes as n (n.id)}
@@ -374,7 +387,7 @@
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
                 {#if n.cost_usd}<span>{machineCost(plan, n) ? 'Up to ' : ''}${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
-                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'machines' : 'models')}>add it in Settings</button></span>{/each}
+                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
                 <span class="muted" id={`before-${n.id}`}>Turn on {list(before.map(titleOf))} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
               {/if}

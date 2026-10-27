@@ -50,3 +50,9 @@ export function groupModels(layers: Layers, group: string): ModelNote[] {
   return (GROUP_LAYERS[group] ?? []).flatMap((k) => layers[k]?.producer.models ?? [])
     .filter((m) => !seen.has(m.id) && seen.add(m.id)).map(modelNote);
 }
+
+/** A model's download, as Settings > Models says it: MB under a gigabyte (a small model is not "0.0 GB"), else GB. */
+export function downloadSize(gb: number | null): string | null {
+  if (!gb) return null;
+  return `${gb < 1 ? `${Math.round(gb * 1024)} MB` : `${Math.round(gb * 10) / 10} GB`}, downloaded once`;
+}

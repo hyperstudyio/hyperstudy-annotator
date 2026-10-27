@@ -125,8 +125,8 @@ test('turning a feature on runs what it needs too, and says which features need 
 test('a setting\'s choices show their price when the cost depends on them, and settings go only for steps that run', () => {
   const s: Setting = { key: 'model', description: '', value: 'claude-haiku-5-5', choices: ['claude-haiku-5-5', 'claude-opus-5-5'],
     prices: { 'claude-haiku-5-5': 0.003, 'claude-opus-5-5': 0.12 }, per: 'shot' };
-  expect(choiceLabel(s, 'claude-haiku-5-5')).toBe('claude-haiku-5-5, $0.003 per shot');
-  expect(choiceLabel(s, 'claude-opus-5-5')).toBe('claude-opus-5-5, $0.12 per shot');
+  expect(choiceLabel(s, 'claude-haiku-5-5')).toBe('Claude Haiku 5.5, $0.003 per shot');
+  expect(choiceLabel(s, 'claude-opus-5-5')).toBe('Claude Opus 5.5, $0.12 per shot');
   expect(choiceLabel({ ...s, prices: null, per: null }, 'low')).toBe('low');
   expect(settingsFor({ captions: { model: 'claude-opus-5-5' }, faces: {} }, ['decode', 'faces'])).toEqual({ faces: {} });
 });
@@ -282,4 +282,12 @@ test('a key the command line already finds is said so, and one the app holds nee
   expect(rows.map((r) => r.elsewhere)).toEqual([null, null, '~/.config/hyperstudy/hf.env']);   // the app's own wins
   expect(keysText(rows)).toBe('Set: RunPod, Hugging Face. Not set: Anthropic');
   expect(keysText(keyRows(keys, null))).toBe('Set: RunPod. Not set: Anthropic, Hugging Face');   // a pipeline from before `keys`
+});
+
+test('a Claude model is called by its name; other choices stay as they are', async () => {
+  const { choiceName, choiceLabel } = await import('./pipeline');
+  expect(choiceName('claude-haiku-5-5')).toBe('Claude Haiku 5.5');
+  expect(choiceName('claude-opus-5')).toBe('Claude Opus 5');
+  expect(choiceName('medium')).toBe('medium');
+  expect(choiceLabel({ key: 'model', description: '', value: null, choices: [], prices: { 'claude-opus-5-5': 0.12 }, per: 'shot' }, 'claude-opus-5-5')).toBe('Claude Opus 5.5, $0.12 per shot');
 });

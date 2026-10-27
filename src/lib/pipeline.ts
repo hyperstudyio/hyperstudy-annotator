@@ -44,6 +44,8 @@ export interface GraphPreset { file: string; pipeline: string; description: stri
 /** A lab server nodes can run on (`perception hosts`): what it had when it was added or last checked. */
 export interface Host {
   name: string; dest: string; root: string; probed_at: number;
+  /** overrides of ~/.ssh/config (a pipeline from before them has none) */
+  user?: string | null; port?: number | null; identity?: string | null;
   caps: { platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number; tools: Record<string, string | null> };
 }
 /** A cloud GPU provider (`perception cloud`): whether it is offered to nodes that can use one, its machine and price. */
@@ -56,6 +58,19 @@ export type CloudProviderName = 'aws' | 'runpod';
 export const provider = (c: CloudStatus, name: CloudProviderName): CloudProvider | undefined => name === 'aws' ? c : c.runpod;
 /** A model one of the pipeline's steps uses (`perception models`): gated ones need access granted on their page. */
 export interface ModelInfo { node: string; id: string; source: string | null; size_gb: number | null; gated: boolean; licence_mode: string }
+/** A step the pipeline has (`perception models list`'s `nodes`): what it is called, the hosted API it calls (or null),
+ *  the keys it needs, and its fixed choices at their defaults, with prices. */
+export interface StepInfo { node: string; title: string; service: string | null; secrets: string[]; settings: Setting[] }
+/** The models, and the steps (null from a pipeline before them: then only the models are known). */
+export interface ModelsListing { models: ModelInfo[]; nodes: StepInfo[] | null }
+/** What a provider said of a key, or whether a cloud provider can be used (`keys check`, `cloud check`). */
+export interface CheckResult { ok: boolean; detail: string }
+/** What a destination has, reached as adding it would, with nothing added (`hosts probe`). */
+export interface HostProbe { dest: string; root: string; caps: Host['caps'] }
+/** What a host is reached with over what ~/.ssh/config says (`hosts add|probe --user --port --identity`). */
+export interface SshOverrides { user?: string; port?: number; identity?: string }
+/** An error from a pipeline that predates a command (argparse: invalid choice), said as what to do. */
+export const tooOld = (e: unknown, what: string) => /invalid choice|unrecognized arguments/.test(String(e)) ? `Update the pipeline to ${what}.` : String(e);
 /** A key the app keeps for the pipeline (in the system keychain): what it is for and whether one is stored. The app
  *  never sends a key's value to this page. */
 export interface KeyStatus { name: string; label: string; purpose: string; url: string; stored: boolean }
@@ -97,12 +112,20 @@ export interface PipelineApi {
   graphs(): Promise<GraphPreset[]>;
   /** Lab servers (perception #15); a pipeline from before them rejects these. */
   hosts(): Promise<Host[]>;
-  /** Add (`dest`, optional `root`), check, clean or remove a lab server; the hosts after it. */
-  host(action: HostAction, name: string, dest?: string, root?: string): Promise<Host[]>;
+  /** Add (`dest`, optional `root` and overrides), check, clean or remove a lab server; the hosts after it. */
+  host(action: HostAction, name: string, dest?: string, root?: string, overrides?: SshOverrides): Promise<Host[]>;
+  /** Reach a destination as adding it would and say what it has, adding nothing (a connection test). */
+  probeHost(dest: string, overrides?: SshOverrides): Promise<HostProbe>;
+  /** The hosts ~/.ssh/config names (read on this machine). */
+  sshHosts(): Promise<string[]>;
+  /** Whether a cloud provider could be used now, changing nothing. */
+  checkCloud(provider: CloudProviderName): Promise<CheckResult>;
+  /** Whether a key's provider accepts it: one request that costs nothing. */
+  checkKey(name: string): Promise<CheckResult>;
   /** The cloud GPU providers' status, or (with `on`) turn one on or off (`provider`: AWS when not given). */
   cloud(on?: boolean, provider?: CloudProviderName): Promise<CloudStatus>;
-  /** The models the steps use (`perception models list`). */
-  models(): Promise<ModelInfo[]>;
+  /** The models the steps use, and the steps (`perception models list`). */
+  models(): Promise<ModelsListing>;
   /** The keys the app keeps, stored or not (never their values); store one, or remove it. */
   keys(): Promise<KeyStatus[]>;
   setKey(name: string, value: string): Promise<KeyStatus[]>;
@@ -271,10 +294,16 @@ export function defaultFeatures(plan: Plan): Set<string> {
   return new Set(plan.nodes.filter((n) => free(n)).map((n) => n.id));
 }
 
+/** A choice as people say it: a Claude model by its name ("claude-haiku-5-5" is "Claude Haiku 5.5"), else as it is. */
+export function choiceName(choice: string): string {
+  const claude = choice.match(/^claude-([a-z]+)-(\d+)(?:-(\d+))?$/);
+  return claude ? `Claude ${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}` : choice;
+}
+
 /** A setting's choice as its menu shows it: with its price, when the cost depends on it. */
 export function choiceLabel(s: Setting, choice: string): string {
   const usd = s.prices?.[choice];
-  return usd == null ? choice : `${choice}, $${usd < 0.01 ? usd.toFixed(3) : usd.toFixed(2)} per ${s.per}`;
+  return usd == null ? choiceName(choice) : `${choiceName(choice)}, $${usd < 0.01 ? usd.toFixed(3) : usd.toFixed(2)} per ${s.per}`;
 }
 
 /** The settings to send: only for steps that run (a setting for a node --only leaves out is a CLI error). */
@@ -406,9 +435,13 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     doctor: () => invoke<Doctor>('pipeline_doctor'),
     graphs: () => invoke<GraphPreset[]>('pipeline_graphs'),
     hosts: async () => (await invoke<{ hosts: Host[] }>('pipeline_hosts')).hosts,
-    host: async (action, name, dest, root) => (await invoke<{ hosts: Host[] }>('pipeline_host', { action, name, dest, root })).hosts,
+    host: async (action, name, dest, root, overrides) => (await invoke<{ hosts: Host[] }>('pipeline_host', { action, name, dest, root, overrides })).hosts,
+    probeHost: (dest, overrides) => invoke<HostProbe>('pipeline_host', { action: 'probe', name: dest, overrides }),
+    sshHosts: () => invoke<string[]>('ssh_config_hosts'),
+    checkCloud: (provider) => invoke<CheckResult>('pipeline_cloud_check', { provider }),
+    checkKey: (name) => invoke<CheckResult>('pipeline_key_check', { name }),
     cloud: (on, provider) => invoke<CloudStatus>('pipeline_cloud', { on, provider }),
-    models: async () => (await invoke<{ models: ModelInfo[] }>('pipeline_models')).models,
+    models: async () => { const r = await invoke<{ models: ModelInfo[]; nodes?: StepInfo[] }>('pipeline_models'); return { models: r.models, nodes: r.nodes ?? null }; },
     keys: () => invoke<KeyStatus[]>('keys_status'),
     setKey: (name, value) => invoke<KeyStatus[]>('key_set', { name, value }),
     removeKey: (name) => invoke<KeyStatus[]>('key_remove', { name }),

@@ -459,20 +459,61 @@ pub fn set_args(settings: &std::collections::BTreeMap<String, std::collections::
     Ok(out)
 }
 
+/// What a host is reached with over what ~/.ssh/config says for it (`hosts add|probe --user --port --identity`).
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+pub struct SshOverrides {
+    pub user: Option<String>,
+    pub port: Option<u16>,
+    /// a private key file on this machine
+    pub identity: Option<String>,
+}
+
+/// An ssh destination that cannot be read as an option: user@host, a host, or a name from ~/.ssh/config.
+fn ssh_dest_ok(dest: &str) -> bool {
+    dest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        && dest.chars().all(|c| c.is_ascii_alphanumeric() || "_.@%+:[]-".contains(c))
+}
+
 /// `hosts ACTION` for a lab server, checked as the CLI checks them (hosts.py) before they reach it: a name of lower-case
-/// letters, digits and `-` (and not a word the CLI keeps for itself), an ssh destination that cannot be an option, and a
-/// plain folder. The positional words follow `--`, so none can be read as a flag.
-pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str>) -> Result<Vec<String>> {
+/// letters, digits and `-` (and not a word the CLI keeps for itself), an ssh destination that cannot be an option, a
+/// plain folder, and overrides ssh cannot misread. The positional words follow `--`, so none can be read as a flag.
+/// `probe` takes the destination for `name`: it reaches it and says what it has, adding nothing (a connection test).
+pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str>, ov: &SshOverrides) -> Result<Vec<String>> {
     let name_ok = !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !["native", "self", "cloud", "local"].contains(&name);
-    if !["add", "check", "remove", "clean"].contains(&action) {
+        && !["native", "self", "cloud", "runpod", "local"].contains(&name);
+    if !["add", "check", "remove", "clean", "probe"].contains(&action) {
         return Err(Error::Bundle(format!("not something to do with a host: {action:?}")));
     }
-    if !name_ok {
+    if action == "probe" && !ssh_dest_ok(name) {
+        return Err(Error::Bundle(format!("not an ssh destination: {name:?} (user@host, or a name from ~/.ssh/config)")));
+    }
+    if action != "probe" && !name_ok {
         return Err(Error::Bundle(format!("not a host's name: {name:?} (lower-case letters, digits and -)")));
     }
     let mut out = vec!["hosts".to_string(), action.to_string()];
+    if action == "add" || action == "probe" {
+        if let Some(user) = ov.user.as_deref().filter(|u| !u.is_empty()) {
+            let ok = user.len() <= 64 && user.starts_with(|c: char| c.is_ascii_alphanumeric() || "._".contains(c))
+                && user.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+            if !ok {
+                return Err(Error::Bundle(format!("not a user name: {user:?}")));
+            }
+            out.extend(["--user".to_string(), user.to_string()]);
+        }
+        if let Some(port) = ov.port {
+            if port == 0 {
+                return Err(Error::Bundle("not a port: 0".to_string()));
+            }
+            out.extend(["--port".to_string(), port.to_string()]);
+        }
+        if let Some(identity) = ov.identity.as_deref().filter(|i| !i.is_empty()) {
+            if identity.starts_with('-') || identity.chars().any(|c| c.is_control()) {
+                return Err(Error::Bundle(format!("not a plain path: {identity:?}")));
+            }
+            out.extend(["--identity".to_string(), identity.to_string()]);
+        }
+    }
     if let Some(root) = root.filter(|r| !r.is_empty()) {
         // as the CLI checks it (hosts.check_names): plain characters, `~` only as a leading `~/`, no `..`, and a folder of
         // its own below / or the home (not `/`, `~` or `.`): `hosts clean` empties it
@@ -488,14 +529,49 @@ pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str
     out.extend(["--".to_string(), name.to_string()]);
     if action == "add" {
         let dest = dest.unwrap_or_default();
-        let ok = dest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
-            && dest.chars().all(|c| c.is_ascii_alphanumeric() || "_.@%+:[]-".contains(c));
-        if !ok {
+        if !ssh_dest_ok(dest) {
             return Err(Error::Bundle(format!("not an ssh destination: {dest:?} (user@host, or a name from ~/.ssh/config)")));
         }
         out.push(dest.to_string());
     }
     Ok(out)
+}
+
+/// The keys `perception keys check` can test with their providers (keycheck.py).
+pub const CHECKED_KEYS: [&str; 3] = ["ANTHROPIC_API_KEY", "HF_TOKEN", "RUNPOD_API_KEY"];
+
+/// `keys check NAME`: whether the provider accepts the key, by a request that costs nothing.
+pub fn key_check_args(name: &str) -> Result<Vec<&'static str>> {
+    let known: &'static str = CHECKED_KEYS.iter().copied().find(|k| *k == name).ok_or_else(|| Error::Bundle(format!("no check for {name:?}")))?;
+    Ok(vec!["keys", "check", "--", known])
+}
+
+/// `cloud check [runpod]`: whether a provider could be used now, changing nothing. AWS is the CLI's default, unnamed.
+pub fn cloud_check_args(provider: &str) -> Result<Vec<&'static str>> {
+    match provider {
+        "aws" => Ok(vec!["cloud", "check"]),
+        "runpod" => Ok(vec!["cloud", "check", "runpod"]),
+        other => Err(Error::Bundle(format!("not a cloud provider: {other:?}"))),
+    }
+}
+
+/// The hosts an ssh config names (`Host a b`), without patterns (`*`, `?`, `!`): what the form to add a server offers.
+/// Read here only; files it Includes are not followed.
+pub fn ssh_config_hosts(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for line in text.lines() {
+        let line = line.trim();
+        let (key, rest) = line.split_once(|c: char| c.is_whitespace() || c == '=').unwrap_or((line, ""));
+        if !key.eq_ignore_ascii_case("host") {
+            continue;
+        }
+        for name in rest.trim_start_matches(|c: char| c.is_whitespace() || c == '=').split_whitespace() {
+            if !name.contains(['*', '?', '!']) && ssh_dest_ok(name) && !out.iter().any(|n| n == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// `--only` for the steps the user picked (empty: the whole graph). Node ids only, in the CLI's own form.
@@ -1077,19 +1153,53 @@ esac
 
     #[test]
     fn a_hosts_name_destination_and_folder_are_checked_before_the_cli_sees_them() {
-        assert_eq!(host_args("add", "lab", Some("me@lab.example.edu"), None).unwrap(),
+        assert_eq!(host_args("add", "lab", Some("me@lab.example.edu"), None, &SshOverrides::default()).unwrap(),
                    vec!["hosts", "add", "--", "lab", "me@lab.example.edu"]);
-        assert_eq!(host_args("add", "gpu-2", Some("gpu2"), Some("scratch/perception")).unwrap(),
+        assert_eq!(host_args("add", "gpu-2", Some("gpu2"), Some("scratch/perception"), &SshOverrides::default()).unwrap(),
                    vec!["hosts", "add", "--root", "scratch/perception", "--", "gpu-2", "gpu2"]);
-        assert_eq!(host_args("remove", "lab", None, None).unwrap(), vec!["hosts", "remove", "--", "lab"]);
-        assert!(host_args("add", "lab", Some("lab"), Some("~/scratch/perception")).is_ok());
-        assert!(host_args("add", "lab", Some("lab"), Some("/scratch/me/perception")).is_ok());   // its marker guards what clean empties
+        assert_eq!(host_args("remove", "lab", None, None, &SshOverrides::default()).unwrap(), vec!["hosts", "remove", "--", "lab"]);
+        assert!(host_args("add", "lab", Some("lab"), Some("~/scratch/perception"), &SshOverrides::default()).is_ok());
+        assert!(host_args("add", "lab", Some("lab"), Some("/scratch/me/perception"), &SshOverrides::default()).is_ok());   // its marker guards what clean empties
         for (name, dest, root) in [("Lab", "lab", ""), ("cloud", "lab", ""), ("-x", "lab", ""), ("lab", "-oProxyCommand=x", ""),
                                    ("lab", "lab;rm", ""), ("lab", "", ""), ("lab", "lab", "../etc"), ("lab", "lab", "-x"), ("lab", "lab", "a b"),
                                    ("lab", "lab", "/"), ("lab", "lab", "~"), ("lab", "lab", "."), ("lab", "lab", "~/"), ("lab", "lab", "a/~b")] {
-            assert!(host_args("add", name, Some(dest), Some(root)).is_err(), "{name} {dest} {root}");
+            assert!(host_args("add", name, Some(dest), Some(root), &SshOverrides::default()).is_err(), "{name} {dest} {root}");
         }
-        assert!(host_args("delete-everything", "lab", None, None).unwrap_err().to_string().contains("not something to do"));
+        assert!(host_args("delete-everything", "lab", None, None, &SshOverrides::default()).unwrap_err().to_string().contains("not something to do"));
+        assert!(host_args("add", "runpod", Some("lab"), None, &SshOverrides::default()).is_err());   // the CLI keeps it for itself
+    }
+
+    #[test]
+    fn a_hosts_user_port_and_key_are_checked_and_go_before_the_destination() {
+        let ov = SshOverrides { user: Some("ana".into()), port: Some(2222), identity: Some("~/.ssh/id_lab".into()) };
+        assert_eq!(host_args("add", "lab", Some("lab.example.org"), None, &ov).unwrap(),
+                   vec!["hosts", "add", "--user", "ana", "--port", "2222", "--identity", "~/.ssh/id_lab", "--", "lab", "lab.example.org"]);
+        assert_eq!(host_args("probe", "lab.example.org", None, None, &ov).unwrap(),
+                   vec!["hosts", "probe", "--user", "ana", "--port", "2222", "--identity", "~/.ssh/id_lab", "--", "lab.example.org"]);
+        assert_eq!(host_args("check", "lab", None, None, &ov).unwrap(), vec!["hosts", "check", "--", "lab"]);   // only add and probe take them
+        for bad in [SshOverrides { user: Some("-oProxyCommand=x".into()), ..Default::default() },
+                    SshOverrides { user: Some("a b".into()), ..Default::default() },
+                    SshOverrides { port: Some(0), ..Default::default() },
+                    SshOverrides { identity: Some("-i/etc/x".into()), ..Default::default() },
+                    SshOverrides { identity: Some("a\nb".into()), ..Default::default() }] {
+            assert!(host_args("add", "lab", Some("lab"), None, &bad).is_err(), "{bad:?}");
+        }
+        assert!(host_args("probe", "-oProxyCommand=x", None, None, &SshOverrides::default()).is_err());
+    }
+
+    #[test]
+    fn checks_name_only_what_the_cli_can_check() {
+        assert_eq!(key_check_args("ANTHROPIC_API_KEY").unwrap(), vec!["keys", "check", "--", "ANTHROPIC_API_KEY"]);
+        assert!(key_check_args("--help").is_err() && key_check_args("AWS_SECRET_ACCESS_KEY").is_err());
+        assert_eq!(cloud_check_args("aws").unwrap(), vec!["cloud", "check"]);
+        assert_eq!(cloud_check_args("runpod").unwrap(), vec!["cloud", "check", "runpod"]);
+        assert!(cloud_check_args("gcp").is_err());
+    }
+
+    #[test]
+    fn the_ssh_configs_hosts_are_its_named_hosts_without_patterns() {
+        let config = "Include ~/.orbstack/ssh/config\n\nHost lab-gpu biowulf\n  HostName gpu.example.org\n  User ana\nhost=coder.ws\nHost *\n  ServerAliveInterval 30\nHost !bad ?x lab-gpu\nMatch host foo\n";
+        assert_eq!(ssh_config_hosts(config), vec!["lab-gpu", "biowulf", "coder.ws"]);
     }
 
     #[test]

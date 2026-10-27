@@ -366,10 +366,34 @@ pub async fn pipeline_hosts(state: State<'_, AppState>) -> Result<Value> {
 /// the machine over ssh with the user's own keys (batch mode: nothing asks for a password).
 #[tauri::command]
 pub async fn pipeline_host(state: State<'_, AppState>, action: String, name: String, dest: Option<String>,
-                           root: Option<String>) -> Result<Value> {
+                           root: Option<String>, overrides: Option<pipeline::SshOverrides>) -> Result<Value> {
     let p = pipeline(&state)?;
-    let args = pipeline::host_args(&action, &name, dest.as_deref(), root.as_deref())?;
-    blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "hosts")).await
+    let args = pipeline::host_args(&action, &name, dest.as_deref(), root.as_deref(), &overrides.unwrap_or_default())?;
+    let kind = if action == "probe" { "host_probe" } else { "hosts" };   // a probe adds nothing: what the destination has
+    blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), kind)).await
+}
+
+/// The hosts ~/.ssh/config names, for the form that adds a server (read on this machine; nothing is sent).
+#[tauri::command]
+pub fn ssh_config_hosts() -> Vec<String> {
+    let path = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".ssh/config"));
+    path.and_then(|p| std::fs::read_to_string(p).ok()).map(|t| pipeline::ssh_config_hosts(&t)).unwrap_or_default()
+}
+
+/// Whether a key's provider accepts it (`perception keys check NAME`): one request that costs nothing.
+#[tauri::command]
+pub async fn pipeline_key_check(state: State<'_, AppState>, name: String) -> Result<Value> {
+    let args = pipeline::key_check_args(&name)?;
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&args, "key_check")).await
+}
+
+/// Whether a cloud provider could be used now (`perception cloud check [runpod]`), changing nothing.
+#[tauri::command]
+pub async fn pipeline_cloud_check(state: State<'_, AppState>, provider: String) -> Result<Value> {
+    let args = pipeline::cloud_check_args(&provider)?;
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&args, "cloud_check")).await
 }
 
 /// Which cloud GPU providers are offered to nodes that can use one, and at what price (`perception cloud
