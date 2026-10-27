@@ -4,6 +4,7 @@
   // sends a step's inputs. RunPod is set up with its API key (kept in the keychain, KeyRow: replaced or tested there,
   // never removed on its own); AWS uses the AWS credentials on this computer, through SkyPilot. Adding one checks it can
   // be used first; Test checks again, changing nothing (`perception cloud check`); Remove takes RunPod's key with it.
+  import { untrack } from 'svelte';
   import KeyRow from './KeyRow.svelte';
   import { openExternal } from '../links';
   import { keyRows, provider, tooOld, type CheckResult, type CliKeys, type CloudProviderName, type CloudStatus, type KeyStatus, type PipelineApi } from '../pipeline';
@@ -46,7 +47,9 @@
       catch (e) { if (saved) onkeys(await api.removeKey('RUNPOD_API_KEY')); throw e; }
     })) adding = null;
   };
+  // what a Test said, until what it was said of changes: a key saved or removed, the provider added or removed
   let tested = $state<Partial<Record<CloudProviderName, CheckResult>>>({});
+  $effect(() => { void keys; void added.length; untrack(() => { tested = {}; }); });
   const test = async (p: CloudProviderName) => {
     busy = `Testing ${NAMES[p]}…`; error = null; tested = { ...tested, [p]: undefined };
     try { tested = { ...tested, [p]: await api.checkCloud(p) }; } catch (e) { error = tooOld(e, 'test cloud providers'); } finally { busy = null; }

@@ -829,3 +829,29 @@ test('a default the pipeline no longer offers is not shown as chosen: the step s
   await expect(settings.getByRole('combobox', { name: 'Shot captions: model' })).toHaveValue('claude-haiku-5-5');
   await expect(settings.getByRole('listitem', { name: 'Shot captions' })).toContainText('Claude Haiku 5.5');
 });
+
+test("a cloud provider's Test result goes when its key is replaced, or it is removed and added again", async ({ page }) => {
+  await page.goto('/?pipeline-demo=remote');
+  const settings = await settingsAt(page, /^Compute$/);
+  const cloud = settings.getByRole('region', { name: 'Cloud GPU' });
+  const add = async (key: string) => {
+    await cloud.getByRole('button', { name: 'Add provider…' }).click();
+    const form = cloud.getByRole('form', { name: 'Add a cloud GPU provider' });
+    await form.getByRole('textbox', { name: 'RunPod API key' }).fill(key);
+    await form.getByRole('button', { name: 'Add RunPod' }).click();
+  };
+  await add('rp-good');
+  const runpod = cloud.getByRole('listitem', { name: 'RunPod', exact: true });
+  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
+  const said = runpod.locator('p.tested');
+  await expect(said).toHaveText('✓ RunPod can be used.');
+  await runpod.getByRole('button', { name: 'Replace the RunPod key' }).click();
+  await runpod.getByRole('textbox', { name: 'RunPod key' }).fill('rp-other');
+  await runpod.getByRole('button', { name: 'Save' }).click();
+  await expect(said).toHaveCount(0);                                                     // said of the key before
+  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
+  await expect(said).toHaveCount(1);
+  await cloud.getByRole('button', { name: 'Remove RunPod' }).click();
+  await add('rp-good');
+  await expect(said).toHaveCount(0);                                                     // said of the RunPod removed
+});
