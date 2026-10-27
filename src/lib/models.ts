@@ -20,7 +20,7 @@ export function modelLink(m: Pick<Model, 'id' | 'source'>): string | null {
 
 function pageOf(m: Pick<Model, 'id' | 'source'>): string | null {
   const src = m.source?.trim() ?? '';
-  const web = src.match(/https?:\/\/\S+/)?.[0];
+  const web = src.match(/https?:\/\/[^\s)]+/)?.[0];   // not the ")" of a parenthesis it sits in
   if (web) return web;
   const hf = src.match(/hf:\/\/([\w.-]+(?:\/[\w.-]+)?)/)?.[1];
   if (hf) return `https://huggingface.co/${hf}`;

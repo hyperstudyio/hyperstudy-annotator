@@ -264,7 +264,7 @@ describe('what an earlier edit left out', () => {
   });
 });
 
-test('Back returns to the selections before, newest first, and nothing selected starts it again', () => {
+test('Back returns to the selections before, newest first, and after deselecting to what was selected', () => {
   const { s } = session();
   const note = () => s.noteSelection(s.selection);
   s.select('shot', 'shot:0', { seek: false }); note();
@@ -274,6 +274,8 @@ test('Back returns to the selections before, newest first, and nothing selected 
   s.back(); note();
   expect(s.selection).toEqual({ kind: 'person', id: 'person:Person A' });
   expect(s.history.map((x) => x.id)).toEqual(['shot:0']);   // going back adds nothing
-  s.selection = null; note();
-  expect(s.history).toEqual([]);
+  s.selection = null; note();   // Esc
+  expect(s.history.map((x) => x.id)).toEqual(['shot:0', 'person:Person A']);
+  s.back(); note();
+  expect(s.selection).toEqual({ kind: 'person', id: 'person:Person A' });
 });

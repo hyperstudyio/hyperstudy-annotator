@@ -84,12 +84,11 @@ export class Session {
   history = $state<Selection[]>([]);
   #previous: Selection | null = null;
   #goingBack = false;
-  /** The selection changed (the drawer calls this as it does): what it was joins the history, unless this was Back;
-   *  nothing selected starts it again. */
+  /** The selection changed (the drawer calls this as it does): what it was joins the history, unless this was Back.
+   *  Deselecting (Esc, which also stops a clip) keeps it: Back returns to what was selected. */
   noteSelection(now: Selection | null) {
-    if (!now) this.history = [];
-    else if (this.#goingBack) this.#goingBack = false;
-    else if (this.#previous && (this.#previous.kind !== now.kind || this.#previous.id !== now.id)) this.history = [...this.history.slice(-19), this.#previous];
+    if (this.#goingBack) this.#goingBack = false;
+    else if (this.#previous && (!now || this.#previous.kind !== now.kind || this.#previous.id !== now.id)) this.history = [...this.history.slice(-19), this.#previous];
     this.#previous = now;
   }
   /** Back to the selection before this one. */

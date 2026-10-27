@@ -13,6 +13,7 @@ test('a model links to its page when its source or id says where it is, and to n
   expect(modelLink(m('py-feat Detectorv2', 'py-feat==2.1.5 (weights from hf://py-feat)'))).toBe('https://huggingface.co/py-feat');
   expect(modelLink(m('facebook/dinov3-vitl16-pretrain-lvd1689m'))).toBe('https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m');
   expect(modelLink(m('claude-haiku-5-5 (object names, name families, crop check)'))).toMatch(/^https:\/\/docs\.anthropic\.com\//);
+  expect(modelLink(m('x', 'weights (https://github.com/a/b)'))).toBe('https://github.com/a/b');
   expect(modelLink(m('rtmw'))).toBeNull();
   expect(modelLink(m('rules over hand keypoints and face landmarks'))).toBeNull();
 });

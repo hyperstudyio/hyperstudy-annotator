@@ -22,7 +22,7 @@
       {#snippet button()}<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /><path d="M8 7.2v4M8 4.8v.1" /></svg>{/snippet}
       {#snippet children()}
         <ul class="models">
-          {#each models as m (m.name + (m.detail ?? ''))}
+          {#each models as m, i (i)}
             <li>
               {#if m.link}<button class="link name" onclick={() => openExternal(m.link!)}>{m.name}</button>{:else}<span class="name">{m.name}</span>{/if}
               {#if m.detail}<span class="detail">{m.detail}</span>{/if}
