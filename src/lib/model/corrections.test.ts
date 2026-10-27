@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, readCorrectionsFile, typesIn, unknownRefs, type AnnotationType, type Op } from './corrections';
+import { FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, newType, readCorrectionsFile, typesIn, unknownRefs, type AnnotationType, type Op } from './corrections';
 
 const SHA = 'a'.repeat(64);
 
@@ -130,4 +130,11 @@ test("other videos' types are listed by video, each once, and videos with none a
     { key: 'b2', title: 'clip2', ops: [{ op: 'person.rename', person: 'person:A', name: 'x' }] },
     { key: 'b3', title: 'clip3', ops: [{ op: 'annotation.type', type: mood }, { op: 'annotation.type_delete', id: 'type:1' }] },
   ])).toEqual([{ key: 'b1', title: 'clip1', types: [mood] }]);
+});
+
+test('a new type keeps only what its kind uses: categories for a category, a range for a number', () => {
+  const draft = { id: '', name: ' Gaze ', kind: 'binary' as const, target: 'person' as const, options: ['a', 'b'], min: 0, max: 5 };
+  expect(newType(draft, 'type:1')).toEqual({ id: 'type:1', name: 'Gaze', kind: 'binary', target: 'person', options: [] });
+  expect(newType({ ...draft, kind: 'number' }, 'type:2')).toEqual({ id: 'type:2', name: 'Gaze', kind: 'number', target: 'person', options: [], min: 0, max: 5 });
+  expect(newType({ ...draft, kind: 'category' }, 'type:3').options).toEqual(['a', 'b']);
 });

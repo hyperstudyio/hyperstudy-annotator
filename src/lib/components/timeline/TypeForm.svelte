@@ -5,7 +5,7 @@
   // use; and it cannot be deleted (Session.usesOf).
   import { useSession, useSource } from '../../model/context';
   import { VALUE_KINDS } from '../../model/session.svelte';
-  import { applyTypeFields, type AnnotationType, type TypeFields, type ValueKind } from '../../model/corrections';
+  import { applyTypeFields, newType, type AnnotationType, type TypeFields, type ValueKind } from '../../model/corrections';
   import type { TypesElsewhere } from '../../source';
 
   let { type, close }: { type?: AnnotationType; close: () => void } = $props();
@@ -32,7 +32,7 @@
     const name = draft.name.trim();
     if (!name) { s.toast('Give the type a name'); return; }
     if (draft.kind === 'category' && draft.options.length < 2) { s.toast('List at least two categories'); return; }
-    const made: AnnotationType = { ...draft, name, id: `type:${crypto.randomUUID()}`, options: draft.kind === 'category' ? [...draft.options] : [] };
+    const made = newType(draft, `type:${crypto.randomUUID()}`);
     await s.addType(made);
     s.toast(`“${name}” added. Drag across its row, or press A to annotate what is selected.`);
     close();

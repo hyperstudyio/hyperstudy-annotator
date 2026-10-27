@@ -13,6 +13,13 @@ export interface AnnotationType { id: string; name: string; kind: ValueKind; tar
 /** A type's fields an edit changes. A range bound is cleared with null: an op is stored as JSON, which drops a key
  *  whose value is undefined, so the cleared bound would come back when the log is read. */
 export type TypeFields = Partial<Omit<AnnotationType, 'id' | 'min' | 'max'>> & { min?: number | null; max?: number | null };
+/** A type made from the form's draft: only what its kind uses (a range entered while it was a number, or categories
+ *  while it was a category, would otherwise stay in the log and the export). */
+export function newType(draft: AnnotationType, id: string): AnnotationType {
+  const { name, kind, target, options, min, max } = draft;
+  return { id, name: name.trim(), kind, target, options: kind === 'category' ? [...options] : [],
+    ...(kind === 'number' && min !== undefined ? { min } : {}), ...(kind === 'number' && max !== undefined ? { max } : {}) };
+}
 export function applyTypeFields(t: AnnotationType, fields: TypeFields) {
   for (const [k, v] of Object.entries(fields)) { if (v === null) delete t[k as 'min' | 'max']; else Object.assign(t, { [k]: v }); }
 }
