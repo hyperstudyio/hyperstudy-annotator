@@ -741,6 +741,16 @@ test('RunPod has one Test and one Remove: Test is its key\'s (the same request),
   await expect(aws.getByRole('button', { name: 'Test AWS' })).toHaveCount(1);
 });
 
+test('RunPod whose key has gone keeps a Test of its own, which says the key is missing', async ({ page }) => {
+  await page.goto('/?pipeline-demo=runpod-key-gone');
+  const settings = await settingsAt(page, /^Compute$/);
+  const runpod = settings.getByRole('region', { name: 'Cloud GPU' }).getByRole('listitem', { name: 'RunPod', exact: true });
+  await expect(runpod.getByRole('listitem', { name: 'RunPod key' })).toContainText('Not set.');
+  await expect(runpod.getByRole('button', { name: 'Test the RunPod key' })).toHaveCount(0);   // nothing for the key to test
+  await runpod.getByRole('button', { name: 'Test RunPod' }).click();
+  await expect(runpod.locator('p.tested')).toHaveText('no RunPod API key.');
+});
+
 test('RunPod is added with its key, is then a place for a step, and removing it removes its key', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   const menu = placeMenu(dialog, 'faces', 'Face tracks');

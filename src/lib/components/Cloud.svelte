@@ -69,8 +69,9 @@
     if (p === 'runpod' && runpodKey?.stored) onkeys(await api.removeKey('RUNPOD_API_KEY'));
   });
   // RunPod's machine is whichever of its GPUs is free: its price is the most of theirs
-  // a provider set up with a key has its key's row, and the key's Test is its Test
-  const keyed = (p: CloudProviderName) => p === 'runpod' && !!runpodKey;
+  // a provider set up with a key is tested through its key's row, while the key is there to test (stored, or found by
+  // the CLI); a key gone since RunPod was added leaves RunPod's own Test, which says so
+  const keyed = (p: CloudProviderName) => p === 'runpod' && !!runpodKey && (runpodKey.stored || !!runpodKey.elsewhere);
   const price = (p: CloudProviderName) => `${p === 'runpod' ? 'up to ' : ''}$${provider(cloud, p)!.hourly_usd.toFixed(2)} an hour`;
   const focus = (el: HTMLElement) => { el.focus(); };
 </script>
@@ -97,8 +98,8 @@
             <button class="plain danger" onclick={() => remove(p)} disabled={!!busy} aria-label={`Remove ${NAMES[p]}`} title={p === 'runpod' ? 'Its API key is removed with it' : undefined}>Remove</button>
           </div>
           {#if tested[p]}<p class="tested" class:ok={tested[p]!.ok} class:error={!tested[p]!.ok} role="status">{tested[p]!.ok ? `✓ ${NAMES[p]} can be used` : tested[p]!.detail}.</p>{/if}
-          {#if keyed(p)}
-            <ul class="set-rows inner"><KeyRow {api} k={runpodKey!} elsewhere={runpodKey!.elsewhere} removable={false} onchange={onkeys} {onbusy} /></ul>
+          {#if p === 'runpod' && runpodKey}
+            <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} removable={false} onchange={onkeys} {onbusy} /></ul>
           {:else if p === 'aws'}
             <p class="muted">Uses the AWS credentials on this computer.</p>
           {/if}
