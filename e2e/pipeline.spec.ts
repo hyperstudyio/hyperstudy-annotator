@@ -348,6 +348,29 @@ test('a place that cannot be planned is said why and undone: the steps stay, wit
   expect((await runs(page))[0].places).toEqual({ faces: 'ssh-lab:cuda' });
 });
 
+test('a choice refused while another was planning goes back to what the plan on screen was made with, both of them', async ({ page }) => {
+  type W = { __holdPlan?: Promise<void>; __refusePlace?: string; releasePlan?: () => void };
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const faces = placeMenu(dialog, 'faces', 'Face tracks');
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
+  await dialog.getByRole('button', { name: 'Shot captions' }).click();
+  const model = dialog.getByRole('listitem', { name: 'captions' }).getByRole('combobox', { name: 'Model' });
+  await expect(model).toHaveValue('claude-haiku-5-5');
+  await page.evaluate(() => { const w = window as unknown as W; w.__holdPlan = new Promise((r) => { w.releasePlan = r; }); });
+  await faces.selectOption('ssh-lab:cuda');                                       // its plan held back
+  await model.selectOption('claude-opus-5-5');                                    // planned with it, held too
+  await page.evaluate(() => { const w = window as unknown as W; w.__refusePlace = 'ssh-lab:cuda'; w.releasePlan!(); });
+  await expect(dialog.getByText('not a node and a place: "faces" = "ssh-lab:cuda"')).toBeVisible();
+  await expect(faces).toHaveValue('native:mps');                                  // not the lab server, never planned
+  await expect(model).toHaveValue('claude-haiku-5-5');
+  await expect(dialog.getByRole('heading', { name: /\$0\.16$/ })).toBeVisible();   // the plan on screen, Haiku's
+  await page.evaluate(() => { const w = window as unknown as W; delete w.__refusePlace; delete w.__holdPlan; });
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.places ?? {}).toEqual({});
+  expect(ran.allow.uploads).not.toHaveProperty('faces');
+});
+
 test('moving a step to a lab server is the choice to send it its inputs: it stays on, and the run may send them there only', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   const faces = dialog.getByRole('listitem', { name: 'faces' });

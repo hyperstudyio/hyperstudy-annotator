@@ -142,6 +142,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     async doctor() { if (!installed) throw new Error('the pipeline is not installed yet: the app installs it when it starts'); return doctor; },
     graphs: async () => oldCli ? graphs.filter((g) => g.file !== 'full.yaml') : graphs,   // an older pipeline has no full graph
     async plan(_graph, _video, places, settings) {
+      await (globalThis as { __holdPlan?: Promise<void> }).__holdPlan;   // tests: plans held back, so choices overlap
       const refused = (globalThis as { __refusePlace?: string }).__refusePlace;   // tests: a place the app or CLI refuses
       if (refused && Object.values(places).includes(refused)) throw new Error(`not a node and a place: "faces" = "${refused}"`);
       if (oldCli) return { ...plan, nodes: plan.nodes.map(({ needs, place, options, estimates, estimate_s, estimate_basis, title, service, description, outputs, models, settings, ...n }) => n) };

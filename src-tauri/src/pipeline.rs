@@ -431,7 +431,7 @@ pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result
     let host_ok = |s: &str| (1..=31).contains(&s.len()) && starts(s) && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     let backend_ok = |s: &str| match s.strip_prefix("ssh-") {
         Some(host) => host_ok(host),
-        None => !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()) && s != "ssh",
+        None => ["native", "self", "cloud", "runpod"].contains(&s),
     };
     let target_ok = |s: &str| starts(s) && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || ".-_".contains(c));
     let mut out = vec![];
@@ -1288,7 +1288,7 @@ esac
         for (node, place) in [("faces", "native:cpu --allow-downloads"), ("../x", "native:cpu"), ("faces", "NATIVE:CPU"), ("faces", "native"),
                               ("--allow-downloads", "native:cpu"), ("-x", "native:cpu"), ("faces", "ssh-:cuda"), ("faces", "ssh--x:cuda"),
                               ("faces", "ssh-Lab:cuda"), ("faces", "ssh-lab.local:cuda"), ("faces", "ssh-a2345678901234567890123456789012:cuda"),
-                              ("faces", "lab-1:cuda"), ("faces", "ssh-lab:cuda=x")] {
+                              ("faces", "lab-1:cuda"), ("faces", "ssh-lab:cuda=x"), ("faces", "foo:cuda"), ("faces", "ssh:cuda")] {
             let mut bad = std::collections::BTreeMap::new();
             bad.insert(node.to_string(), place.to_string());
             assert!(place_args(&bad).is_err(), "{node}={place}");
