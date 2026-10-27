@@ -204,6 +204,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     },
     async checkKey(name) {
       unchecked('check');
+      await (globalThis as { __holdCheck?: Promise<void> }).__holdCheck;
       const key = stored.get(name), who = KEYS.find((k) => k.name === name)!.label;
       return !key ? { ok: false, detail: `${name} is not set` } : key.startsWith('rejected') ? { ok: false, detail: `${who} refused the key` } : { ok: true, detail: `${who} accepted the key` };
     },
