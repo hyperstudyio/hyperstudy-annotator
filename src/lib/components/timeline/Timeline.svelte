@@ -6,7 +6,7 @@
   //   pinch (ctrl+wheel): zoom about the pointer                      drag a label's grip: reorder groups / rows
   //   drag a row's bottom edge: resize it                             drag the top edge: timeline height
   //   drag an annotation: move it; drag its end: change its length     (edges snap to cuts, the playhead and other
-  //   annotations' ends; ⌥ places freely)
+  //   annotations' ends; ⌥ places freely)                              double-click an annotation: its menu (value, who)
   import { flushSync, tick } from 'svelte';
   import { useSession } from '../../model/context';
   import { GROUP_KEYS } from '../../model/view.svelte';
@@ -19,6 +19,7 @@
   import Popover from '../ui/Popover.svelte';
   import ModelInfo from './ModelInfo.svelte';
   import TypeForm from './TypeForm.svelte';
+  import NoteMenu from './NoteMenu.svelte';
   import RowLabel from './RowLabel.svelte';
   import PlotCanvas from './PlotCanvas.svelte';
 
@@ -83,7 +84,8 @@
     const n = bar.retime ? s.S.notes.get(bar.retime) : undefined;
     if (e.button !== 0 || !n) return;
     e.preventDefault(); e.stopPropagation();
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect(), from = { start: n.start, end: n.end };
+    // from where it is drawn: a drop still being saved is not in the log yet
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect(), from = landing?.note === n.id ? { ...landing.span } : { start: n.start, end: n.end };
     // what an edge snaps to: shot cuts, the playhead, the other annotations' ends
     const times = [...s.bundle.shots.flatMap((x) => [x.start, x.end]), pb.time,
       ...[...s.S.notes.values()].filter((x) => x.id !== n.id).flatMap((x) => [x.start, x.end])];
@@ -282,9 +284,10 @@
       <div class="bar summary" style="left:{bar.start * pps}px; width:{Math.max(3, (bar.end - bar.start) * pps - 1)}px; top:3px; background:{bar.colour}"></div>
     {:else}
       <!-- no focus on click: a focused button would also take the Space meant for play/pause -->
-      <button class="bar {bar.flags.join(' ')}" class:draggable={!!bar.drag} class:retimable={!!bar.retime} style={barStyle(bar)}
-        title={bar.retime ? `${bar.title} · drag to move, drag an end to change its length` : bar.title} tabindex="-1" onmousedown={(e) => e.preventDefault()}
+      <button class="bar {bar.flags.join(' ')}" class:draggable={!!bar.drag} class:retimable={!!bar.retime} style={barStyle(bar)} data-key={bar.key}
+        title={bar.retime ? `${bar.title} · double-click to set its value · drag to move, drag an end to change its length` : bar.title} tabindex="-1" onmousedown={(e) => e.preventDefault()}
         onpointerdown={bar.drag ? (e) => speechDown(e, bar) : bar.retime ? (e) => retimeDown(e, bar) : undefined} onclick={() => barClick(bar)}
+        ondblclick={bar.retime ? () => (s.noteMenu = bar.retime!) : undefined}
         >{#if bar.retime}<span class="end-grip start" aria-hidden="true"></span>{/if}{bar.text ?? ''}{#if bar.retime}<span class="end-grip end" aria-hidden="true"></span>{/if}</button>
     {/if}
   {/each}
@@ -401,6 +404,7 @@
   </div>
 </section>
 
+{#if s.noteMenu}<NoteMenu id={s.noteMenu} />{/if}
 {#if gesture?.kind === 'retime' && gesture.moved}
   <!-- above the pointer: annotation rows are often at the foot of the window -->
   <div class="retime-tip" style="left:{gesture.px + 12}px; top:{gesture.py - 36}px">{fmt(gesture.span.start)}–{fmt(gesture.span.end)} · {(gesture.span.end - gesture.span.start).toFixed(1)} s</div>

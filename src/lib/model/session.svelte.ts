@@ -102,6 +102,8 @@ export class Session {
     this.#goingBack = true;
     this.select(to.kind, to.id, { seek: false });
   }
+  /** The annotation whose edit menu is open on the timeline (double-click it, or Enter when it is selected). */
+  noteMenu = $state<string | null>(null);
   /** The panel shows the keyboard keys (? toggles it). */
   help = $state(false);
   /** What this version carried over from an earlier one (the ops it could not match wait for review). */
@@ -504,6 +506,21 @@ export class Session {
     this.activeType = typeId;
     await this.commit({ op: 'annotation.add', note });
     this.select('note', note.id, { seek: false });
+  }
+  /** The people on screen during a span, most seconds on screen in it first (who an annotation is likely about). */
+  peopleDuring(span: Span): string[] {
+    const secs = new Map<string, number>();
+    for (const f of this.bundle.faces) {
+      const overlap = Math.min(f.end, span.end) - Math.max(f.start, span.start), p = this.personOf(f);
+      if (overlap > 0 && !this.special(p)) secs.set(p, (secs.get(p) ?? 0) + overlap);
+    }
+    const order = this.people;
+    return [...secs.keys()].sort((a, b) => secs.get(b)! - secs.get(a)! || order.indexOf(a) - order.indexOf(b));
+  }
+  async deleteNote(id: string) {
+    await this.commit({ op: 'annotation.delete', id });
+    if (this.selection?.kind === 'note' && this.selection.id === id) this.selection = null;
+    if (this.noteMenu === id) this.noteMenu = null;
   }
   /** The type keys and drags annotate with: the one last added, edited or used, else the first. */
   currentType(): AnnotationType | null { return (this.activeType && this.typeOf(this.activeType)) || this.S.types[0] || null; }

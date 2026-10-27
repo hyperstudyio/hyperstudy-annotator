@@ -377,3 +377,26 @@ describe('annotation types', () => {
     expect('min' in again.typeOf('type:n')!).toBe(false);
   });
 });
+
+describe("an annotation's menu", () => {
+  test('offers the people on screen during the annotation, most on screen first, and no one unknown', () => {
+    const { s } = session();
+    expect(s.peopleDuring({ start: 9, end: 16 })).toEqual(['person:Person A', 'person:Person C']);
+    expect(s.peopleDuring({ start: 0, end: 3 })).toEqual(['person:Person A', 'person:Person B']);
+    expect(s.peopleDuring({ start: 5, end: 9 })).toEqual([]);
+  });
+
+  test('deleting the selected annotation closes its menu, and undo brings it back', async () => {
+    const { s } = session();
+    await s.addType({ id: 'type:x', name: 'X', kind: 'binary', target: 'scene', options: [] });
+    await s.addNote('type:x', 1, 2);
+    const id = s.selection!.id;
+    s.noteMenu = id;
+    await s.deleteNote(id);
+    expect(s.S.notes.has(id)).toBe(false);
+    expect(s.selection).toBeNull();
+    expect(s.noteMenu).toBeNull();
+    await s.undo();
+    expect(s.S.notes.has(id)).toBe(true);
+  });
+});

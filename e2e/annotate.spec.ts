@@ -207,3 +207,56 @@ test('a dropped annotation goes straight to where it was dragged, never back to 
   expect(Math.round(parseFloat(await bar.evaluate((el) => (el as HTMLElement).style.left)))).toBe(Math.round(dropped));
   expect(await lefts()).not.toContain(Math.round(first));
 });
+
+test("double-clicking an annotation opens its menu at the bar: a value and who it is about, then it closes; ⌫ deletes", async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Mood');
+  await form.getByLabel('Value kind').selectOption('category');
+  for (const c of ['happy', 'sad']) { await form.getByLabel('Add a category').fill(c); await form.getByLabel('Add a category').press('Enter'); }
+  await form.getByRole('button', { name: 'Add type' }).click();
+  await page.keyboard.press('a');   // the first shot, with three people on screen
+  const bar = typeRow(page, 'Mood').locator('.bar');
+  await bar.dblclick();
+  const menu = page.getByRole('dialog', { name: 'Mood annotation' });
+  await expect(menu).toBeVisible();
+  const people = menu.getByRole('group', { name: 'On screen during it' }).getByRole('button');
+  await expect(people.first()).toBeVisible();
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/note-menu.png` });
+  await page.keyboard.press('2');   // a value; it stays open, as no one is chosen yet
+  await expect(menu.getByRole('button', { name: 'sad' })).toHaveClass(/on/);
+  await expect(menu).toBeVisible();
+  const name = (await people.first().innerText()).trim();
+  await people.first().click();   // now it says all it needs to
+  await expect(menu).toHaveCount(0);
+  await expect(bar).toHaveText(`sad · ${name}`);
+
+  await page.keyboard.press('Enter');   // the selected annotation's menu again
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await bar.click();
+  await page.keyboard.press('Backspace');
+  await expect(bar).toHaveCount(0);
+  await page.keyboard.press('Meta+z');
+  await expect(bar).toHaveText(`sad · ${name}`);
+});
+
+test('a yes/no about the scene closes its menu as soon as it is answered', async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Laughter');
+  await form.getByLabel('About').selectOption('scene');
+  await form.getByRole('button', { name: 'Add type' }).click();
+  await page.keyboard.press('a');
+  const bar = typeRow(page, 'Laughter').locator('.bar');
+  await bar.dblclick();
+  const menu = page.getByRole('dialog', { name: 'Laughter annotation' });
+  await menu.getByRole('button', { name: 'Yes' }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(bar).toHaveText('yes');
+});
