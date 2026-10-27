@@ -47,7 +47,7 @@ test('the switcher lists the videos, marks the open one, and opens another', asy
   await expect(page.getByRole('searchbox', { name: 'Find a video' })).toHaveCount(0);   // only for more than 6
   const menu = page.getByRole('dialog', { name: /^Switch video, now / });
   await expect(menu.getByRole('button', { name: 'Import…' })).toBeVisible();
-  await expect(menu.getByRole('button', { name: 'Extract from a video…' })).toBeVisible();
+  await expect(menu.getByRole('button', { name: /Extract/ })).toHaveCount(0);            // extracting is Extract's page
   await list.getByRole('button', { name: /^nes-biking/ }).click();
   await expect(menu).toHaveCount(0);                                                    // closed by choosing
   await expect(page.getByRole('button', { name: 'Switch video, now nes-biking' })).toBeVisible();
@@ -76,10 +76,10 @@ test('a bundle without its video asks for it, then opens', async ({ page }) => {
   await expect(await video(page, 'ooo-genz-clip2')).not.toContainText('No video');
 });
 
-test('with no bundles yet, the page offers the two ways to get one; an imported one opens', async ({ page }) => {
+test('with no bundles yet, the page offers to import one (extracting is Extract\'s page); an imported one opens', async ({ page }) => {
   await page.goto('/?library-demo=empty');
-  await expect(page.getByText('Nothing to annotate yet.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Extract from a video…' })).toBeVisible();
+  await expect(page.getByText('Nothing to annotate yet. Import a bundle to start.')).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: /Extract/ })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Import…' })).toHaveCount(1);   // offered once
   await page.getByRole('button', { name: 'Import…' }).click();
   await expect(page.getByText('imported-clip needs its video.')).toBeVisible();      // the demo's import has none
