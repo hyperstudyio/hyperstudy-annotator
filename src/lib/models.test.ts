@@ -37,3 +37,11 @@ test('a model page on a host the app may not open is not offered', () => {
   expect(modelLink(m('MediaPipe Pose Landmarker heavy', 'https://storage.googleapis.com/mediapipe-models/pose.task'))).toBeNull();
   expect(modelLink(m('x', 'http://github.com/a/b'))).toBeNull();   // not https
 });
+
+test('a download is said in MB under a gigabyte, in GB above, and not at all when its size is unknown', async () => {
+  const { downloadSize } = await import('./models');
+  expect(downloadSize(2.3)).toBe('2.3 GB, downloaded once');
+  expect(downloadSize(0.04)).toBe('41 MB, downloaded once');
+  expect(downloadSize(0.5)).toBe('512 MB, downloaded once');
+  expect(downloadSize(null)).toBeNull();
+});

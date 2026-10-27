@@ -8,7 +8,7 @@
   import KeyRow from './KeyRow.svelte';
   import { openExternal } from '../links';
   import { LICENCE_TEXT } from '../library';
-  import { modelNote } from '../models';
+  import { downloadSize, modelNote } from '../models';
   import { loadDefaults, saveDefault } from '../stepDefaults';
   import { choiceLabel, choiceName, keyRows, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
   import type { LicenceMode } from '../types';
@@ -56,7 +56,7 @@
   };
   // only a licence that limits use is said; the rest is the common case
   const limits = (m: ModelInfo) => m.licence_mode === 'academic-only' || m.licence_mode === 'needs-review';
-  const size = (m: ModelInfo) => m.size_gb ? `${m.size_gb < 1 ? m.size_gb.toFixed(1) : Math.round(m.size_gb * 10) / 10} GB, downloaded once` : null;
+  const size = (m: ModelInfo) => downloadSize(m.size_gb);
   const page = (m: ModelInfo) => `https://huggingface.co/${(m.source?.startsWith('hf://') ? m.source.slice(5) : m.id).split('@')[0]}`;
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 </script>
@@ -117,7 +117,7 @@
 {#if anthropicOld || leftover.length}
   <section class="set-part" aria-labelledby="keys-heading">
     <div class="set-head"><h2 id="keys-heading">{anthropicOld ? 'Keys' : 'Keys no step uses'}</h2></div>
-    {#if !anthropicOld}<p class="muted">Saved earlier; nothing sends them now. Remove them if you do not need them.</p>{/if}
+    {#if !anthropicOld}<p class="muted">Saved earlier. No step uses them, but the pipeline is still given them with every command: remove them if you do not need them.</p>{/if}
     <ul class="set-rows">
       {#if anthropicOld}<KeyRow {api} k={anthropicOld} elsewhere={anthropicOld.elsewhere} label="Anthropic key" onchange={onkeys} {onbusy} />{/if}
       {#each leftover as k (k.name)}<KeyRow {api} {k} label={`${k.label} key`} onchange={onkeys} {onbusy} />{/each}
