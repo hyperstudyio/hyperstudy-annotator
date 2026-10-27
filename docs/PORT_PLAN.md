@@ -54,7 +54,8 @@ Steps 1-8 are done and checked in Chrome (browser mode) on both bake-off bundles
 starts (`npm run tauri dev`); its window and file dialogs still need checking by hand (the TODO in `source.ts`).
 
 Tests: `npm test` (vitest: the model, the timeline rows and scale, the drawing maths), `npm run test:e2e` (Playwright,
-in the installed Chrome, against `npm run dev` and `/devdata`: the timeline's scale and the drag-range bug),
+in the installed Chrome and in WebKit, the desktop app's engine, `--project chrome|webkit`, against `npm run dev`; the
+tests that need the bake-off bundles read `/devdata` and skip without it, as in CI),
 `cargo test` in `src-tauri`, `npm run check`.
 
 The viewer's grid tracks are `minmax(0, ...)` and its items `min-width: 0`: the timeline's scale is fitted to its
