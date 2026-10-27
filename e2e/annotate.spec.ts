@@ -355,3 +355,39 @@ test('a value typed into the menu is kept when the menu is closed by Escape or a
   await expect(menu).toHaveCount(0);
   await expect(bar).toHaveText('looks away');
 });
+
+test("⌫ on a focused button in a menu is that button's, never a delete of the selected annotation", async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Mood');
+  await form.getByLabel('Value kind').selectOption('category');
+  for (const c of ['happy', 'sad', 'calm']) { await form.getByLabel('Add a category').fill(c); await form.getByLabel('Add a category').press('Enter'); }
+  await form.getByRole('button', { name: 'Add type' }).click();
+  await page.keyboard.press('a');   // selected, and no category used yet
+  const bar = typeRow(page, 'Mood').locator('.bar');
+  await expect(bar).toHaveCount(1);
+  await typeRow(page, 'Mood').getByRole('button', { name: 'Annotation type Mood', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Annotation type Mood' }).getByRole('button', { name: 'Remove calm' }).focus();
+  await page.keyboard.press('Backspace');
+  await expect(bar).toHaveCount(1);
+});
+
+test('Escape closes the menu from a number field too', async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Intensity');
+  await form.getByLabel('Value kind').selectOption('number');
+  await form.getByLabel('About').selectOption('scene');
+  await form.getByRole('button', { name: 'Add type' }).click();
+  await page.keyboard.press('a');
+  await typeRow(page, 'Intensity').locator('.bar').dblclick();
+  const menu = page.getByRole('dialog', { name: 'Intensity annotation' });
+  await menu.getByLabel('Value').fill('4');
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(typeRow(page, 'Intensity').locator('.bar')).toHaveText('4');
+});
