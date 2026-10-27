@@ -23,6 +23,8 @@ export interface Bar extends Span {
   sel?: Selection;
   /** Speech: drag onto another row to change the speaker. */
   drag?: { utt: string; ghost: string };
+  /** An annotation (its id): drag its middle to move it, an end to change its length. */
+  retime?: string;
 }
 
 export type Label =
@@ -247,7 +249,7 @@ export function buildGroups(s: Session): Group[] {
     const mine = notes.filter((n) => n.type === type.id).sort((a, c) => a.start - c.start), r = stack(mine);
     return { id: `type:${type.id}`, create: type.id, hint: 'drag across this row, or press A, to annotate',
       label: { kind: 'type', type: type.id, text: type.name },
-      bars: mine.map((n, k): Bar => ({ key: n.id, start: n.start, end: n.end, row: r[k], sel: { kind: 'note', id: n.id },
+      bars: mine.map((n, k): Bar => ({ key: n.id, start: n.start, end: n.end, row: r[k], sel: { kind: 'note', id: n.id }, retime: n.id,
         text: [s.hasValue(n) ? s.noteValue(n) : '', n.person ? s.nameOf(s.root(n.person)) : ''].filter(Boolean).join(' · '), colour: n.person ? s.colourOf(s.root(n.person)) : '#ce93d8',
         flags: flags(!s.hasValue(n) && 'unconfirmed', s.isSel('note', n.id) && 'selected'), title: `${type.name}: ${s.noteValue(n)}` })) };
   });
