@@ -67,7 +67,8 @@
     else if (k === 'Escape') { if (pb.clip) pb.stop(); s.selection = null; s.marking = null; s.noteMenu = null; }
     // Enter on a focused control is that control's (a button, a menu's trigger)
     else if (sel?.kind === 'note' && k === 'Enter' && !document.activeElement?.closest?.('button, a, select, [role=button]')) { e.preventDefault(); s.noteMenu = sel.id; }
-    else if (sel?.kind === 'note' && (k === 'Backspace' || k === 'Delete')) { e.preventDefault(); s.deleteNote(sel.id).then(() => s.toast('Annotation deleted · ⌘Z brings it back')); }
+    // not from another menu's control (a category's × in a type's menu): ⌫ there is that control's
+    else if (sel?.kind === 'note' && (k === 'Backspace' || k === 'Delete') && !document.activeElement?.closest?.('[role=dialog]:not(.note-menu)')) { e.preventDefault(); s.deleteNote(sel.id).then(() => s.toast('Annotation deleted · ⌘Z brings it back')); }
     else if (k === '[' || k === 'a' || k === 'A') {
       if (!s.currentType()) { s.toast('Add an annotation type first: + beside Annotations on the timeline'); return; }
       if (k !== '[') s.annotateHere();

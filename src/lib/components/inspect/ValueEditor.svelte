@@ -10,7 +10,7 @@
 {:else if type.kind === 'number'}
   <div class="row">
     <input type="number" aria-label="Value" style="width:120px" step="any" value={value ?? ''} min={type.min} max={type.max}
-      onkeydown={(e) => e.stopPropagation()} onchange={(e) => onchange(e.currentTarget.value === '' ? null : Number(e.currentTarget.value))} />
+      onkeydown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }} onchange={(e) => onchange(e.currentTarget.value === '' ? null : Number(e.currentTarget.value))} />
     {#if type.min !== undefined || type.max !== undefined}<span class="meta">range {type.min ?? '…'} to {type.max ?? '…'}</span>{/if}
   </div>
 {:else}
