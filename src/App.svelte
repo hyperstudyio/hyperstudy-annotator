@@ -67,7 +67,12 @@
   const startUpdates = (u: Updates) => { updates = u; u.check({ quiet: true }); };
   if (desktop) {
     tauriUpdater().then((api) => startUpdates(new Updates(api))).catch(() => {});
-    import('@tauri-apps/api/event').then(({ listen }) => listen('menu://check-for-updates', () => { toUpdates(); updates?.check(); }));
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen('menu://check-for-updates', () => { toUpdates(); updates?.check(); });
+      // File > Import… and Export…: the Annotator page does them (Annotator, Header), on its own page
+      listen('menu://import', () => { page = 'annotator'; window.dispatchEvent(new Event('app:import')); });
+      listen('menu://export', () => { if (page === 'annotator') window.dispatchEvent(new Event('app:export')); });
+    });
   } else if (q.has('update-demo')) {
     import('./lib/updates.fake').then((m) => startUpdates(new Updates(m.fakeUpdater((q.get('update-demo') || 'available') as Parameters<typeof m.fakeUpdater>[0]))));
   }
@@ -76,7 +81,7 @@
   else {
     if (q.has('library-demo')) import('./lib/library.fake').then((m) => (library = m.fakeLibrary(q.get('library-demo') === 'empty')));
     const bundle = q.get('bundle');
-    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (pipeline = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary', remote: q.get('pipeline-demo') === 'remote', machinesError: q.get('pipeline-demo') === 'machines-error', noCloud: q.get('pipeline-demo') === 'no-cloud', keysError: q.get('pipeline-demo') === 'keys-error', missingKey: q.get('pipeline-demo') === 'missing-key',
+    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (pipeline = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary', remote: q.get('pipeline-demo') === 'remote', machinesError: q.get('pipeline-demo') === 'machines-error', noCloud: q.get('pipeline-demo') === 'no-cloud', keysError: q.get('pipeline-demo') === 'keys-error', missingKey: q.get('pipeline-demo') === 'missing-key', gated: q.get('pipeline-demo') === 'gated',
       setup: q.get('pipeline-demo') === 'setup-running' ? 'running' : q.get('pipeline-demo') === 'setup-failed' ? 'failed' : q.get('pipeline-demo') === 'installing' ? 'installing' : q.get('pipeline-demo') === 'install-failed' ? 'install-failed' : 'done' },
       // what each demo run was given (its consent, places and spending cap), for the browser tests
       ((window as unknown as { __pipelineRuns: unknown[] }).__pipelineRuns = []))));

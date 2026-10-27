@@ -22,7 +22,7 @@
   const ITEMS: { key: Page; label: string; hint: string }[] = [
     { key: 'extract', label: 'Extract', hint: 'Run the pipeline on a video' },
     { key: 'annotator', label: 'Annotator', hint: 'Open a bundle to review and correct it' },
-    { key: 'settings', label: 'Settings', hint: 'Keys and machines' },
+    { key: 'settings', label: 'Settings', hint: 'Models, machines and the app' },
   ];
   const R = 15, C = 2 * Math.PI * R;   // the run ring, around Extract's icon
   const runHint = $derived(!run ? '' : run.state === 'running' ? ` (running, ${Math.round(run.fraction * 100)}% of steps done)`

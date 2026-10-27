@@ -29,6 +29,6 @@
 {:else if (sel?.kind === 'gesture' || sel?.kind === 'facing' || sel?.kind === 'gaze')}<InspectEvent kind={sel.kind} id={sel.id} />
 {:else if sel?.kind === 'note' && s.S.notes.get(sel.id)}<InspectNote note={s.S.notes.get(sel.id)!} />
 {:else}
-  <div class="callout info">Click a face on the video or any bar on the timeline to inspect it. Double-click a name to rename. The Review tab lists what the models are least sure about.</div>
+  <p class="meta hint">Select a face or anything on the timeline to see it here. This is the shot at the playhead.</p>
   {#if shotHere}<InspectShot shot={shotHere} />{/if}
 {/if}

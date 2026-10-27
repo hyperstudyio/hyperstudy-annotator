@@ -25,3 +25,22 @@ button.link:hover:not(:disabled) { background: none; text-decoration: underline;
 /* A page's own heading (Extract, Annotator, Settings), and the sentence under it that says what the page is for. */
 .page-title { font-size: 20px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
 .page-lead { margin: 4px 0 0; color: var(--color-text-secondary); max-width: 64ch; }
+/* A part of Settings: its name with its one action beside it, a line on what it is for when that is not plain, then
+   its rows, one per thing, on hairlines. No boxes: the rule between rows is the only structure. */
+.set-part { display: grid; gap: 8px; padding: 22px 0 4px; }
+.set-part + .set-part { border-top: 1px solid var(--color-border-default); margin-top: 14px; }
+.set-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 26px; }
+.set-head h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.set-part > p { margin: 0; max-width: 64ch; }
+.set-rows { list-style: none; margin: 0; padding: 0; }
+.set-rows > li { padding: 9px 0; border-top: 1px solid var(--color-border-default); }
+.set-rows > li:first-child { border-top: 0; }
+/* An action on one row (check it, replace its key, remove it): plain text, so a part's own action (Add…) leads. */
+button.plain { background: none; border-color: transparent; color: var(--color-text-secondary); }
+button.plain:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); }
+button.plain.danger:hover:not(:disabled) { background: none; color: var(--color-danger); }
+/* A row in a pop-up panel (Popover): a choice, a checkbox, or an action at its foot. */
+.menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 5px; padding: 6px 10px; }
+.menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--color-bg-hover); outline: none; }
+.menu-item:disabled { color: var(--color-text-muted); }
+.menu-sep { height: 1px; background: var(--color-border-default); margin: 4px 6px; }

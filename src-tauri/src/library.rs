@@ -197,7 +197,7 @@ pub fn read_corrections_file(path: &Path) -> Result<String> {
 /// Write an exported corrections file where the user chose to save it.
 pub fn write_corrections_file(path: &Path, text: &str) -> Result<()> {
     if path.extension().and_then(|e| e.to_str()) != Some("json") {
-        return Err(Error::Bundle("save corrections as a .json file".into()));
+        return Err(Error::Bundle("save it as a .json file".into()));
     }
     Ok(fs::write(path, text)?)
 }

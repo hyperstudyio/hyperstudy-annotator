@@ -14,8 +14,9 @@ async function planned(page: Page, url: string) {
 }
 
 const rail = (page: Page) => page.getByRole('navigation', { name: 'App' });
-/** Settings, at one of its tabs: where keys, remote servers and the cloud GPU are set (Extract only says what a run
- *  will use, and plans again when you go back to it). */
+/** Settings, at one of its tabs (Models: the keys the steps' models need; Machines: this computer, remote servers and
+ *  cloud GPU providers; App): where they are set (Extract only says what a run will use, and plans again when you go
+ *  back to it). */
 async function settingsAt(page: Page, tab: RegExp) {
   await rail(page).getByRole('button', { name: 'Settings' }).click();
   const settings = page.getByRole('region', { name: 'Settings' });
@@ -25,21 +26,16 @@ async function settingsAt(page: Page, tab: RegExp) {
 const toExtract = (page: Page) => rail(page).getByRole('button', { name: 'Extract' }).click();
 /** Open the form for another remote server, fill it in, and add it. */
 async function addServer(settings: ReturnType<Page['getByRole']>, name: string, dest: string) {
-  await settings.getByRole('button', { name: 'Add a remote server…' }).click();
+  await settings.getByRole('button', { name: 'Add server…' }).click();
   const form = settings.getByRole('form', { name: 'Add a remote server' });
   await form.getByLabel('Name').fill(name);
   await form.getByLabel('SSH destination').fill(dest);
   await form.getByRole('button', { name: 'Add server' }).click();
   return form;
 }
-/** A step's own menu of where it runs, in its details (opened if they are not): the Runtime menu places every step at
- *  once, and this moves one. */
-async function placeMenu(dialog: Locator, id: string, title: string) {
-  const name = dialog.getByRole('button', { name: title, exact: true });
-  if ((await name.getAttribute('aria-expanded')) !== 'true') await name.click();
-  return dialog.getByRole('listitem', { name: id }).getByRole('combobox', { name: `Where ${id} runs` });
-}
-const runtime = (dialog: Locator) => dialog.getByRole('combobox', { name: 'Runtime' });
+/** A step's menu of where it runs, on its row: there when the step can run in more than one place (and is on). */
+const placeMenu = (dialog: Locator, id: string, title: string) =>
+  dialog.getByRole('listitem', { name: id }).getByRole('combobox', { name: `Where ${title} runs` });
 
 test('nothing to approve: what a step downloads or sends off is in its details, and the run can start', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
@@ -57,7 +53,7 @@ test('nothing to approve: what a step downloads or sends off is in its details, 
 test('a step that runs on a cloud API says so, not this machine\'s CPU', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
   const captions = dialog.getByRole('listitem', { name: 'captions' });
-  await expect(captions).toContainText('Anthropic API (cloud)');
+  await expect(captions).toContainText('Anthropic API');
   await expect(captions).not.toContainText('CPU');
   await dialog.getByRole('button', { name: 'Shot captions' }).click();
   await expect(captions).toContainText('frames, faces and transcript, sent to the Anthropic API');
@@ -83,12 +79,12 @@ test('the rail opens each page, and a run goes on while another page is on scree
   await rail(page).getByRole('button', { name: 'Settings' }).click();
   await expect(extract).toBeHidden();
   const settings = page.getByRole('region', { name: 'Settings' });
-  await expect(settings.getByRole('tab', { name: /^API keys/ })).toBeVisible();
-  await expect(settings.getByRole('tab', { name: /^Remote servers/ })).toBeVisible();
+  await expect(settings.getByRole('tab', { name: 'Models' })).toBeVisible();
+  await expect(settings.getByRole('tab', { name: 'Machines' })).toBeVisible();
   await rail(page).getByRole('button', { name: 'Annotator' }).click();
   await expect(page.getByRole('heading', { name: 'Annotator' })).toBeVisible();
   await toExtract(page);
-  await expect(extract.getByRole('heading', { name: /^Finished all/ })).toBeVisible();   // it ran while hidden
+  await expect(extract.getByRole('heading', { name: /^Finished all/ })).toBeVisible({ timeout: 10_000 });   // it ran while hidden (the stand-in's run takes 4.4 s)
   await expect(extract.getByRole('button', { name: 'Open in Annotator' })).toBeVisible();
   await extract.getByRole('button', { name: 'New run' }).click();
   await expect(extract.getByRole('button', { name: 'Choose a video…' })).toBeVisible();
@@ -96,54 +92,47 @@ test('the rail opens each page, and a run goes on while another page is on scree
 
 test('a remote server added in Settings is offered on Extract when you go back to it', async ({ page }) => {
   const extract = await planned(page, '/?pipeline-demo');
-  await expect(runtime(extract).getByRole('option', { name: 'Remote server (none set up)' })).toBeDisabled();
-  const settings = await settingsAt(page, /^Remote servers/);
+  await expect(extract.getByText('Steps run on this Mac.')).toBeVisible();          // nowhere else set up
+  const settings = await settingsAt(page, /^Machines$/);
   await addServer(settings, 'gpu9', 'you@gpu9.example.edu');
   await expect(settings.getByRole('listitem', { name: 'gpu9' })).toBeVisible();
   await toExtract(page);
-  await expect(runtime(extract).getByRole('option')).toHaveText(['This Mac', 'gpu9 (remote server)', 'Cloud GPU (off)']);
+  await expect(extract.getByRole('button', { name: 'Add a remote server or cloud GPU' })).toHaveCount(0);   // now somewhere else is
 });
 
-test('Extract asks only for a video and a runtime; runtimes not set up are there, greyed out, and lead to Settings', async ({ page }) => {
+test('Extract asks only for a video; with nowhere else set up the plan says steps run here, and leads to Settings', async ({ page }) => {
   const extract = await planned(page, '/?pipeline-demo');
   await expect(extract.getByRole('textbox')).toHaveCount(0);
-  await expect(runtime(extract)).toHaveValue('native');                            // this computer, unless chosen
-  await expect(runtime(extract).getByRole('option', { name: 'This Mac' })).toBeEnabled();
-  await expect(runtime(extract).getByRole('option', { name: 'Remote server (none set up)' })).toBeDisabled();
-  await expect(runtime(extract).getByRole('option', { name: 'Cloud GPU (off)' })).toBeDisabled();
-  await extract.getByRole('button', { name: 'Set up runtimes, in Settings' }).click();
-  await expect(page.getByRole('region', { name: 'Settings' }).getByRole('tab', { name: /^Remote servers/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(extract.getByRole('combobox')).toHaveCount(0);                      // no runtime to choose, no step to move
+  await expect(extract.getByText('Steps run on this Mac.')).toBeVisible();
+  await extract.getByRole('button', { name: 'Add a remote server or cloud GPU' }).click();
+  await expect(page.getByRole('region', { name: 'Settings' }).getByRole('tab', { name: 'Machines' })).toHaveAttribute('aria-selected', 'true');
 });
 
-test('a remote runtime runs each step that can run there, and is the choice to send them their inputs', async ({ page }) => {
+test('moving one step to a remote server sends only its inputs there; a step that cannot run there stays here', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await runtime(dialog).selectOption('ssh-lab');
-  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('NVIDIA GPU on lab (SSH)');
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
   await expect(dialog.getByRole('listitem', { name: 'asr' })).toContainText('Apple GPU');   // it cannot run there: stays here
+  await expect(placeMenu(dialog, 'asr', 'Speech transcript')).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Start run' }).click();
   const [ran] = await runs(page);
   expect(ran.places).toEqual({ faces: 'ssh-lab:cuda' });
   expect(ran.allow.uploads).toEqual({ faces: { kinds: ['faces', 'transcript', 'video'], service: 'lab (SSH)' } });
 });
 
-test('back to this computer as the runtime, nothing is sent anywhere', async ({ page }) => {
+test('a step moved to the cloud GPU and back to this computer sends nothing anywhere', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await runtime(dialog).selectOption('cloud');
-  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('Cloud GPU (AWS L4)');
-  await runtime(dialog).selectOption('native');
-  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('Apple GPU');
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await menu.selectOption('cloud:cuda');
+  await expect(menu).toHaveValue('cloud:cuda');
+  await menu.selectOption('native:mps');
+  await expect(menu).toHaveValue('native:mps');
   await dialog.getByRole('button', { name: 'Start run' }).click();
   const [ran] = await runs(page);
-  expect(ran.places).toEqual({});
+  expect(Object.values(ran.places).filter((p) => !p.startsWith('native:'))).toEqual([]);   // nowhere but here
   expect(ran.allow.uploads).toEqual({});
-});
-
-test('a runtime chosen before the video applies to its plan', async ({ page }) => {
-  await page.goto('/?pipeline-demo=remote');
-  const dialog = page.getByRole('region', { name: 'Extract' });
-  await runtime(dialog).selectOption('ssh-lab');
-  await dialog.getByRole('button', { name: 'Choose a video…' }).click();
-  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('NVIDIA GPU on lab (SSH)');
 });
 
 test('a feature that would bring along a step that sends data off waits until that step is turned on', async ({ page }) => {
@@ -183,8 +172,10 @@ test('another video takes back the features turned on: sending one video\'s data
 
 test('the dialog runs the pipeline the app installed, with nothing to choose but the video', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
-  const settings = await settingsAt(page, /^App/);
-  await expect(settings.getByText('Pipeline 0.1.0: all 4 steps can run here.')).toBeVisible();
+  const settings = await settingsAt(page, /^App$/);
+  await expect(settings.getByText('Pipeline 0.1.0.', { exact: true })).toBeVisible();
+  await settings.getByRole('tab', { name: 'Machines' }).click();
+  await expect(settings.getByText('All 4 steps can run here.', { exact: true })).toBeVisible();
   await toExtract(page);
   await expect(dialog.getByRole('button', { name: 'Change…' })).toHaveCount(1);   // the video's: no pipeline folder
 });
@@ -195,8 +186,7 @@ test('while the pipeline is installed nothing asks it anything, then the dialog 
   await expect(dialog.getByText(/^Installing the pipeline\./)).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Choose a video…' })).toHaveCount(0);
   await expect(dialog.locator('.error')).toHaveCount(0);   // the doctor was not asked before it was there
-  await expect(dialog.getByRole('combobox', { name: 'Runtime' })).toBeVisible({ timeout: 5000 });
-  await expect(dialog.getByRole('button', { name: 'Choose a video…' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Choose a video…' })).toBeVisible({ timeout: 5000 });
 });
 
 test('while a new version of the pipeline is set up, Start run waits, then starts', async ({ page }) => {
@@ -214,8 +204,7 @@ test('an install that failed (offline at first launch) fills the page in once Tr
   await expect(dialog.getByRole('button', { name: 'Choose a video…' })).toHaveCount(0);   // nothing to run it with yet
   await expect(dialog.getByText(/not installed yet/)).toHaveCount(0);   // the install's failure says why, once
   await dialog.getByRole('button', { name: 'Try again' }).click();
-  await expect(dialog.getByRole('combobox', { name: 'Runtime' })).toBeVisible({ timeout: 5000 });
-  await expect(dialog.getByRole('button', { name: 'Choose a video…' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Choose a video…' })).toBeVisible({ timeout: 5000 });
 });
 
 test('a setup that failed says what failed, and can be tried again without holding up a run', async ({ page }) => {
@@ -232,8 +221,8 @@ test('a setup that failed says what failed, and can be tried again without holdi
 test('a node that can run in several places can be moved, and the plan says how long each step takes', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=two-places');
   const faces = dialog.getByRole('listitem', { name: 'faces' });
-  await expect(faces).toContainText('1 min 36 s');
-  const menu = await placeMenu(dialog, 'faces', 'Face tracks');
+  await expect(faces.locator('.time')).toHaveText('1 min 36 s');               // the estimate beside the menu, not an option in it
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await expect(menu.getByRole('option')).toHaveText(['NVIDIA GPU, about 1 min 36 s', 'CPU, no estimate yet']);   // compare before moving
   // a menu is as wide as its longest option: it stays inside its column, not over the estimate beside it
   const [box, cell] = await Promise.all([menu.boundingBox(), menu.locator('xpath=..').boundingBox()]);
@@ -335,7 +324,7 @@ const runs = (page: Page) => page.evaluate(() => (window as unknown as { __pipel
 
 test('each place says where it is, how long the step would take and what it costs, before moving it', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  const menu = (await placeMenu(dialog, 'faces', 'Face tracks'));
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await expect(menu.getByRole('option')).toHaveText(['Apple GPU, about 1 min 36 s', 'NVIDIA GPU on lab (SSH), no estimate yet',
     'Cloud GPU (AWS L4), no estimate yet, up to $0.49']);
   const [box, cell] = await Promise.all([menu.boundingBox(), menu.locator('xpath=..').boundingBox()]);
@@ -345,8 +334,9 @@ test('each place says where it is, how long the step would take and what it cost
 test('moving a step to a lab server is the choice to send it its inputs: it stays on, and the run may send them there only', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   const faces = dialog.getByRole('listitem', { name: 'faces' });
-  await (await placeMenu(dialog, 'faces', 'Face tracks')).selectOption('ssh-lab:cuda');
+  await placeMenu(dialog, 'faces', 'Face tracks').selectOption('ssh-lab:cuda');
   await expect(dialog.getByRole('checkbox', { name: 'Run Face tracks' })).toBeChecked();   // not turned off for sending
+  await dialog.getByRole('button', { name: 'Face tracks' }).click();          // its details: what it sends, and where
   await expect(faces).toContainText('faces, transcript and video, sent to lab (SSH)');
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
   await dialog.getByRole('button', { name: 'Start run' }).click();
@@ -358,7 +348,7 @@ test('moving a step to a lab server is the choice to send it its inputs: it stay
 
 test('a cloud GPU shows its price, and the run\'s cap is raised by it', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await (await placeMenu(dialog, 'faces', 'Face tracks')).selectOption('cloud:cuda');
+  await placeMenu(dialog, 'faces', 'Face tracks').selectOption('cloud:cuda');
   await expect(dialog.getByRole('heading', { name: /steps to run.*\$0\.49/ })).toBeVisible();
   await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('Up to $0.49');   // the most the machine can cost
   await dialog.getByRole('button', { name: 'Start run' }).click();
@@ -369,7 +359,7 @@ test('a cloud GPU shows its price, and the run\'s cap is raised by it', async ({
 
 test('moving a step back to this machine sends nothing', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  const menu = (await placeMenu(dialog, 'faces', 'Face tracks'));
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await menu.selectOption('ssh-lab:cuda');
   await expect(menu).toHaveValue('ssh-lab:cuda');
   await menu.selectOption('native:mps');
@@ -383,45 +373,46 @@ test('moving a step back to this machine sends nothing', async ({ page }) => {
 
 test('the machines steps can run on are listed, and a remote server added in Settings is a place in the step menus', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await expect(runtime(dialog).getByRole('option')).toHaveText(['This Mac', 'lab (remote server)', 'Cloud GPU (AWS g6.2xlarge, NVIDIA L4)']);
-  const settings = await settingsAt(page, /^Remote servers 1$/);
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await expect(menu.getByRole('option')).toHaveText([/^Apple GPU/, /^NVIDIA GPU on lab \(SSH\)/, /^Cloud GPU \(AWS L4\)/]);   // this Mac, the lab server, the cloud
+  const settings = await settingsAt(page, /^Machines$/);
+  const servers = settings.getByRole('region', { name: 'Remote servers' });
+  await expect(servers.getByRole('listitem')).toHaveCount(1);
   await expect(settings.getByRole('listitem', { name: 'lab' })).toContainText('Linux, 32 cores, 252 GB, NVIDIA GPU (48 GB)');
   await expect(settings.getByRole('form', { name: 'Add a remote server' })).toHaveCount(0);   // opened when asked for
   await addServer(settings, 'gpu2', 'you@gpu2.example.edu');
   await expect(settings.getByRole('listitem', { name: 'gpu2' })).toBeVisible();
   await expect(settings.getByRole('form', { name: 'Add a remote server' })).toHaveCount(0);   // closed once added
-  await expect(settings.getByRole('tab', { name: /^Remote servers 2$/ })).toBeVisible();
+  await expect(servers.getByRole('listitem')).toHaveCount(2);
   await toExtract(page);
-  await expect(runtime(dialog).getByRole('option', { name: 'gpu2 (remote server)' })).toBeEnabled();
-  const menu = (await placeMenu(dialog, 'faces', 'Face tracks'));
   await expect(menu.getByRole('option', { name: /NVIDIA GPU on gpu2 \(SSH\)/ })).toHaveCount(1);
 });
 
-test('removing a remote server or turning the cloud off takes its place out of the menus', async ({ page }) => {
+test('removing a remote server or the cloud provider takes its place out of the menus', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  const menu = (await placeMenu(dialog, 'faces', 'Face tracks'));
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await expect(menu.getByRole('option', { name: /on lab/ })).toHaveCount(1);
-  const settings = await settingsAt(page, /^Remote servers/);
+  await expect(menu.getByRole('option', { name: /Cloud GPU/ })).toHaveCount(1);
+  const settings = await settingsAt(page, /^Machines$/);
   await settings.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove lab' }).click();
   await expect(settings.getByRole('listitem', { name: 'lab' })).toHaveCount(0);
-  await settings.getByRole('tab', { name: /^Cloud GPU On$/ }).click();
-  const cloud = settings.getByRole('checkbox', { name: 'Use AWS g6.2xlarge, NVIDIA L4, at $0.98 an hour' });
-  await expect(cloud).toBeChecked();
-  await cloud.uncheck({ force: true });   // the switch draws over its checkbox
-  await expect(settings.getByRole('tab', { name: /^Cloud GPU Off$/ })).toBeVisible();
+  await expect(settings.getByRole('listitem', { name: 'AWS' })).toContainText('$0.98 an hour');
+  await settings.getByRole('button', { name: 'Remove AWS' }).click();
+  await expect(settings.getByRole('listitem', { name: 'AWS' })).toHaveCount(0);
   await toExtract(page);
-  await expect(menu.getByRole('option', { name: /on lab/ })).toHaveCount(0);
-  await expect(menu.getByRole('option', { name: /Cloud GPU/ })).toHaveCount(0);
-  await expect(runtime(dialog).getByRole('option', { name: 'Cloud GPU (off)' })).toBeDisabled();
-  await expect(runtime(dialog).getByRole('option', { name: 'Remote server (none set up)' })).toBeDisabled();
+  // nowhere else to run: the step's place is plain text, and the plan says the steps run here
+  await expect(dialog.getByText('Steps run on this Mac.')).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('Apple GPU');
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).not.toContainText(/on lab|Cloud GPU/);
 });
 
 test('a step on a remote server that is then removed goes back to this machine, and nothing is agreed for it', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  const menu = (await placeMenu(dialog, 'faces', 'Face tracks'));
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await menu.selectOption('ssh-lab:cuda');
   await expect(menu).toHaveValue('ssh-lab:cuda');
-  const settings = await settingsAt(page, /^Remote servers/);
+  const settings = await settingsAt(page, /^Machines$/);
   await settings.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Remove lab' }).click();
   await expect(settings.getByRole('listitem', { name: 'lab' })).toHaveCount(0);
   // added again under the same name (perhaps another machine): choosing it is a new choice, not the old one
@@ -438,8 +429,8 @@ test('a step on a remote server that is then removed goes back to this machine, 
 
 test('a remote server name already listed cannot be added over: another machine under that name is a new choice', async ({ page }) => {
   await planned(page, '/?pipeline-demo=remote');
-  const settings = await settingsAt(page, /^Remote servers/);
-  await settings.getByRole('button', { name: 'Add a remote server…' }).click();
+  const settings = await settingsAt(page, /^Machines$/);
+  await settings.getByRole('button', { name: 'Add server…' }).click();
   const form = settings.getByRole('form', { name: 'Add a remote server' });
   await form.getByLabel('Name').fill('lab');
   await form.getByLabel('SSH destination').fill('you@another-lab.example.edu');
@@ -449,11 +440,11 @@ test('a remote server name already listed cannot be added over: another machine 
 
 test('a step on a remote server whose name now leads to another machine goes back to this machine', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  const menu = (await placeMenu(dialog, 'faces', 'Face tracks'));
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await menu.selectOption('ssh-lab:cuda');
   await expect(menu).toHaveValue('ssh-lab:cuda');
   await page.evaluate(() => { (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere = true; });   // re-added with the CLI
-  const settings = await settingsAt(page, /^Remote servers/);
+  const settings = await settingsAt(page, /^Machines$/);
   await settings.getByRole('listitem', { name: 'lab' }).getByRole('button', { name: 'Check lab' }).click();
   await expect(settings.getByRole('listitem', { name: 'lab' })).toContainText('you@another-lab.example.edu');
   await toExtract(page);
@@ -466,11 +457,11 @@ test('a step on a remote server whose name now leads to another machine goes bac
 
 test('a run cannot start while a remote server is being cleared, even from Extract', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  await (await placeMenu(dialog, 'faces', 'Face tracks')).selectOption('ssh-lab:cuda');
+  await placeMenu(dialog, 'faces', 'Face tracks').selectOption('ssh-lab:cuda');
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
   await page.evaluate(() => { const g = globalThis as { __holdHost?: Promise<void>; __release?: () => void };
     g.__holdHost = new Promise((r) => { g.__release = r; }); });
-  const settings = await settingsAt(page, /^Remote servers/);
+  const settings = await settingsAt(page, /^Machines$/);
   await settings.getByRole('button', { name: 'Clear the cache on lab' }).click();
   await expect(settings.getByText('Clearing the cache on lab…')).toBeVisible();
   await toExtract(page);                                              // back before it is done
@@ -478,15 +469,15 @@ test('a run cannot start while a remote server is being cleared, even from Extra
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
   await page.evaluate(() => (globalThis as { __release?: () => void }).__release!());
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
-  await expect((await placeMenu(dialog, 'faces', 'Face tracks'))).toHaveValue('ssh-lab:cuda');
+  await expect(placeMenu(dialog, 'faces', 'Face tracks')).toHaveValue('ssh-lab:cuda');
 });
 
 test('a step on a remote server found without its GPU goes back to this machine', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
-  const menu = (await placeMenu(dialog, 'faces', 'Face tracks'));
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await menu.selectOption('ssh-lab:cuda');
   await page.evaluate(() => { (globalThis as { __gpuGone?: boolean }).__gpuGone = true; });
-  const settings = await settingsAt(page, /^Remote servers/);
+  const settings = await settingsAt(page, /^Machines$/);
   await settings.getByRole('button', { name: 'Check lab' }).click();
   await expect(settings.getByRole('listitem', { name: 'lab' })).toContainText('no GPU');
   await toExtract(page);
@@ -496,7 +487,7 @@ test('a step on a remote server found without its GPU goes back to this machine'
 
 test('a remote server that cannot be reached is not added, and says why', async ({ page }) => {
   await planned(page, '/?pipeline-demo=remote');
-  const settings = await settingsAt(page, /^Remote servers/);
+  const settings = await settingsAt(page, /^Machines$/);
   const form = await addServer(settings, 'far', 'you@unreachable.example.edu');
   await expect(settings.getByText(/could not reach you@unreachable\.example\.edu/)).toBeVisible();
   await expect(settings.getByRole('listitem', { name: 'far' })).toHaveCount(0);
@@ -505,9 +496,9 @@ test('a remote server that cannot be reached is not added, and says why', async 
 
 test('a pipeline from before other machines says so and offers nothing to set', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=old-cli');
-  await expect(runtime(dialog).getByRole('option', { name: 'Remote server (update the pipeline)' })).toBeDisabled();
-  await expect(dialog.getByRole('button', { name: 'Set up runtimes, in Settings' })).toHaveCount(0);
-  const settings = await settingsAt(page, /^Remote servers/);
+  await expect(dialog.getByRole('combobox', { name: /^Where / })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Add a remote server or cloud GPU' })).toHaveCount(0);
+  const settings = await settingsAt(page, /^Machines$/);
   await expect(settings.getByText(/This pipeline runs every step on this computer/)).toBeVisible();
 });
 
@@ -519,47 +510,60 @@ test('a failure listing the machines is said as it is, not taken for an older pi
 
 test('remote servers are offered by a pipeline that cannot start cloud machines yet', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=no-cloud');
-  await expect(runtime(dialog).getByRole('option', { name: 'Cloud GPU (update the pipeline)' })).toBeDisabled();
-  const settings = await settingsAt(page, /^Cloud GPU/);
+  await expect(dialog.getByRole('button', { name: 'Add a remote server or cloud GPU' })).toBeVisible();
+  const settings = await settingsAt(page, /^Machines$/);
   await expect(settings.getByText(/cannot start cloud machines yet/)).toBeVisible();
-  await settings.getByRole('tab', { name: /^Remote servers/ }).click();
-  await expect(settings.getByRole('button', { name: 'Add a remote server…' })).toBeVisible();
+  await expect(settings.getByRole('button', { name: 'Add server…' })).toBeVisible();
 });
 
 test('in a narrow window Settings fits without scrolling sideways', async ({ page }) => {
   await page.setViewportSize({ width: 420, height: 900 });
   await planned(page, '/?pipeline-demo=remote');
-  const settings = await settingsAt(page, /^Remote servers/);
+  const settings = await settingsAt(page, /^Machines$/);
   await addServer(settings, 'gpu17', 'firstname.lastname@gpu-node-17.psych.example.edu');   // a long one
   await expect(settings.getByRole('listitem', { name: 'gpu17' })).toBeVisible();
   const page_ = page.locator('.page.on');
   expect(await page_.evaluate((d) => d.scrollWidth - d.clientWidth)).toBeLessThanOrEqual(0);
 });
 
-// --- keys, set in Settings ----------------------------------------------------------------------------------------------
+// --- keys, set in Settings where they are used: Models (shot captions, gated models), Machines (a cloud provider) -----
 
 test('a key is saved to the keychain in Settings, leaves the page at once, and can be removed', async ({ page }) => {
-  const dialog = await planned(page, '/?pipeline-demo');
-  const settings = await settingsAt(page, /^API keys 1 of 3 set$/);   // Hugging Face, from a file the CLI reads
-  const keys = settings.getByRole('region', { name: 'Keys' });
-  await expect(keys.getByRole('listitem', { name: 'Hugging Face' })).toContainText('Found in ~/.config/hyperstudy/bakeoff.env');
-  const runpod = keys.getByRole('listitem', { name: 'RunPod' });
-  await expect(runpod).toContainText('Not set. Get one at console.runpod.io/user/settings');
-  await expect(runpod.getByRole('textbox')).toHaveCount(0);                              // a field only when asked for
-  await runpod.getByRole('button', { name: 'Add the RunPod key' }).click();
-  const field = runpod.getByRole('textbox', { name: 'RunPod key' });
+  const dialog = await planned(page, '/?pipeline-demo=gated');
+  const settings = await settingsAt(page, /^Models$/);
+  const gated = settings.getByRole('region', { name: 'Gated models' });
+  await expect(gated.getByRole('listitem', { name: 'Hugging Face key' })).toContainText('Found in ~/.config/hyperstudy/bakeoff.env');   // a file the CLI reads
+  const captions = settings.getByRole('region', { name: 'Shot captions' });
+  await expect(captions).toContainText('Anthropic (Claude)');
+  const anthropic = captions.getByRole('listitem', { name: 'Anthropic key' });
+  await expect(anthropic).toContainText('Not set. Get one at console.anthropic.com/settings/keys');
+  await expect(anthropic.getByRole('textbox')).toHaveCount(0);                            // a field only when asked for
+  await anthropic.getByRole('button', { name: 'Add the Anthropic key' }).click();
+  const field = anthropic.getByRole('textbox', { name: 'Anthropic key' });
   await expect(field).toBeFocused();
   await expect(field).toHaveAttribute('type', 'password');
-  await field.fill('rp-test-0123456789');
-  await runpod.getByRole('button', { name: 'Save' }).click();
-  await expect(runpod).toContainText('In the keychain');
-  await expect(runpod.getByRole('textbox')).toHaveCount(0);                              // not kept in the page
-  expect(await page.content()).not.toContain('rp-test-0123456789');
-  await expect(settings.getByRole('tab', { name: /^API keys 2 of 3 set$/ })).toBeVisible();
-  await runpod.getByRole('button', { name: 'Remove the RunPod key' }).click();
-  await expect(runpod).toContainText('Not set');
+  await field.fill('sk-ant-test-0123456789');
+  await anthropic.getByRole('button', { name: 'Save' }).click();
+  await expect(anthropic).toContainText('Saved in the keychain');
+  await expect(anthropic.getByRole('textbox')).toHaveCount(0);                            // not kept in the page
+  expect(await page.content()).not.toContain('sk-ant-test-0123456789');
+  await expect(anthropic.getByRole('button', { name: 'Replace the Anthropic key' })).toBeVisible();
+  await anthropic.getByRole('button', { name: 'Remove the Anthropic key' }).click();
+  await expect(anthropic).toContainText('Not set');
   await toExtract(page);
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+test('gated models are listed with where to ask for access; with none, Models says so', async ({ page }) => {
+  await planned(page, '/?pipeline-demo=gated');
+  let settings = await settingsAt(page, /^Models$/);
+  const gated = settings.getByRole('region', { name: 'Gated models' });
+  await expect(gated).toContainText('speaker-diarization-3.1');
+  await expect(gated.getByRole('button', { name: 'Request access on Hugging Face' })).toBeVisible();
+  await page.goto('/?pipeline-demo');
+  settings = await settingsAt(page, /^Models$/);
+  await expect(settings.getByText('None of the models the steps use needs access approval.')).toBeVisible();
+  await expect(settings.getByRole('listitem', { name: 'Hugging Face key' })).toHaveCount(0);   // asked for only where it is needed
 });
 
 test('a step missing a key says which, and leads to where it is set', async ({ page }) => {
@@ -568,20 +572,24 @@ test('a step missing a key says which, and leads to where it is set', async ({ p
   const captions = dialog.getByRole('listitem', { name: 'captions' });
   await expect(captions).toContainText('Needs the Anthropic key: add it in Settings');
   await captions.getByRole('button', { name: 'add it in Settings' }).click();
-  await expect(page.getByRole('region', { name: 'Settings' }).getByRole('tab', { name: /^API keys/ })).toHaveAttribute('aria-selected', 'true');
+  const settings = page.getByRole('region', { name: 'Settings' });
+  await expect(settings.getByRole('tab', { name: 'Models' })).toHaveAttribute('aria-selected', 'true');
+  await expect(settings.getByRole('button', { name: 'Add the Anthropic key' })).toBeVisible();
 });
 
 test('a failure listing the pipeline\'s keys is said as it is, not taken for an older pipeline', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=keys-error');
   await expect(dialog.getByText(/the pipeline's keys: .*PermissionError: keys.json/)).toBeVisible();
-  const settings = await settingsAt(page, /^API keys/);
-  await expect(settings.getByRole('listitem', { name: 'RunPod' })).toBeVisible();   // the app's own keys still work
+  const settings = await settingsAt(page, /^Models$/);
+  await expect(settings.getByRole('listitem', { name: 'Anthropic key' })).toBeVisible();   // the app's own keys still work
 });
 
 test('a pipeline from before `perception keys` has the app\'s keys and says nothing is wrong', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=old-cli');
   await expect(dialog.getByText(/the pipeline's keys/)).toHaveCount(0);
-  await settingsAt(page, /^API keys 0 of 3 set$/);
+  const settings = await settingsAt(page, /^Models$/);
+  await expect(settings.getByRole('listitem', { name: 'Anthropic key' })).toContainText('Not set');
+  await expect(settings.getByText(/Could not read the keys/)).toHaveCount(0);
 });
 
 test('a run cannot start while a key is being saved, even from Extract', async ({ page }) => {
@@ -589,15 +597,66 @@ test('a run cannot start while a key is being saved, even from Extract', async (
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
   await page.evaluate(() => { const g = globalThis as { __holdKey?: Promise<void>; __releaseKey?: () => void };
     g.__holdKey = new Promise((r) => { g.__releaseKey = r; }); });
-  const settings = await settingsAt(page, /^API keys/);
-  const runpod = settings.getByRole('region', { name: 'Keys' }).getByRole('listitem', { name: 'RunPod' });
-  await runpod.getByRole('button', { name: 'Add the RunPod key' }).click();
-  await runpod.getByRole('textbox', { name: 'RunPod key' }).fill('rp-test-0123456789');
-  await runpod.getByRole('button', { name: 'Save' }).click();
-  await expect(settings.getByText('Saving the RunPod key…')).toBeVisible();
+  const settings = await settingsAt(page, /^Models$/);
+  const anthropic = settings.getByRole('listitem', { name: 'Anthropic key' });
+  await anthropic.getByRole('button', { name: 'Add the Anthropic key' }).click();
+  await anthropic.getByRole('textbox', { name: 'Anthropic key' }).fill('sk-ant-test-0123456789');
+  await anthropic.getByRole('button', { name: 'Save' }).click();
+  await expect(settings.getByText('Saving the Anthropic key…')).toBeVisible();
   await toExtract(page);                                              // back before it is saved
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();   // a run now would race the key
-  await expect(dialog.getByText('Settings: Saving the RunPod key… Start run waits for it.')).toBeVisible();
+  await expect(dialog.getByText('Settings: Saving the Anthropic key… Start run waits for it.')).toBeVisible();
   await page.evaluate(() => (globalThis as { __releaseKey?: () => void }).__releaseKey!());
   await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+// --- where a step runs, chosen on its row ---------------------------------------------------------------------------
+
+test('the menu on a step\'s row moves it and plans again; a step with one place to run says it in plain text', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const faces = dialog.getByRole('listitem', { name: 'faces' });
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await expect(menu).toHaveValue('native:mps');
+  await expect(faces.locator('.time')).toHaveText('1 min 36 s');
+  await expect(dialog.getByText(/^Not counting Face tracks/)).toHaveCount(0);
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(faces.locator('.time')).toHaveText('No estimate');              // the new plan's estimate, for the server
+  await expect(dialog.getByText(/^Not counting Face tracks/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Face tracks' })).toHaveAttribute('aria-expanded', 'false');   // nothing opened to move it
+  const asr = dialog.getByRole('listitem', { name: 'asr' });
+  await expect(asr.getByRole('combobox')).toHaveCount(0);
+  await expect(asr.locator('.where')).toHaveText('Apple GPU');
+});
+
+// --- cloud GPU providers, added in Settings > Machines ----------------------------------------------------------------
+
+test('RunPod is added with its key, is then a place for a step, and removing it removes its key', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await expect(menu.getByRole('option', { name: /RunPod/ })).toHaveCount(0);
+  const settings = await settingsAt(page, /^Machines$/);
+  const cloud = settings.getByRole('region', { name: 'Cloud GPU' });
+  await cloud.getByRole('button', { name: 'Add provider…' }).click();
+  const form = cloud.getByRole('form', { name: 'Add a cloud GPU provider' });
+  await expect(form.getByRole('radio', { name: /^RunPod/ })).toBeChecked();
+  const key = form.getByRole('textbox', { name: 'RunPod API key' });
+  await expect(key).toBeFocused();
+  await expect(form.getByRole('button', { name: 'Add RunPod' })).toBeDisabled();   // it needs its key
+  await key.fill('rp-test-0123456789');
+  await form.getByRole('button', { name: 'Add RunPod' }).click();
+  const runpod = cloud.getByRole('listitem', { name: 'RunPod', exact: true });
+  await expect(runpod).toBeVisible();
+  await expect(form).toHaveCount(0);
+  await expect(runpod.getByRole('listitem', { name: 'RunPod key' })).toContainText('Saved in the keychain');
+  expect(await page.content()).not.toContain('rp-test-0123456789');
+  await toExtract(page);
+  await expect(menu.getByRole('option', { name: /^Cloud GPU \(RunPod\)/ })).toHaveCount(1);
+  await settingsAt(page, /^Machines$/);
+  await cloud.getByRole('button', { name: 'Remove RunPod' }).click();
+  await expect(runpod).toHaveCount(0);
+  await cloud.getByRole('button', { name: 'Add provider…' }).click();
+  await expect(form.getByRole('textbox', { name: 'RunPod API key' })).toBeVisible();   // its key went with it
+  await form.getByRole('button', { name: 'Cancel' }).click();
+  await toExtract(page);
+  await expect(menu.getByRole('option', { name: /RunPod/ })).toHaveCount(0);
 });

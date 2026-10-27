@@ -12,7 +12,7 @@
   import { LABEL_W, ZOOM_MAX, fitPps, scrollToKeep, tickStep, timeAtX } from '../../timeline/scale';
   import { fmt } from '../../geometry';
   import { plural, NEUTRAL } from '../../model/session.svelte';
-  import Chip from '../ui/Chip.svelte';
+  import Popover from '../ui/Popover.svelte';
   import RowLabel from './RowLabel.svelte';
   import PlotCanvas from './PlotCanvas.svelte';
 
@@ -249,14 +249,15 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="timeline-resize" class:active={resizingTimeline} title="Drag to give the timeline more or less height · double-click to reset" onpointerdown={startTimelineResize} ondblclick={onresetheight}></div>
   <div class="tl-tools">
-    <span>Timeline</span>
-    <span class="chips">
-      {#each GROUP_KEYS as key (key)}
-        <Chip label={GROUP_NAMES[key]} checked={!s.view.s.hiddenGroups.includes(key)} title={`Show or hide ${GROUP_NAMES[key].toLowerCase()} in the timeline`} onchange={(on) => s.view.setGroupShown(key, on)} />
-      {/each}
-    </span>
+    <Popover label="Layers shown in the timeline" title="Choose which layers the timeline shows" width={200} buttonClass="plain">
+      {#snippet button()}Layers{/snippet}
+      {#snippet children()}
+        {#each GROUP_KEYS as key (key)}
+          <label class="menu-item"><input type="checkbox" checked={!s.view.s.hiddenGroups.includes(key)} onchange={(e) => s.view.setGroupShown(key, e.currentTarget.checked)} />{GROUP_NAMES[key]}</label>
+        {/each}
+      {/snippet}
+    </Popover>
     <span class="spacer"></span>
-    <span class="meta hint" title="Click a segment to loop it (click again to stop) · drag across empty space to loop a range · drag along the time ruler to scrub · drag speech onto a person's row to change the speaker">click a segment to loop it · drag empty space to loop a range · drag the ruler to scrub</span>
     {#if hiddenCount}<button class="link" onclick={() => s.view.showRows('all')}>Show {plural(hiddenCount, 'hidden row')}</button>{/if}
     <label class="zoom">Zoom <input type="range" min="1" max={ZOOM_MAX} step="0.01" bind:value={zoom} title="Zoom (or pinch on the timeline)" onchange={(e) => e.currentTarget.blur()} /></label>
   </div>

@@ -4,6 +4,7 @@
   // Keys (the prototype's settled scheme): Space play/pause the whole video · Shift+Space play the selection · L loop
   // on/off · ←/→ previous/next segment in the selected row · Shift+←/→ one second · , . shots · j k review queue ·
   // e include · [ ] annotate · 1-9 o m u x speaker · Esc stop and deselect · Cmd+Z undo · \ the panel.
+  import type { Snippet } from 'svelte';
   import { provideSession } from '../model/context';
   import type { Session } from '../model/session.svelte';
   import type { BundleSource } from '../source';
@@ -20,8 +21,9 @@
   // `active`: on screen. An app that hides the workspace and keeps it (the desktop app's other pages) sets it false:
   // the video stops, and the keys go to what is on screen instead. `onmodal`: a dialog here waits for its answer
   // (CarryOffer), so what the app shows around the workspace is out of reach too, as the workspace is.
-  let { session: s, source, onback, active = true, onmodal }: {
-    session: Session; source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void;
+  // `title`: what the header shows for the video's name (the desktop app's switcher between videos); its name else.
+  let { session: s, source, onback, active = true, onmodal, title }: {
+    session: Session; source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void; title?: Snippet;
   } = $props();
   // svelte-ignore state_referenced_locally
   provideSession(s, source);
@@ -50,6 +52,7 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (k === ' ') { e.preventDefault(); if (e.shiftKey) s.playSelection(); else pb.toggle(); }
     else if (k === '\\') s.view.toggleDrawer();
+    else if (k === '?') s.help = !s.help;
     else if (k === 'l' || k === 'L') { pb.loop = !pb.loop; s.toast(pb.loop ? 'Clips loop' : 'Clips play once'); }
     else if (k === 'ArrowLeft' || k === 'ArrowRight') {
       e.preventDefault();
@@ -81,7 +84,7 @@
 <svelte:window {onkeydown} />
 
 <div class="viewer" inert={s.modal}>
-  <Header {onback} />
+  <Header {onback} {title} />
   <div class="workspace" style="--drawer-w:{drawerW}">
     <section class="stage">
       <VideoStage src={source.videoUrl} />

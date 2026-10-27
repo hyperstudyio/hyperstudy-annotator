@@ -36,28 +36,31 @@
   const focus = (el: HTMLElement) => { el.focus(); };
 </script>
 
-<div class="servers">
+<section class="set-part" aria-labelledby="servers-heading">
+  <div class="set-head">
+    <h2 id="servers-heading">Remote servers</h2>
+    {#if !adding}<button onclick={() => (adding = true)} disabled={!!busy}>Add server…</button>{/if}
+  </div>
   {#if hosts.length}
-    <ul>
+    <ul class="set-rows">
       {#each hosts as h (h.name)}
         <li aria-label={h.name}>
           <div class="host"><strong>{h.name}</strong><span class="muted">{h.dest}</span></div>
           <div class="caps">{hostSummary(h)}. <span class="muted">Checked {when(h.probed_at)}.</span></div>
           <div class="actions">
-            <button onclick={() => host('check', h.name)} disabled={!!busy} aria-label={`Check ${h.name}`} title="Reach it again and see what it has">Check</button>
-            <button onclick={() => host('clean', h.name)} disabled={!!busy} aria-label={`Clear the cache on ${h.name}`} title="Remove the videos and code kept on it between runs">Clear cache</button>
-            <button class="quiet" onclick={() => host('remove', h.name)} disabled={!!busy} aria-label={`Remove ${h.name}`}>Remove</button>
+            <button class="plain" onclick={() => host('check', h.name)} disabled={!!busy} aria-label={`Check ${h.name}`} title="Reach it again and see what it has">Check</button>
+            <button class="plain" onclick={() => host('clean', h.name)} disabled={!!busy} aria-label={`Clear the cache on ${h.name}`} title="Remove the videos and code kept on it between runs">Clear cache</button>
+            <button class="plain danger" onclick={() => host('remove', h.name)} disabled={!!busy} aria-label={`Remove ${h.name}`}>Remove</button>
           </div>
         </li>
       {/each}
     </ul>
   {:else if !adding}
-    <p class="muted">None yet. A server with an NVIDIA GPU can run the heavy steps.</p>
+    <p class="muted">None yet. A server you reach over SSH, with an NVIDIA GPU, can run the heavy steps.</p>
   {/if}
 
   {#if adding}
     <form class="add" aria-label="Add a remote server" onsubmit={(e) => { e.preventDefault(); add(); }}>
-      <h3>Add a remote server</h3>
       <label for="server-name">Name</label>
       <div class="field"><input id="server-name" bind:value={name} placeholder="gpu1" autocomplete="off" spellcheck="false" required use:focus /></div>
       <label for="server-dest">SSH destination</label>
@@ -71,30 +74,22 @@
         <button type="button" onclick={() => { adding = false; error = null; }} disabled={!!busy}>Cancel</button>
       </div>
     </form>
-  {:else}
-    <div><button onclick={() => (adding = true)} disabled={!!busy}>Add a remote server…</button></div>
   {/if}
 
   <div class="status" aria-live="polite">
     {#if busy}<p class="muted">{busy}</p>{/if}
     {#if error}<p class="error">{error}</p>{/if}
   </div>
-</div>
+</section>
 
 <style>
-  .servers { display: grid; gap: 10px; }
-  ul { list-style: none; margin: 0; padding: 0; }
-  li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; padding: 11px 0; border-top: 1px solid var(--color-border-default); }
-  li:first-child { border-top: 0; padding-top: 4px; }
+  li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; }
   .host { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }   /* a long destination wraps */
   .caps { grid-column: 1; font-size: 12px; color: var(--color-text-secondary); min-width: 0; }
   .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 4px; align-items: center; }
-  .quiet { background: none; border-color: transparent; color: var(--color-text-muted); }
-  .quiet:hover:not(:disabled) { color: var(--color-danger); background: none; }
   /* one field to a row, its label beside it and what it is for under it */
   .add { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 16px; align-items: baseline; padding: 16px 18px;
          border: 1px solid var(--color-border-default); border-radius: 8px; background: var(--color-bg-surface); }
-  .add h3 { grid-column: 1 / -1; margin: 0 0 2px; font-size: 13px; font-weight: 600; }
   .add label { color: var(--color-text-secondary); }
   .field { display: grid; gap: 4px; min-width: 0; }
   .field input { max-width: 360px; width: 100%; }

@@ -1,20 +1,22 @@
 <script module lang="ts">
-  /** A part of Settings another page can send you to (Extract's "Change in Settings", the rail's Update item). */
-  export type SettingsSection = 'keys' | 'servers' | 'cloud' | 'computer' | 'updates';
+  /** A part of Settings another page can send you to (a step's missing key, Extract's "Add a remote server or cloud
+   *  GPU", the rail's Update item). */
+  export type SettingsSection = 'models' | 'machines' | 'updates';
 </script>
 
 <script lang="ts">
-  // Settings: the keys the pipeline's steps use, the remote servers and the cloud GPU they can run on, what this
-  // computer can run, and the app's version and its updates. This is the one place they are set; Extract shows what a
-  // run will use and sends you here, and loads them again (and plans again) when you go back. Loaded again each time
-  // this page is shown.
+  // Settings, by what each thing is for: Models (what the steps' models need from you: a provider's key for shot
+  // captions, access and a key for gated models), Machines (where steps can run: this computer, remote servers, cloud
+  // GPU providers, each with what it needs, its key included) and App (its version and updates). A key appears where
+  // it is used, not in a list of keys. This is the one place they are set; Extract shows what a run will use and sends
+  // you here, and loads them again (and plans again) when you go back. Loaded again each time this page is shown.
   import { tick, untrack } from 'svelte';
-  import Keys from './Keys.svelte';
+  import Models from './Models.svelte';
   import Servers from './Servers.svelte';
   import Cloud from './Cloud.svelte';
   import { DOCS_URL, openExternal } from '../links';
   import type { Updates } from '../updates.svelte';
-  import { keyRows, placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type PipelineApi } from '../pipeline';
+  import { placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelInfo, type PipelineApi } from '../pipeline';
 
   let { api, updates = null, active = true, holdRelaunch = null, relaunchCaution = null, show = null, onshown, onbusy }: {
     api: PipelineApi | null; updates?: Updates | null; active?: boolean;
@@ -33,24 +35,15 @@
   let hosts = $state<Host[] | null>(null);   // null: a pipeline from before remote servers
   let cloud = $state<CloudStatus | null>(null);
   let doctor = $state<Doctor | null>(null);
-  let problems = $state<{ keys?: string; servers?: string; cloud?: string; computer?: string }>({});
+  let models = $state<ModelInfo[] | null>(null);   // null: an older pipeline without `models`, or not listed yet
+  let problems = $state<{ keys?: string; models?: string; servers?: string; cloud?: string; computer?: string }>({});
   let loaded = $state(false);
-  // a tab per kind of setting; the version, its updates and this computer's capabilities are the App tab
-  type Tab = 'keys' | 'servers' | 'cloud' | 'app';
-  const TABS: { key: Tab; label: string }[] = [
-    { key: 'keys', label: 'API keys' }, { key: 'servers', label: 'Remote servers' }, { key: 'cloud', label: 'Cloud GPU' }, { key: 'app', label: 'App' },
-  ];
+  // a tab per purpose; App (the version and its updates) is the only one without a pipeline (in a browser)
+  type Tab = 'models' | 'machines' | 'app';
+  const TABS: { key: Tab; label: string }[] = [{ key: 'models', label: 'Models' }, { key: 'machines', label: 'Machines' }, { key: 'app', label: 'App' }];
   // svelte-ignore state_referenced_locally
-  let tab = $state<Tab>(api ? 'keys' : 'app');   // in a browser with no pipeline, only the app's updates are here
+  let tab = $state<Tab>(api ? 'models' : 'app');
   let updatesSection = $state<HTMLElement>();
-  let computerSection = $state<HTMLElement>();
-  // each tab's state at a glance, so a setting can be found without opening every tab
-  const status = $derived<Record<Tab, string>>({
-    keys: keys.length ? `${keyRows(keys, cli).filter((r) => r.stored || r.elsewhere).length} of ${keys.length} set` : '',
-    servers: hosts?.length ? String(hosts.length) : '',
-    cloud: cloud ? (cloud.enabled ? 'On' : 'Off') : '',
-    app: updates?.phase?.kind === 'available' || updates?.phase?.kind === 'ready' ? 'Update' : '',
-  });
   const visibleTabs = $derived(TABS.filter((t) => t.key === 'app' || api).map((t) => t.key));
   function arrows(e: KeyboardEvent) {   // the tabs as one control: arrow keys move between them
     const i = visibleTabs.indexOf(tab), step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
@@ -65,14 +58,16 @@
   const reason = (r: PromiseSettledResult<unknown>) => r.status === 'rejected' ? String(r.reason) : undefined;
 
   async function load(api: PipelineApi) {
-    const [k, c, h, cl, d] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor()]);
+    const [k, c, h, cl, d, m] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor(), api.models()]);
     if (k.status === 'fulfilled') keys = k.value;
     cli = c.status === 'fulfilled' ? c.value : null;
     hosts = h.status === 'fulfilled' ? h.value : older(h, 'hosts') ? null : hosts;
     cloud = cl.status === 'fulfilled' ? cl.value : older(cl, 'cloud') ? null : cloud;
     if (d.status === 'fulfilled') doctor = d.value;
+    models = m.status === 'fulfilled' ? m.value : null;
     problems = {
       keys: [reason(k), older(c, 'keys') ? undefined : reason(c)].filter(Boolean).join('; ') || undefined,
+      models: older(m, 'models') ? undefined : reason(m),
       servers: older(h, 'hosts') ? undefined : reason(h),
       cloud: older(cl, 'cloud') ? undefined : reason(cl),
       computer: reason(d),
@@ -85,8 +80,8 @@
     if (!active || !show) return;
     const s = show;
     untrack(() => {
-      tab = s === 'computer' || s === 'updates' ? 'app' : s;
-      tick().then(() => { (s === 'updates' ? updatesSection : s === 'computer' ? computerSection : null)?.scrollIntoView({ block: 'start' }); onshown?.(); });
+      tab = s === 'updates' ? 'app' : s;
+      tick().then(() => { if (s === 'updates') updatesSection?.scrollIntoView({ block: 'start' }); onshown?.(); });
     });
   });
   const busy = (b: string | null) => onbusy?.(b);
@@ -116,38 +111,41 @@
       {#if t.key === 'app' || api}
         <button role="tab" id={`tab-${t.key}`} aria-selected={tab === t.key} aria-controls={`panel-${t.key}`} tabindex={tab === t.key ? 0 : -1}
           class:on={tab === t.key} onclick={() => (tab = t.key)}>
-          {t.label}{#if status[t.key]}<span class="count">{status[t.key]}</span>{/if}
+          {t.label}
         </button>
       {/if}
     {/each}
   </div>
 
   <div class="panel-body" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-    {#if tab === 'keys' && api}
-      <section class="group" aria-labelledby="keys-heading">
-        <h2 id="keys-heading" class="sr">API keys</h2>
-        {#if problems.keys}<p class="error">Could not read the keys: {problems.keys}</p>{/if}
-        {#if keys.length}<Keys {api} {keys} {cli} onchange={(now) => (keys = now)} onbusy={busy} />
-          <p class="foot muted">Saved keys stay in this computer's keychain, and each step gets only the keys it needs.</p>
-        {:else if loaded && !problems.keys}<p class="muted">This pipeline uses no keys.</p>{/if}
+    {#if tab === 'models' && api}
+      {#if problems.keys}<p class="error top">Could not read the keys: {problems.keys}</p>{/if}
+      <Models {api} {keys} {cli} {models} problem={problems.models} onkeys={(now) => (keys = now)} onbusy={busy} />
+      <p class="foot muted">Keys are kept in this computer's keychain, and each step gets only the keys it needs.</p>
+    {:else if tab === 'machines' && api}
+      <!-- what this computer can run: one line, with the steps it cannot and why only when there are some -->
+      <section class="set-part" aria-labelledby="computer-heading">
+        <div class="set-head"><h2 id="computer-heading">This computer</h2></div>
+        {#if computer}
+          <p>{computer.kind}, {computer.specs}.</p>
+          <p class="muted">{computer.cannot.length ? `${computer.can} of ${doctor!.nodes.length} steps can run here.` : `All ${doctor!.nodes.length} steps can run here.`}</p>
+          {#if computer.cannot.length}
+            <ul class="cannot">
+              {#each computer.cannot as n (n.ref)}<li><span>{n.description || n.ref}</span> <span class="muted">{n.why_not}</span></li>{/each}
+            </ul>
+          {/if}
+        {:else if problems.computer}<p class="error">Could not check this computer: {problems.computer}</p>
+        {:else}<p class="muted">Checking…</p>{/if}
       </section>
-    {:else if tab === 'servers' && api}
-      <section class="group" aria-labelledby="servers-heading">
-        <h2 id="servers-heading" class="sr">Remote servers</h2>
-        {#if problems.servers}<p class="error">Could not list the remote servers: {problems.servers}</p>{/if}
-        {#if hosts !== null}<Servers {api} {hosts} onchange={(now) => (hosts = now)} onbusy={busy} />
-        {:else if loaded}<p class="muted">This pipeline runs every step on this computer. Update hyperstudy-perception to use other machines.</p>{/if}
-      </section>
-    {:else if tab === 'cloud' && api}
-      <section class="group" aria-labelledby="cloud-heading">
-        <h2 id="cloud-heading" class="sr">Cloud GPU</h2>
-        {#if problems.cloud}<p class="error">Could not check the cloud GPU: {problems.cloud}</p>{/if}
-        {#if cloud}<Cloud {api} {cloud} onchange={(now) => (cloud = now)} onbusy={busy} />
-        {:else if loaded && !problems.cloud}<p class="muted">This pipeline cannot start cloud machines yet. Update hyperstudy-perception to use one.</p>{/if}
-      </section>
+      {#if problems.servers}<p class="error">Could not list the remote servers: {problems.servers}</p>{/if}
+      {#if hosts !== null}<Servers {api} {hosts} onchange={(now) => (hosts = now)} onbusy={busy} />
+      {:else if loaded && !problems.servers}<p class="muted">This pipeline runs every step on this computer. Update hyperstudy-perception to use other machines.</p>{/if}
+      {#if problems.cloud}<p class="error">Could not check the cloud GPU providers: {problems.cloud}</p>{/if}
+      {#if cloud}<Cloud {api} {cloud} {keys} {cli} onchange={(now) => (cloud = now)} onkeys={(now) => (keys = now)} onbusy={busy} />
+      {:else if loaded && !problems.cloud}<p class="muted">This pipeline cannot start cloud machines yet. Update hyperstudy-perception to use one.</p>{/if}
     {:else}
-      <section class="group" aria-labelledby="updates-heading" bind:this={updatesSection}>
-        <h2 id="updates-heading">Updates</h2>
+      <section class="set-part" aria-labelledby="updates-heading" bind:this={updatesSection}>
+        <div class="set-head"><h2 id="updates-heading">Updates</h2></div>
         <p>{updates?.version ? `Version ${updates.version}` : 'HyperStudy Annotator'}. <button class="link" onclick={() => openExternal(DOCS_URL)}>Documentation</button></p>
         {#if !updates || !u}
           <p class="muted">The desktop app updates itself. In a browser, add <code>?update-demo</code> to the address to try it against a stand-in.</p>
@@ -181,22 +179,7 @@
         {/if}
       </section>
 
-      {#if api}
-        <!-- what this computer can run: one line, with the steps it cannot and why only when there are some -->
-        <section class="group" aria-labelledby="computer-heading" bind:this={computerSection}>
-          <h2 id="computer-heading">This computer</h2>
-          {#if computer}
-            <p>{computer.kind}, {computer.specs}.</p>
-            <p class="muted">{pipeline}: {computer.cannot.length ? `${computer.can} of ${doctor!.nodes.length} steps can run here.` : `all ${doctor!.nodes.length} steps can run here.`}</p>
-            {#if computer.cannot.length}
-              <ul class="cannot">
-                {#each computer.cannot as n (n.ref)}<li><span>{n.description || n.ref}</span> <span class="muted">{n.why_not}</span></li>{/each}
-              </ul>
-            {/if}
-          {:else if problems.computer}<p class="error">Could not check this computer: {problems.computer}</p>
-          {:else}<p class="muted">Checking…</p>{/if}
-        </section>
-      {/if}
+      {#if doctor?.pipeline?.version}<p class="muted pipeline">{pipeline}.</p>{/if}
     {/if}
   </div>
 </section>
@@ -211,13 +194,9 @@
   .tabs button:hover:not(.on) { color: var(--color-text-secondary); background: none; }
   .tabs button.on { color: var(--color-text-primary); font-weight: 500; box-shadow: inset 0 -2px 0 var(--color-primary); }
   .tabs button:focus-visible { outline: 2px solid var(--color-info); outline-offset: -2px; }
-  .count { font-size: 11px; font-weight: 400; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
-  .group { padding: 22px 0 6px; display: grid; gap: 10px; scroll-margin-top: 12px; }
-  .group + .group { border-top: 1px solid var(--color-border-default); margin-top: 18px; }
-  h2 { font-size: 15px; font-weight: 600; margin: 0; }
-  /* a tab's own heading says what its tab already says: kept for screen readers, not drawn twice */
-  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .foot { font-size: 12px; }
+  .foot { font-size: 12px; margin-top: 18px; }
+  .top { margin-top: 16px; }
+  .pipeline { margin-top: 12px; }
   p { margin: 0; }
   .panel { padding: 12px 14px; border: 1px solid var(--color-border-default); background: var(--color-bg-surface); border-radius: 8px; display: grid; gap: 8px; }
   .cannot { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }

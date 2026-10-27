@@ -1,9 +1,9 @@
 <script lang="ts">
-  // Play (the whole video), Clip (the selection), Loop, the time, the shot, the overlay layers and the speed.
+  // Play (the whole video), Clip (the selection), Loop, the time, the shot, what is drawn over the video (Overlays) and the speed.
   import { useSession, useSource } from '../model/context';
   import { fmt } from '../geometry';
   import type { OverlayLayers } from '../model/view.svelte';
-  import Chip from './ui/Chip.svelte';
+  import Popover from './ui/Popover.svelte';
 
   const s = useSession(), source = useSource();
   const pb = s.playback;
@@ -31,23 +31,29 @@
   <span class="time">{fmt(pb.time)} / {fmt(s.bundle.duration)}</span>
   {#if shot}<span>Shot {shot.index + 1} of {s.bundle.shots.length}</span>{/if}
   <span class="spacer"></span>
-  <span class="layers">
-    <Chip label="Faces" checked={L.boxes} disabled={!b.faces} onchange={(v) => set('boxes', v)} />
-    <Chip label="Objects" checked={L.objects} disabled={!b.objects} onchange={(v) => set('objects', v)} />
-    <Chip label="Skeleton" checked={L.skeleton} disabled={!b.bodies} title={b.bodies ? `Body skeletons (${b.bodies.producer.models[0]?.id ?? ''})` : 'No bodies layer in this bundle'} onchange={(v) => set('skeleton', v)} />
-    <Chip label="Hands" checked={L.hands} disabled={!b.hands} title={b.hands ? 'Hand keypoints (dashed: found by the hand detector, no body)' : 'No hands layer in this bundle'} onchange={(v) => set('hands', v)} />
-    {#if handsUnlinked}<Chip label="Unlinked hands" checked={L.unlinkedHands} title="Also draw hands the hand detector found with no body (often faces, logos or bokeh)" onchange={(v) => set('unlinkedHands', v)} />{/if}
-    <Chip label="Landmarks" checked={L.landmarks} disabled={noDetail} title={noDetail ? 'No py-feat face detail in this bundle' : 'py-feat landmarks'} onchange={(v) => set('landmarks', v)} />
-    <Chip label="Gaze" checked={L.gaze} disabled={!b.gaze && noDetail} onchange={(v) => set('gaze', v)} />
-    {#if b.gaze && !noDetail}
-      <select aria-label="Gaze source" title="Gaze source for the overlay (the Social rows always come from Gaze-LLE)" value={s.view.s.gazeSource}
-        onchange={(e) => { s.view.setGazeSource(e.currentTarget.value as 'gaze_lle' | 'pyfeat'); e.currentTarget.blur(); }}>
-        <option value="gaze_lle">gaze: Gaze-LLE</option>
-        <option value="pyfeat">gaze: py-feat ray</option>
-      </select>
-    {/if}
-    <Chip label="Smooth" checked={L.smooth} title="Centred 1-2-1 smoothing of drawn points and the pitch contour (display only; data stay raw)" onchange={(v) => set('smooth', v)} />
-  </span>
+  <Popover label="What the video shows" title="Boxes and outlines drawn over the video" width={250} align="right" buttonClass="plain">
+    {#snippet button()}Overlays{/snippet}
+    {#snippet children()}
+      {#snippet item(label: string, key: keyof OverlayLayers, on: boolean, disabled: boolean, title?: string)}
+        <label class="menu-item" class:off={disabled} {title}><input type="checkbox" checked={on} {disabled} onchange={(e) => set(key, e.currentTarget.checked)} />{label}</label>
+      {/snippet}
+      {@render item('Faces', 'boxes', L.boxes, !b.faces)}
+      {@render item('Objects', 'objects', L.objects, !b.objects)}
+      {@render item('Skeletons', 'skeleton', L.skeleton, !b.bodies, b.bodies ? `Body skeletons (${b.bodies.producer.models[0]?.id ?? ''})` : 'No bodies layer for this video')}
+      {@render item('Hands', 'hands', L.hands, !b.hands, b.hands ? 'Hand keypoints (dashed: found by the hand detector, no body)' : 'No hands layer for this video')}
+      {#if handsUnlinked}{@render item('Hands with no body', 'unlinkedHands', L.unlinkedHands, false, 'Also hands the hand detector found with no body (often faces, logos or bokeh)')}{/if}
+      {@render item('Face landmarks', 'landmarks', L.landmarks, noDetail, noDetail ? 'No py-feat face detail for this video' : 'py-feat landmarks')}
+      {@render item('Gaze', 'gaze', L.gaze, !b.gaze && noDetail)}
+      {#if b.gaze && !noDetail && L.gaze}
+        <div class="sub"><select aria-label="Gaze source" title="Where the drawn gaze comes from (the Social rows always use Gaze-LLE)" value={s.view.s.gazeSource}
+          onchange={(e) => s.view.setGazeSource(e.currentTarget.value as 'gaze_lle' | 'pyfeat')}>
+          <option value="gaze_lle">From Gaze-LLE</option><option value="pyfeat">From py-feat's ray</option>
+        </select></div>
+      {/if}
+      <div class="menu-sep"></div>
+      {@render item('Smooth the drawing', 'smooth', L.smooth, false, 'Centred 1-2-1 smoothing of drawn points and the pitch contour (display only; data stay raw)')}
+    {/snippet}
+  </Popover>
   <label>Speed
     <select aria-label="Playback speed" value={String(pb.rate)} onchange={(e) => { pb.setRate(Number(e.currentTarget.value)); e.currentTarget.blur(); }}>
       {#each ['0.5', '0.75', '1', '1.5', '2'] as r (r)}<option value={r}>{r}</option>{/each}
@@ -60,5 +66,6 @@
   .play { min-width: 64px; }
   .time { font-variant-numeric: tabular-nums; min-width: 128px; }
   .spacer { flex: 1; }
-  .layers { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .off { color: var(--color-text-muted); }
+  .sub { padding: 2px 10px 6px 34px; }
 </style>

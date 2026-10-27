@@ -48,7 +48,6 @@
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
   // where the steps run, chosen once for the run: this computer, a remote server (ssh-<name>) or the cloud GPU. Each
   // step that can run there is placed there; a step's own menu (in its details) can still move it.
-  let runtime = $state('native');
   let wanted = $state<Set<string> | null>(null);   // the features on (null: the first plan's defaults)
   let ticked = $state<Ticked>({});   // the ones the user turned on themselves, with what they sent then: all they may send
   let settings = $state<Settings>({});   // settings the user chose: node -> key -> value
@@ -199,11 +198,11 @@
       const [backend, accelerator] = place.split(':');
       if (backend === 'native' || backend === 'self') return true;
       if (backend === 'cloud') return !!cloud?.enabled;
+      if (backend === 'runpod') return !!cloud?.runpod?.enabled;
       const h = (hosts ?? []).find((x) => `ssh-${x.name}` === backend);
       return !!h && before.get(backend) === machineId(h) && h.caps.accelerators.includes(accelerator);
     };
     const gone = Object.entries(places).filter(([, p]) => !offered(p)).map(([n]) => n);
-    if (runtime !== 'native' && !runtimes.some((r) => r.value === runtime && !r.off)) runtime = 'native';
     if (gone.length) {
       places = Object.fromEntries(Object.entries(places).filter(([n]) => !gone.includes(n)));
       ticked = Object.fromEntries(Object.entries(ticked).filter(([n]) => !gone.includes(n)));
@@ -221,23 +220,6 @@
     places = { ...places, [node]: place };
     await makePlan(true);
   };
-  // choosing a runtime is choosing, for each step that can run there, to send it its inputs there (as its own menu is)
-  let runtimeLater = false;   // chosen before there was a plan: applied to the first one
-  const chooseRuntime = async (r: string) => {
-    runtime = r;
-    if (!plan) { runtimeLater = r !== 'native'; return; }
-    const next: Places = {}, agreed: Ticked = {};
-    for (const n of plan.nodes) {
-      const to = r === 'native' ? undefined : n.options?.find((o) => o.split(':')[0] === r);
-      if (!to) continue;
-      next[n.id] = to;
-      const t = placeTick(n, to);
-      if (t) agreed[n.id] = t;
-    }
-    places = next;
-    ticked = { ...ticked, ...agreed };
-    await makePlan(true);
-  };
   const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
@@ -251,7 +233,7 @@
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
     newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
-        if (runtimeLater) { runtimeLater = false; chooseRuntime(runtime); } },
+      },
       (e) => { plan = null; error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
@@ -286,14 +268,8 @@
   const LICENCE: Record<string, string> = { 'academic-only': 'academic use only', 'commercial-ok': 'commercial use allowed', 'needs-review': 'licence under review', 'api-terms': "the API provider's terms" };
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
   const here = $derived(doctor?.platform.startsWith('darwin') ? 'this Mac' : 'this machine');
-  // the runtimes the menu offers: one not set up yet is shown, and greyed out, so it can be found in Settings
-  const runtimes = $derived<{ value: string; label: string; off?: boolean }[]>([
-    { value: 'native', label: capital(here) },
-    ...(hosts?.length ? hosts.map((h) => ({ value: `ssh-${h.name}`, label: `${h.name} (remote server)` }))
-      : [{ value: 'ssh', label: olderPipeline ? 'Remote server (update the pipeline)' : 'Remote server (none set up)', off: true }]),
-    ...(cloud?.enabled ? [{ value: 'cloud', label: `Cloud GPU (${cloud.machine})` }]
-      : [{ value: 'cloud', label: !cloud ? 'Cloud GPU (update the pipeline)' : 'Cloud GPU (off)', off: true }]),
-  ]);
+  // somewhere other than this computer is set up for steps to run: each step's menu offers it
+  const elsewhere = $derived(!!hosts?.length || !!cloud?.enabled || !!cloud?.runpod?.enabled);
   // what leaves this machine, and where to: the API it calls, or the other machine it runs on (its inputs, whatever they hold)
   const leaves = (n: PlanNode) => {
     const to = dest(n);
@@ -333,13 +309,6 @@
           {#if video}<span class="file" title={video}>{name(video)}</span><button onclick={chooseVideo} disabled={started}>Change…</button>
           {:else}<button class="primary" onclick={chooseVideo}>Choose a video…</button>{/if}
         </div>
-        <label class="label" for="runtime">Runtime</label>
-        <div class="value">
-          <select id="runtime" value={runtime} disabled={started} onchange={(e) => chooseRuntime(e.currentTarget.value)}>
-            {#each runtimes as r (r.value + r.label)}<option value={r.value} disabled={r.off}>{r.label}</option>{/each}
-          </select>
-          {#if hosts !== null}<button class="link" onclick={() => onsettings?.('servers')} aria-label="Set up runtimes, in Settings">Settings</button>{/if}
-        </div>
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
       <div class="value graphs">
@@ -363,6 +332,7 @@
         {#if started}{headline}
         {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
       </h3>
+      {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('machines')}>Add a remote server or cloud GPU</button></p>{/if}
       {#if total?.unknown.length && !started}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(total.unknown.map(titleOf))}, which {total.unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
       <ol class="steps">
         {#each started ? active?.nodes ?? [] : plan.nodes as n (n.id)}
@@ -379,8 +349,12 @@
             </button>
             <span class="where">
               {#if n.cached}<span class="muted">Already done</span>
-              {:else if n.service}<span title={n.place ?? undefined}>{n.service} (cloud)</span>
-              {:else if n.place}<span title={n.place}>{placeName(n.place, plan.places)}</span>
+              {:else if n.service}{n.service}
+              {:else if n.place && !started && on && (n.options?.length ?? 0) > 1}
+                <select aria-label={`Where ${title(n)} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
+                  {#each n.options ?? [] as o (o)}<option value={o}>{placeLabel(n, o, plan.places)}</option>{/each}
+                </select>
+              {:else if n.place}{placeName(n.place, plan.places)}
               {:else if n.where}{n.where}   <!-- a CLI from before plans named places -->
               {:else}<span class="error">Cannot run here</span>{/if}
             </span>
@@ -402,7 +376,7 @@
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
                 {#if n.cost_usd}<span>{machineCost(plan, n) ? 'Up to ' : ''}${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
-                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.('keys')}>add it in Settings</button></span>{/each}
+                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.('models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
                 <span class="muted" id={`before-${n.id}`}>Turn on {list(before.map(titleOf))} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
               {/if}
@@ -419,13 +393,7 @@
                   {#if n.downloads.length}<dt>Downloads first</dt>
                     <dd>{#each n.downloads as d (d.id)}<span title={d.source ?? undefined}>{d.id}</span> <span class="muted">({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}, {LICENCE[d.licence_mode] ?? d.licence_mode}{d.gated ? ', gated: needs access granted on Hugging Face' : ''})</span><br />{/each}</dd>{/if}
                   <dt>Leaves this machine</dt><dd>{leaves(n)}</dd>
-                  {#if n.service}<dt>Runs on</dt><dd>The {n.service}, in the cloud</dd>
-                  {:else if !started && on && (n.options?.length ?? 0) > 1}<dt><label for={`where-${n.id}`}>Runs on</label></dt>
-                    <dd class="setting"><select id={`where-${n.id}`} aria-label={`Where ${n.id} runs`} value={n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
-                      {#each n.options ?? [] as o (o)}<option value={o} title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o, plan.places)}</option>{/each}
-                    </select></dd>
-                  {:else if n.options?.length}<dt>Can run on</dt>
-                    <dd>{#each n.options as o (o)}<span title={n.estimates?.[o]?.estimate_basis}>{placeLabel(n, o, plan.places)}</span><br />{/each}</dd>{/if}
+                  {#if n.service}<dt>Runs on</dt><dd>The {n.service}, in the cloud</dd>{/if}
                   {#each n.settings ?? [] as st (st.key)}
                     <dt><label for={`set-${n.id}-${st.key}`}>{capital(st.key)}</label></dt>
                     <dd class="setting">

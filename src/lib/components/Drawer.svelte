@@ -1,13 +1,13 @@
 <script lang="ts">
-  // The right-hand drawer: tabs (Inspect, Review, People, Annotate, Data), the keys for what is selected, and the
-  // handle that resizes it. Collapsed (\), the video and timeline take the width.
+  // The right-hand drawer: tabs (Inspect, Review, People, Annotate, Details), the keys for what is selected when asked
+  // for (? or its button), and the handle that resizes it. Collapsed (\), the video and timeline take the width.
   import { useSession } from '../model/context';
   import type { Tab } from '../model/view.svelte';
   import Inspector from './inspect/Inspector.svelte';
   import ReviewTab from './tabs/ReviewTab.svelte';
   import PeopleTab from './tabs/PeopleTab.svelte';
   import AnnotateTab from './tabs/AnnotateTab.svelte';
-  import DataTab from './tabs/DataTab.svelte';
+  import DetailsTab from './tabs/DetailsTab.svelte';
 
   let { onresize, onresizeend, onresetwidth }: { onresize: (dx: number, start: number) => void; onresizeend: () => void; onresetwidth: () => void } = $props();
   const s = useSession();
@@ -15,7 +15,7 @@
   let panel = $state<HTMLDivElement>();
   let aside = $state<HTMLElement>();
   let resizing = $state(false);
-  const TABS: [Tab, string][] = [['inspect', 'Inspect'], ['review', 'Review'], ['people', 'People'], ['notes', 'Annotate'], ['data', 'Data']];
+  const TABS: [Tab, string][] = [['inspect', 'Inspect'], ['review', 'Review'], ['people', 'People'], ['notes', 'Annotate'], ['data', 'Details']];
 
   function startResize(e: PointerEvent) {
     e.preventDefault();
@@ -41,9 +41,11 @@
     {#if !closed}
       {#each TABS as [key, label] (key)}
         <button class="tab" class:active={s.tab === key} aria-pressed={s.tab === key} onmousedown={(e) => e.preventDefault()} onclick={() => (s.tab = key)}>
-          {key === 'review' ? `Review (${s.openInQueue})` : label}
+          {label}
         </button>
       {/each}
+      <button class="keys-toggle" class:on={s.help} aria-pressed={s.help} title="Keyboard keys (?)" aria-label="Keyboard keys"
+        onmousedown={(e) => e.preventDefault()} onclick={() => (s.help = !s.help)}>?</button>
     {/if}
   </nav>
   {#if !closed}
@@ -51,18 +53,18 @@
       {#if s.tab === 'review'}<ReviewTab />
       {:else if s.tab === 'people'}<PeopleTab />
       {:else if s.tab === 'notes'}<AnnotateTab />
-      {:else if s.tab === 'data'}<DataTab />
+      {:else if s.tab === 'data'}<DetailsTab />
       {:else}<Inspector />{/if}
     </div>
-    <div class="help">
+    {#if s.help}<div class="help">
       {#if s.selection?.kind === 'utt'}
         <kbd>1</kbd>–<kbd>9</kbd> face <kbd>o</kbd> voice <kbd>m</kbd> several <kbd>u</kbd> unsure <kbd>x</kbd> not speech <kbd>j</kbd>/<kbd>k</kbd> next/prev
       {:else}
         <kbd>space</kbd> play <kbd>⇧space</kbd> clip <kbd>l</kbd> loop <kbd>←</kbd><kbd>→</kbd> segment <kbd>⇧←→</kbd> 1 s <kbd>,</kbd><kbd>.</kbd> shot
         <kbd>e</kbd> include <kbd>[</kbd><kbd>]</kbd> annotate <kbd>j</kbd> review <kbd>\</kbd> panel
       {/if}
-      <kbd>⌘Z</kbd> undo
-    </div>
+      <kbd>⌘Z</kbd> undo <kbd>?</kbd> hide these
+    </div>{/if}
   {/if}
 </aside>
 
@@ -74,6 +76,8 @@
   .closed .tabs { border: 0; flex: 1; }
   .tabs button { border: 0; border-radius: 0; background: none; padding: 9px 2px; color: var(--color-text-secondary); border-bottom: 2px solid transparent; }
   .tab { flex: 1; }
+  .keys-toggle { flex: none; width: 30px; color: var(--color-text-muted); }
+  .keys-toggle.on, .keys-toggle:hover { color: var(--color-text-primary); }
   .tab.active { color: var(--color-text-primary); border-bottom-color: var(--color-primary); }
   .drawer-toggle { flex: none; width: 28px; color: var(--color-text-muted); border-right: 1px solid var(--color-border-default) !important; display: grid; place-items: center; }
   .closed .drawer-toggle { width: 100%; height: 100%; border-right: 0 !important; }
@@ -83,7 +87,7 @@
 
   /* The views inside the panel share these; scoped to the panel. */
   .drawer-panel :global(h2) { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
-  .drawer-panel :global(h3) { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--color-text-muted); margin: 16px 0 6px; font-weight: 600; }
+  .drawer-panel :global(h3) { font-size: 12.5px; color: var(--color-text-secondary); margin: 18px 0 6px; font-weight: 600; }
   .drawer-panel :global(.meta) { color: var(--color-text-muted); }
   .drawer-panel :global(.row) { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
   .drawer-panel :global(.list) { display: flex; flex-direction: column; gap: 4px; }

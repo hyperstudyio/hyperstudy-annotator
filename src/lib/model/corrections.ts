@@ -186,6 +186,13 @@ export function opFromV1(raw: Record<string, any>): Op {
   }
 }
 
+/** An edits file from what was picked: an Export (`perception-annotated/1`, annotated.ts) carries its edits, the video
+ *  and the run they were made on, so it imports as the edits file it holds; any other document is taken as it is. */
+export function editsFile(doc: any): CorrectionsFile {
+  if (doc?.format !== 'perception-annotated/1') return doc;
+  return { format: FORMAT, sha256: doc.video?.sha256, bundle: doc.bundle?.manifest_sha256 ?? undefined, exported_at: doc.exported_at, ops: doc.edits ?? [] };
+}
+
 /** Read an exported corrections file (v1 from the prototype, or this app's v2) for a bundle's video. */
 export function readCorrectionsFile(doc: CorrectionsFile, videoSha256: string): Op[] {
   if (doc.sha256 !== videoSha256) throw new ImportError('that file is for a different video');

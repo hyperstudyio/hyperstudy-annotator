@@ -62,6 +62,7 @@ pub fn run() {
             commands::pipeline_hosts,
             commands::pipeline_host,
             commands::pipeline_cloud,
+            commands::pipeline_models,
             commands::pipeline_plan,
             commands::pipeline_run,
             commands::pipeline_cancel,
