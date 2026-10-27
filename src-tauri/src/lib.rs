@@ -30,6 +30,8 @@ pub fn run() {
                                             keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))),
                                             uv_dirs, setup });
             commands::start_setup(app.handle().clone())?;   // install or upgrade the pipeline, set a new version up: in the background
+            #[cfg(unix)]
+            quit_on_signals(app.handle().clone())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,6 +70,30 @@ pub fn run() {
             commands::key_remove,
             commands::pipeline_keys,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running the annotator");
+        .build(tauri::generate_context!())
+        .expect("error while building the annotator")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                commands::stop_on_exit(app);   // a run canceled, and nothing the app started outlives it
+            }
+        });
+}
+
+/// TERM, INT and HUP (`kill`, Ctrl-C in `tauri dev`, the terminal it was started from closing) quit the app as its Quit
+/// does, so RunEvent::Exit stops what it started (`commands::stop_on_exit`); before, a signal ended it on the spot and
+/// the pipeline lived on. A second signal ends it at once, should quitting itself hang.
+#[cfg(unix)]
+fn quit_on_signals(app: tauri::AppHandle) -> std::io::Result<()> {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP])?;
+    std::thread::spawn(move || {
+        let mut received = signals.forever();
+        if received.next().is_some() {
+            app.exit(0);
+        }
+        if received.next().is_some() {
+            std::process::exit(1);
+        }
+    });
+    Ok(())
 }

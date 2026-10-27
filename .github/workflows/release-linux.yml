@@ -98,11 +98,21 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: linux-x86_64-unknown-linux-gnu
+      # the packages tests.yml keeps on main for this runner image: most of what the .deb depends on (webkit2gtk and
+      # what it needs), so the mirror serves only the rest. v0.0.2's check timed out downloading them at 60 kB/s. A
+      # tag's run may restore main's caches; restore only, so no tag saves one of its own. Path and key as tests.yml's.
+      - id: image
+        run: echo "id=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/apt-archives/*.deb
+          key: apt-tauri-libs-${{ steps.image.outputs.id }}
+          restore-keys: apt-tauri-libs-
       - name: The .deb installs with its dependencies, the app finds every library, the bundled uv runs
-        timeout-minutes: 15   # downloads its dependencies from the mirror, as above
+        timeout-minutes: 15   # what is not kept comes from the mirror, as above
         run: |
           deb=$(ls ./*.deb)
-          bash repo/scripts/ci-apt.sh "$deb"   # resolves the package's Depends as a user's apt would
+          APT_ARCHIVES="$HOME/apt-archives" bash repo/scripts/ci-apt.sh "$deb"   # resolves its Depends as a user's apt would
           pkg=$(dpkg-deb -f "$deb" Package)
           missing=0
           for f in $(dpkg -L "$pkg" | grep '^/usr/bin/'); do

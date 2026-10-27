@@ -75,6 +75,21 @@ test('the macOS build does not require the updater key to have a password', () =
   expect(allSet).not.toContain('TAURI_SIGNING_PRIVATE_KEY_PASSWORD');
 });
 
+// The Linux install check restores the packages tests.yml keeps on main (the mirror is at times too slow to fetch them
+// in time). A cache is found by its key and its path (hashed into its version), so both must be tests.yml's, on the
+// same runner image; and restored only: a tag's run must not save caches of its own.
+test('the Linux install check restores the packages tests.yml keeps on main', () => {
+  type Step = { uses?: string; run?: string; with?: Record<string, string> };
+  const steps = (wf: Workflow, job: string) => wf.jobs[job].steps as Step[];
+  const kept = steps(load('tests.yml'), 'rust').find((s) => s.uses?.startsWith('actions/cache@'))!.with!;
+  const check = load('release-linux.yml').jobs.check as Job & { 'runs-on': string };
+  const restored = steps(load('release-linux.yml'), 'check').find((s) => s.uses?.startsWith('actions/cache'))!;
+  expect(restored.uses).toMatch(/^actions\/cache\/restore@/);
+  expect(restored.with).toEqual(kept);
+  expect(check['runs-on']).toBe((load('tests.yml').jobs.rust as Job & { 'runs-on': string })['runs-on']);
+  expect(steps(load('release-linux.yml'), 'check').find((s) => s.run?.includes('ci-apt.sh'))!.run).toContain('APT_ARCHIVES="$HOME/apt-archives"');
+});
+
 // The updater's manifest is written after both builds, from the signatures they attached. Its script is run here on
 // stand-in signatures: an installed copy with no entry for its platform, or a URL that is not the file attached, never
 // gets the update.
