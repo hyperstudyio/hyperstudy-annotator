@@ -1,6 +1,7 @@
 // A scripted library for the browser (?library-demo): the bake-off bundles vite serves at /devdata (see the README),
 // one whose video has not been found yet. Importing adds one; locating a video finds it. ?library-demo=empty starts
-// with none. Without /devdata (CI) the bundles list, and opening one says it could not be loaded.
+// with none. Without /devdata (CI) the bundles list, and opening one says it could not be loaded. Edits are saved
+// after the same wait, as the app's are after a round trip to its database (so what shows while one saves is tested).
 import type { LibraryApi } from './library';
 import { httpSource } from './source';
 import type { BundleSummary } from './types';
@@ -41,7 +42,10 @@ export function fakeLibrary(empty: boolean, delayMs = 300): LibraryApi {
       const now = bundles.find((x) => x.id === b.id) ?? b;
       const at = SERVED[b.id];
       if (!at) throw new Error(`${b.title} is only in this demo's list: it has no layers to show`);
-      return httpSource(at.bundle, now.video_path ? at.video : null);
+      const source = await httpSource(at.bundle, now.video_path ? at.video : null), store = source.corrections;
+      const append = store.append.bind(store);
+      store.append = async (ops) => { await wait(); return append(ops); };
+      return source;
     },
   };
 }

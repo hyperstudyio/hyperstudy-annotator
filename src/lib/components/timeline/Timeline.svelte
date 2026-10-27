@@ -404,7 +404,7 @@
   </div>
 </section>
 
-{#if s.noteMenu}<NoteMenu id={s.noteMenu} />{/if}
+{#key s.noteMenu}{#if s.noteMenu}<NoteMenu id={s.noteMenu} />{/if}{/key}   <!-- one per annotation: each opens fresh -->
 {#if gesture?.kind === 'retime' && gesture.moved}
   <!-- above the pointer: annotation rows are often at the foot of the window -->
   <div class="retime-tip" style="left:{gesture.px + 12}px; top:{gesture.py - 36}px">{fmt(gesture.span.start)}–{fmt(gesture.span.end)} · {(gesture.span.end - gesture.span.start).toFixed(1)} s</div>

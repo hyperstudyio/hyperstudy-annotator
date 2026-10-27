@@ -24,7 +24,8 @@
     at = placeBy(el.getBoundingClientRect(), WIDTH);
   }
   $effect(() => { void id; tick().then(() => { place(); panel?.focus(); }); });
-  $effect(() => { if (!n || s.modal) close(); });
+  // it is the selected annotation's: selecting something else closes it (⌫ deletes the selection, never another)
+  $effect(() => { if (!n || s.modal || s.selection?.kind !== 'note' || s.selection.id !== id) close(); });
 
   // an edit that leaves it saying all it needs to closes the menu (a click, or a key: 1–9, y, n)
   const complete = $derived(!!n && s.hasValue(n) && (type?.target !== 'person' || !!n.person));
