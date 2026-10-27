@@ -32,7 +32,7 @@
   }
 </script>
 
-<div class="meta">Your own annotations, kept apart from the machine track. Agents never receive a type unless an experiment turns it on.</div>
+<div class="meta">Your own annotations, kept apart from what the pipeline found.</div>
 {#if s.S.types.length}
   <h3>Add an annotation</h3>
   <div class="list">

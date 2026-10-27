@@ -22,7 +22,7 @@
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     const { scale, x, y } = contentRect(video, s.bundle.width, s.bundle.height);
-    drawOverlay(g, { s, t: s.playback.time, m: { scale, ox: x, oy: y }, layers: s.view.s.layers, gazeSource: s.bundle.layers.gaze ? s.view.s.gazeSource : 'pyfeat', detail: s.detail, sm });
+    drawOverlay(g, { s, t: s.playback.time, m: { scale, ox: x, oy: y }, layers: s.view.s.layers, styles: s.view.s.styles, gazeSource: s.bundle.layers.gaze ? s.view.s.gazeSource : 'pyfeat', detail: s.detail, sm });
   });
 
   function onclick(e: MouseEvent) {

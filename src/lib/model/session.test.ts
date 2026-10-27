@@ -235,3 +235,47 @@ describe('which run a corrections file was made on', () => {
     expect(await s.parseCorrections(file([caption]), lineage({}), load)).toEqual([caption]);
   });
 });
+
+describe('what an earlier edit left out', () => {
+  test('says why, and the edit that puts it back undoes just that', async () => {
+    const { s } = session();
+    const [f0] = s.bundle.faces;   // Person A's
+    expect(s.leftOut({ kind: 'face', id: f0.id })).toBeNull();
+    await s.commit({ op: 'entity.include', id: 'person:Person A', included: false });
+    const out = s.leftOut({ kind: 'face', id: f0.id })!;
+    expect(out.why).toBe('Person A was left out by an earlier edit.');
+    await s.commit(out.putBack);
+    expect(s.includedFace(f0)).toBe(true);
+    await s.commit({ op: 'entity.include', id: f0.id, included: false });
+    expect(s.leftOut({ kind: 'face', id: f0.id })!.why).toBe('Left out by an earlier edit.');
+    const x = s.bundle.sounds[0];
+    await s.commit({ op: 'category.include', kind: 'sound', label: x.label, included: false });
+    const sound = s.leftOut({ kind: 'sound', id: x.id })!;
+    expect(sound.why).toBe(`Every "${x.label}" was left out by an earlier edit.`);
+    await s.commit(sound.putBack);
+    expect(s.includedSound(x)).toBe(true);
+  });
+
+  test('not a person is not this: it is put right by naming who the face is', async () => {
+    const { s } = session();
+    await s.commit({ op: 'person.not_person', person: 'person:Person C' });
+    const t = s.bundle.faces.find((f) => f.person === 'person:Person C')!;
+    expect(s.leftOut({ kind: 'face', id: t.id })).toBeNull();
+  });
+});
+
+test('Back returns to the selections before, newest first, and after deselecting to what was selected', () => {
+  const { s } = session();
+  const note = () => s.noteSelection(s.selection);
+  s.select('shot', 'shot:0', { seek: false }); note();
+  s.select('person', 'person:Person A', { seek: false }); note();
+  s.select('face', 'face:0', { seek: false }); note();
+  expect(s.history.map((x) => x.id)).toEqual(['shot:0', 'person:Person A']);
+  s.back(); note();
+  expect(s.selection).toEqual({ kind: 'person', id: 'person:Person A' });
+  expect(s.history.map((x) => x.id)).toEqual(['shot:0']);   // going back adds nothing
+  s.selection = null; note();   // Esc
+  expect(s.history.map((x) => x.id)).toEqual(['shot:0', 'person:Person A']);
+  s.back(); note();
+  expect(s.selection).toEqual({ kind: 'person', id: 'person:Person A' });
+});

@@ -2,7 +2,7 @@
 // objects, skeletons, hands, py-feat landmarks, gaze. Drawn at the media time of the frame on screen, blending the
 // samples around it (smooth.ts), so nothing lags or jumps against the picture.
 import type { Session } from '../model/session.svelte';
-import type { OverlayLayers, GazeSource } from '../model/view.svelte';
+import { DEFAULT_STYLE, type GazeSource, type OverlayKey, type OverlayLayers, type OverlayStyle } from '../model/view.svelte';
 import type { Box, FaceDetailSample, FaceTrack, FacesDetail, HandsLayer, Kpt, ObjectSample, ObjectTrack, PoseSample } from '../types';
 import { bracket, lerpKpts, lerpNums, smoothKpts, smoothNums } from './smooth';
 
@@ -75,6 +75,15 @@ export function insidePoly(px: number, py: number, poly: [number, number][]) {
 
 export interface OverlayInput {
   s: Session; t: number; m: Mapping; layers: OverlayLayers; gazeSource: GazeSource; detail: FacesDetail | null; sm: Smoothed;
+  /** how each overlay is drawn (colour, opacity, line width); a missing one is DEFAULT_STYLE */
+  styles?: Partial<Record<OverlayKey, OverlayStyle>>;
+}
+
+/** An overlay's style, and drawing in it: its opacity for what `f` draws, its colour over the one given. */
+const styleOf = (inp: OverlayInput, key: OverlayKey): OverlayStyle => ({ ...DEFAULT_STYLE, ...inp.styles?.[key] });
+function inStyle(g: CanvasRenderingContext2D, st: OverlayStyle, f: () => void) {
+  g.save(); g.globalAlpha = st.opacity;
+  try { f(); } finally { g.restore(); }
 }
 
 export function visibleObjects(s: Session, t: number) {
@@ -103,47 +112,52 @@ export function drawOverlay(g: CanvasRenderingContext2D, inp: OverlayInput) {
   const sel = s.selection;
   const numbers = new Map<string, number>();
   if (sel?.kind === 'utt') (s.bundle.prediction.get(sel.id)?.candidates ?? []).slice(0, 9).forEach((c, i) => numbers.set(c.face, i + 1));
-  if (L.objects) drawObjects(g, inp);
-  if (L.skeleton) drawSkeletons(g, inp);
-  if (L.hands) drawHands(g, inp);
+  const box = styleOf(inp, 'boxes'), lmk = styleOf(inp, 'landmarks'), gz = styleOf(inp, 'gaze');
+  if (L.objects) inStyle(g, styleOf(inp, 'objects'), () => drawObjects(g, inp, styleOf(inp, 'objects')));
+  if (L.skeleton) inStyle(g, styleOf(inp, 'skeleton'), () => drawSkeletons(g, inp, styleOf(inp, 'skeleton')));
+  if (L.hands) inStyle(g, styleOf(inp, 'hands'), () => drawHands(g, inp, styleOf(inp, 'hands')));
   const faces = visibleFaces(s, t), fps = s.bundle.layers.faces?.sample_fps ?? 8;
   for (const { f, box: [x, y, w, h] } of faces) {
     const p = s.personOf(f), inc = s.includedFace(f), col = inc ? s.colourOf(p) : 'rgba(200,200,200,.6)';
     const selected = (sel?.kind === 'face' && sel.id === f.id) || (sel?.kind === 'person' && sel.id === p);
     const d = L.landmarks || L.gaze ? faceDetailAt(inp.detail, f.id, t, fps, L.smooth, inp.sm) : null;
-    if (L.landmarks && d) {
-      g.strokeStyle = col; g.lineWidth = 1.2; g.setLineDash([]);
+    if (L.landmarks && d) inStyle(g, lmk, () => {
+      g.strokeStyle = lmk.colour ?? col; g.lineWidth = 1.2 * lmk.width; g.setLineDash([]);
       for (const [a, b, closed] of LMK_PATHS) {
         g.beginPath();
         for (let i = a; i <= b; i++) { const px = X(m, d.lmk[i]), py = Y(m, d.lmk[68 + i]); if (i === a) g.moveTo(px, py); else g.lineTo(px, py); }
         if (closed) g.closePath();
         g.stroke();
       }
-    }
-    if (L.gaze) {
-      if (inp.gazeSource === 'gaze_lle' && s.bundle.layers.gaze) drawGazeLLE(g, inp, f, [x, y, w, h], d?.lmk ?? null, col);
-      else if (inp.gazeSource === 'pyfeat' && d) drawGazeRay(g, inp, [x, y, w, h], d, col);
-    }
+    });
+    if (L.gaze) inStyle(g, gz, () => {
+      if (inp.gazeSource === 'gaze_lle' && s.bundle.layers.gaze) drawGazeLLE(g, inp, f, [x, y, w, h], d?.lmk ?? null, gz.colour ?? col, gz);
+      else if (inp.gazeSource === 'pyfeat' && d) drawGazeRay(g, inp, [x, y, w, h], d, gz.colour ?? col, gz);
+    });
     if (!L.boxes && !selected) continue;
-    g.lineWidth = selected ? 3 : 2;
-    g.setLineDash(inc ? [] : [5, 4]);
-    g.strokeStyle = col;
-    g.strokeRect(X(m, x), Y(m, y), w * m.scale, h * m.scale);
-    g.setLineDash([]);
-    const n = numbers.get(f.id), label = `${n ? `${n} · ` : ''}${s.nameOf(p)}`;
-    g.font = '600 12px system-ui, sans-serif';
-    const tw = g.measureText(label).width + 10, lx = X(m, x), ly = Math.max(0, Y(m, y) - 19);
-    g.fillStyle = inc ? s.colourOf(p) : 'rgba(80,80,80,.85)';
-    g.fillRect(lx, ly, tw, 18);
-    g.fillStyle = inc ? '#111' : '#ddd';
-    g.fillText(label, lx + 5, ly + 13);
+    // a selected face is drawn whatever the boxes' style, so it can always be seen
+    inStyle(g, selected ? { ...box, opacity: Math.max(box.opacity, 0.8) } : box, () => {
+      const c = inc ? box.colour ?? col : col;
+      g.lineWidth = (selected ? 3 : 2) * box.width;
+      g.setLineDash(inc ? [] : [5, 4]);
+      g.strokeStyle = c;
+      g.strokeRect(X(m, x), Y(m, y), w * m.scale, h * m.scale);
+      g.setLineDash([]);
+      const n = numbers.get(f.id), label = `${n ? `${n} · ` : ''}${s.nameOf(p)}`;
+      g.font = '600 12px system-ui, sans-serif';
+      const tw = g.measureText(label).width + 10, lx = X(m, x), ly = Math.max(0, Y(m, y) - 19);
+      g.fillStyle = inc ? c : 'rgba(80,80,80,.85)';
+      g.fillRect(lx, ly, tw, 18);
+      g.fillStyle = inc ? '#111' : '#ddd';
+      g.fillText(label, lx + 5, ly + 13);
+    });
   }
 }
 
-function drawObjects(g: CanvasRenderingContext2D, { s, t, m }: OverlayInput) {
+function drawObjects(g: CanvasRenderingContext2D, { s, t, m }: OverlayInput, st: OverlayStyle) {
   const sel = s.selection;
   for (const { o, x } of visibleObjects(s, t)) {
-    const i = s.identityOf(o), inc = s.includedObject(o), col = s.objColour(i);
+    const i = s.identityOf(o), inc = s.includedObject(o), col = st.colour ?? s.objColour(i);
     const selected = (sel?.kind === 'object' && sel.id === o.id) || (sel?.kind === 'objid' && sel.id === i);
     g.beginPath();
     x.poly.forEach(([px, py], k) => (k ? g.lineTo(X(m, px), Y(m, py)) : g.moveTo(X(m, px), Y(m, py))));
@@ -151,7 +165,7 @@ function drawObjects(g: CanvasRenderingContext2D, { s, t, m }: OverlayInput) {
     g.setLineDash(inc ? [] : [5, 4]);
     g.fillStyle = inc ? `${col}${selected ? '55' : '26'}` : 'rgba(150,150,150,.08)';
     g.fill();
-    g.lineWidth = selected ? 2.5 : 1.5; g.strokeStyle = inc ? col : 'rgba(200,200,200,.5)'; g.stroke();
+    g.lineWidth = (selected ? 2.5 : 1.5) * st.width; g.strokeStyle = inc ? col : 'rgba(200,200,200,.5)'; g.stroke();
     g.setLineDash([]);
     g.font = '600 11px system-ui, sans-serif';
     const label = s.objName(i), tw = g.measureText(label).width + 8, lx = X(m, x.box[0]), ly = Math.max(0, Y(m, x.box[1]) - 16);
@@ -162,7 +176,7 @@ function drawObjects(g: CanvasRenderingContext2D, { s, t, m }: OverlayInput) {
 
 // Keypoint scores are each model's own scale (RTMW's raw SimCC peaks run 0-12; ViTPose and Sapiens2 are 0-1), so a
 // joint is drawn only above the threshold its stage wrote into the layer.
-function drawSkeletons(g: CanvasRenderingContext2D, { s, t, m, layers, sm }: OverlayInput) {
+function drawSkeletons(g: CanvasRenderingContext2D, { s, t, m, layers, sm }: OverlayInput, st: OverlayStyle) {
   const B = s.bundle.layers.bodies, shot = s.bundle.shotAt(t);
   if (!B || !shot) return;
   const groups = (B.producer.config.groups ?? {}) as Record<string, number[]>;
@@ -173,35 +187,35 @@ function drawSkeletons(g: CanvasRenderingContext2D, { s, t, m, layers, sm }: Ove
     if (!br) continue;
     const S = layers.smooth ? sm.kpts(tr.samples, B.fps, th) : null;
     const kpts = lerpKpts(S ? S[tr.samples.indexOf(br.a)] : br.a.kpts, S ? S[tr.samples.indexOf(br.b)] : br.b.kpts, br.f);
-    const p = s.personOfFace(tr.face), col = p ? s.colourOf(p) : '#ffffff';
+    const p = s.personOfFace(tr.face), col = st.colour ?? (p ? s.colourOf(p) : '#ffffff');
     g.strokeStyle = col; g.fillStyle = col; g.setLineDash([]);
     for (const [a, b] of B.skeleton) {
       const ka = kpts[a], kb = kpts[b];
       if (!ka || !kb || ka[2] < th || kb[2] < th || faceIdx.has(a) || faceIdx.has(b)) continue;
-      g.lineWidth = handIdx.has(a) || handIdx.has(b) ? 1 : 2.5;
+      g.lineWidth = (handIdx.has(a) || handIdx.has(b) ? 1 : 2.5) * st.width;
       g.beginPath(); g.moveTo(X(m, ka[0]), Y(m, ka[1])); g.lineTo(X(m, kb[0]), Y(m, kb[1])); g.stroke();
     }
     kpts.forEach((k, i) => { if (k[2] >= th && !faceIdx.has(i)) g.fillRect(X(m, k[0]) - 1.5, Y(m, k[1]) - 1.5, 3, 3); });
     const facing = (br.f < 0.5 ? br.a : br.b).facing;
-    if (facing) drawFacing(g, m, B.keypoint_names, kpts, facing[0], th, col);
+    if (facing) drawFacing(g, m, B.keypoint_names, kpts, facing[0], th, col, st.width);
   }
 }
 
 // Torso facing from 3D pose (yaw + = subject's right = image left, py-feat's convention): an arrow from the
 // mid-shoulder point, its length the sideways component, so a body square to the camera shows a short stub.
-function drawFacing(g: CanvasRenderingContext2D, m: Mapping, names: string[], kpts: Kpt[], yaw: number, th: number, col: string) {
+function drawFacing(g: CanvasRenderingContext2D, m: Mapping, names: string[], kpts: Kpt[], yaw: number, th: number, col: string, width = 1) {
   const ls = kpts[names.indexOf('left_shoulder')], rs = kpts[names.indexOf('right_shoulder')];
   if (!ls || !rs || ls[2] < th || rs[2] < th) return;
   const mx = (ls[0] + rs[0]) / 2, my = (ls[1] + rs[1]) / 2, span = Math.hypot(ls[0] - rs[0], ls[1] - rs[1]);
   const x2 = mx - Math.sin((yaw * Math.PI) / 180) * span * 1.2;
-  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 3; g.setLineDash([]);
+  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 3 * width; g.setLineDash([]);
   g.beginPath(); g.moveTo(X(m, mx), Y(m, my)); g.lineTo(X(m, x2), Y(m, my)); g.stroke();
   const dir = Math.sign(x2 - mx) || 1;
   g.beginPath(); g.moveTo(X(m, x2) + dir * 8, Y(m, my)); g.lineTo(X(m, x2) - dir * 2, Y(m, my) - 6); g.lineTo(X(m, x2) - dir * 2, Y(m, my) + 6); g.fill();
   g.font = '600 11px system-ui, sans-serif'; g.fillText(`${Math.round(yaw)}°`, X(m, mx) + 6, Y(m, my) - 8);
 }
 
-function drawHands(g: CanvasRenderingContext2D, { s, t, m, layers, sm }: OverlayInput) {
+function drawHands(g: CanvasRenderingContext2D, { s, t, m, layers, sm }: OverlayInput, st: OverlayStyle) {
   const H = s.bundle.layers.hands, shot = s.bundle.shotAt(t);
   if (!H || !shot) return;
   const th = handThreshold(H) ?? 0;
@@ -212,8 +226,8 @@ function drawHands(g: CanvasRenderingContext2D, { s, t, m, layers, sm }: Overlay
     if (!br) continue;
     const S = layers.smooth ? sm.kpts(hd.samples, H.fps, th) : null;
     const kpts = lerpKpts(S ? S[hd.samples.indexOf(br.a)] : br.a.kpts, S ? S[hd.samples.indexOf(br.b)] : br.b.kpts, br.f);
-    const p = s.personOfFace(hd.face), col = p ? s.colourOf(p) : '#ffffff';
-    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.5; g.setLineDash(hd.box_source === 'detector' ? [3, 3] : []);
+    const p = s.personOfFace(hd.face), col = st.colour ?? (p ? s.colourOf(p) : '#ffffff');
+    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.5 * st.width; g.setLineDash(hd.box_source === 'detector' ? [3, 3] : []);
     let drawn = 0;
     for (const [a, b] of H.skeleton) {
       const ka = kpts[a], kb = kpts[b];
@@ -235,30 +249,30 @@ const eyes = (lmk: number[] | null, box: Box): [number, number] => lmk
 
 /** Eyes (or the face box's upper centre) to the Gaze-LLE heatmap peak, fainter when the model thinks the target is
  *  out of frame, with the target it resolved. */
-function drawGazeLLE(g: CanvasRenderingContext2D, { s, t, m }: OverlayInput, f: FaceTrack, box: Box, lmk: number[] | null, col: string) {
+function drawGazeLLE(g: CanvasRenderingContext2D, { s, t, m }: OverlayInput, f: FaceTrack, box: Box, lmk: number[] | null, col: string, st: OverlayStyle) {
   const G = s.bundle.layers.gaze!, samples = s.bundle.gazeOf.get(f.id);
   if (!samples) return;
   const br = bracket(samples, t, G.fps);
   if (!br) return;
   const near = br.f < 0.5 ? br.a : br.b;
-  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 2; g.setLineDash([]);
+  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 2 * st.width; g.setLineDash([]);
   if (near.target === 'out' || !br.a.peak || !br.b.peak) {
     g.font = '600 11px system-ui, sans-serif'; g.fillText('looking out of frame', X(m, box[0]), Y(m, box[1] + box[3]) + 14);
     return;
   }
   const [ex, ey] = eyes(lmk, box), [px, py] = lerpNums(br.a.peak, br.b.peak, br.f);
-  g.globalAlpha = Math.max(0.35, Math.min(1, near.in_frame ?? 1));
+  g.globalAlpha = st.opacity * Math.max(0.35, Math.min(1, near.in_frame ?? 1));
   g.beginPath(); g.moveTo(X(m, ex), Y(m, ey)); g.lineTo(X(m, px), Y(m, py)); g.stroke();
   g.beginPath(); g.arc(X(m, px), Y(m, py), 6, 0, 2 * Math.PI); g.stroke();
-  g.globalAlpha = 1;
+  g.globalAlpha = st.opacity;
   if (near.target) { g.font = '600 11px system-ui, sans-serif'; g.fillText(`→ ${s.lookName(near.target)}`, X(m, px) + 8, Y(m, py) - 6); }
 }
 
 /** py-feat's 2D gaze angles as a ray from the eyes. */
-function drawGazeRay(g: CanvasRenderingContext2D, { m }: OverlayInput, box: Box, d: { lmk: number[]; gaze: number[] }, col: string) {
+function drawGazeRay(g: CanvasRenderingContext2D, { m }: OverlayInput, box: Box, d: { lmk: number[]; gaze: number[] }, col: string, st: OverlayStyle) {
   const [yaw, pitch] = d.gaze, [ex, ey] = eyes(d.lmk, box), len = box[2] * 1.6;
   const x2 = ex - Math.sin(yaw) * Math.cos(pitch) * len, y2 = ey - Math.sin(pitch) * len;
-  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 2; g.setLineDash([]);
+  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 2 * st.width; g.setLineDash([]);
   g.beginPath(); g.moveTo(X(m, ex), Y(m, ey)); g.lineTo(X(m, x2), Y(m, y2)); g.stroke();
   const a = Math.atan2(Y(m, y2) - Y(m, ey), X(m, x2) - X(m, ex));
   g.beginPath(); g.moveTo(X(m, x2), Y(m, y2));

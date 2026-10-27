@@ -2,7 +2,6 @@
   import { useSession } from '../../model/context';
   import { fmt } from '../../geometry';
   import type { ObjectTrack } from '../../types';
-  import Toggle from '../ui/Toggle.svelte';
   import ObjectHeading from './ObjectHeading.svelte';
   import { lookedAtBy } from './lookedAt';
 
@@ -32,9 +31,4 @@
   </select>
 </div>
 <div class="meta">Changes this appearance only. <button class="link" onclick={() => s.select('objid', i, { seek: false })}>Edit every {s.objName(i)} instead</button></div>
-<h3>Send to agents</h3>
-<div class="list">
-  <Toggle label="Include this appearance" checked={s.includedObject(o)} onchange={(v) => s.commit({ op: 'entity.include', id: o.id, included: v })} />
-  <Toggle label={`Include ${s.objName(i)} everywhere`} checked={s.includedIdentity(i)} onchange={(v) => s.commit({ op: 'entity.include', id: i, included: v })} />
-</div>
 {#if looked}<h3>Looked at by (estimated)</h3><div class="meta">{looked}</div>{/if}

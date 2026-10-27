@@ -16,8 +16,8 @@ async function needsData(page: Page) {
   const res = await page.request.get('/devdata/runs/ooo-genz-clip1/bundle/manifest.json');
   test.skip(!res.ok(), 'the bake-off data is not served at /devdata');
 }
-/** The viewer, loaded: its shot, under the video. */
-const loaded = (page: Page) => expect(page.getByRole('heading', { level: 2, name: /^Shot 1 of / })).toBeVisible();
+/** The viewer, loaded: Inspect waiting for a selection, beside the video. */
+const loaded = (page: Page) => expect(page.getByText('Select a face on the video, or anything on the timeline, to edit it here.')).toBeVisible();
 const panel = (page: Page) => page.getByRole('navigation', { name: 'Panel' });
 
 test('the page is the annotator: it opens the newest bundle, not a list to get through first', async ({ page }) => {
@@ -72,7 +72,7 @@ test('a bundle without its video asks for it, then opens', async ({ page }) => {
   await expect(page.getByText('ooo-genz-clip2 needs its video.')).toBeVisible();
   await page.getByRole('button', { name: 'Locate video…' }).click();
   await expect(page.getByText('ooo-genz-clip2 needs its video.')).toHaveCount(0);
-  await expect(page.getByRole('heading', { level: 2, name: /^Shot 1 of / })).toBeVisible();   // the viewer, loaded
+  await loaded(page);
   await expect(await video(page, 'ooo-genz-clip2')).not.toContainText('No video');
 });
 
@@ -102,19 +102,48 @@ test('the rail is as wide as its labels, however large the system draws them', a
 
 // --- the viewer: its panel, its timeline's layers, and the export ------------------------------------------------------
 
-test('the Details tab says what the video is, what may be done with it, and its layers', async ({ page }) => {
+test('a timeline group says which models made it, each linked to its page, and what its licence allows', async ({ page }) => {
   await needsData(page);
   await page.goto('/?library-demo');
   await loaded(page);
-  await panel(page).getByRole('button', { name: 'Details' }).click();
-  await expect(panel(page).getByRole('button', { name: 'Details' })).toHaveAttribute('aria-pressed', 'true');
-  const manifest = await (await page.request.get('/devdata/runs/ooo-genz-clip1/bundle/manifest.json')).json();
-  await expect(page.getByRole('heading', { level: 2, name: manifest.video.filename ?? 'This video' })).toBeVisible();
-  await expect(page.locator('p.licence')).toHaveText('Academic use only');          // the strictest of its layers
-  await expect(page.getByRole('heading', { name: 'Layers' })).toBeVisible();
-  for (const name of Object.keys(manifest.layers))
-    await expect(page.locator('.layers').getByText(name.charAt(0).toUpperCase() + name.slice(1), { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Import edits from a file…' })).toBeVisible();
+  const info = page.getByRole('button', { name: 'The models behind Audio & speech', exact: true });
+  await page.locator('[data-group-header="audio"] .lane-label').hover();
+  await info.click();
+  const models = page.getByRole('dialog', { name: 'The models behind Audio & speech' });
+  await expect(models.getByRole('button', { name: 'nvidia/parakeet-tdt-0.6b-v3' })).toBeVisible();   // a link: its page is known
+  await expect(models.getByText('mlx-community conversion')).toBeVisible();                         // the rest of its id, as a note
+  await expect(models.getByText('Commercial use allowed').first()).toBeVisible();
+  // drawn above the timeline's labels, not under them
+  const box = (await models.boundingBox())!;
+  const top = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('[role=dialog]'), [box.x + 8, box.y + box.height / 2]);
+  expect(top).toBe(true);
+});
+
+test('Inspect edits the one thing selected; Back returns to what was selected before', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  await expect(page.getByText(/agents/i)).toHaveCount(0);
+  await page.locator('.bar.caption').nth(10).click();   // a shot's caption, on the timeline
+  await expect(page.getByRole('textbox', { name: 'Shot caption' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'People in this shot' })).toHaveCount(0);   // the timeline shows them
+  const shot = await page.getByRole('heading', { level: 2, name: /^Shot \d+ of / }).textContent();
+  await page.locator('.bar.speech, .bar.vis').first().click();   // something else on the timeline
+  await expect(page.getByRole('heading', { level: 2, name: /^Shot \d+ of / })).toHaveCount(0);
+  await page.getByRole('button', { name: '← Back' }).click();
+  await expect(page.getByRole('heading', { level: 2, name: shot! })).toBeVisible();
+});
+
+test('People opens a person in place, and All people goes back to the list', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  await panel(page).getByRole('button', { name: 'People' }).click();
+  await page.locator('.drawer-panel .item').first().click();
+  await expect(panel(page).getByRole('button', { name: 'People' })).toHaveAttribute('aria-pressed', 'true');   // still People
+  await expect(page.getByRole('heading', { name: 'Appearances' })).toBeVisible();
+  await page.getByRole('button', { name: '← All people' }).click();
+  await expect(page.getByText('Who face clustering found.', { exact: false })).toBeVisible();
 });
 
 test('the keyboard keys show only when asked for, by ? or its button', async ({ page }) => {
@@ -162,17 +191,71 @@ test('Export saves the annotated result, with the edits, as <title>.annotated.js
   expect(Array.isArray(saved.edits)).toBe(true);
 });
 
-test('an on/off switch in the panel looks on when on and off when off (the switcher\'s style is its own)', async ({ page }) => {
-  await page.goto('/?library-demo');
+
+test('an overlay is a row you click to turn on, lit when on, and its style (colour, opacity, width) is kept', async ({ page }) => {
   await needsData(page);
+  await page.goto('/?library-demo');
   await loaded(page);
-  const toggle = page.locator('.toggle', { hasText: 'Send this caption to agents' });
-  const track = toggle.locator('.switch');
-  const colour = () => track.evaluate((el) => getComputedStyle(el).backgroundColor);
-  const before = await colour();
-  const was = await toggle.locator('input').isChecked();
-  await toggle.click();
-  await expect(toggle.locator('input')).toBeChecked({ checked: !was });
-  await expect.poll(colour).not.toBe(before);   // after its 0.15 s transition
-  expect(before).not.toBe('rgba(0, 0, 0, 0)');   // drawn either way, not see-through
+  await page.getByRole('button', { name: 'What the video shows' }).click();
+  const menu = page.getByRole('dialog', { name: 'What the video shows' });
+  await expect(menu.getByRole('checkbox')).toHaveCount(0);   // rows, not checkboxes
+  const faces = menu.getByRole('button', { name: 'Faces', exact: true });
+  const was = await faces.getAttribute('aria-pressed');
+  await faces.click();
+  await expect(faces).toHaveAttribute('aria-pressed', was === 'true' ? 'false' : 'true');
+  await faces.click();   // back as it was
+  await expect(faces).toHaveAttribute('aria-pressed', was ?? 'false');
+  if (was !== 'true') await faces.click();   // on, to style it
+  await expect(faces).toHaveAttribute('aria-pressed', 'true');
+  await menu.getByRole('button', { name: 'How faces are drawn' }).click();
+  await menu.getByLabel('Faces: opacity').fill('0.5');
+  await expect(menu.getByText('50%')).toBeVisible();
+  await menu.getByLabel('Faces: one colour').evaluate((el: HTMLInputElement) => { el.value = '#ff00ff'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await expect(menu.getByRole('button', { name: 'By person' })).toHaveAttribute('aria-pressed', 'false');
+  await page.reload();   // kept for this video, in this browser
+  await loaded(page);
+  await page.getByRole('button', { name: 'What the video shows' }).click();
+  await menu.getByRole('button', { name: 'How faces are drawn' }).click();
+  await expect(menu.getByText('50%')).toBeVisible();
+  await menu.getByRole('button', { name: 'Reset' }).click();
+  await expect(menu.getByText('100%')).toBeVisible();
+  await expect(menu.getByRole('button', { name: 'By person' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('a pop-up near the foot of the window opens upward, inside the window', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  // the lowest group name still on screen, with a list of models
+  const key = await page.evaluate(() => {
+    const heads = [...document.querySelectorAll<HTMLElement>('[data-group-header]')]
+      .filter((h) => h.querySelector('button[aria-label^="The models behind"]') && h.getBoundingClientRect().bottom < window.innerHeight - 4);
+    return heads.at(-1)?.dataset.groupHeader ?? null;
+  });
+  expect(key).not.toBeNull();
+  const head = page.locator(`[data-group-header="${key}"] .lane-label`);
+  await head.hover();
+  await head.getByRole('button', { name: /^The models behind/ }).click();
+  const panel = page.getByRole('dialog', { name: /^The models behind/ });
+  const box = (await panel.boundingBox())!, vh = page.viewportSize()!.height;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(vh);
+});
+
+test('Tab past either end of a pop-up closes it and returns to its button', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  const button = page.getByRole('button', { name: 'Layers shown in the timeline' });
+  const panel = page.getByRole('dialog', { name: 'Layers shown in the timeline' });
+  await button.click();
+  await expect(panel.getByRole('checkbox').first()).toBeFocused();   // it takes the keyboard
+  await page.keyboard.press('Shift+Tab');
+  await expect(panel).toHaveCount(0);
+  await expect(button).toBeFocused();
+  await button.click();
+  const n = await panel.getByRole('checkbox').count();
+  for (let i = 0; i < n; i++) await page.keyboard.press('Tab');
+  await expect(panel).toHaveCount(0);
+  await expect(button).toBeFocused();
 });

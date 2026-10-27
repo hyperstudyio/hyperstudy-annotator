@@ -72,6 +72,7 @@
       // File > Import… and Export…: the Annotator page does them (Annotator, Header), on its own page
       listen('menu://import', () => { page = 'annotator'; window.dispatchEvent(new Event('app:import')); });
       listen('menu://export', () => { if (page === 'annotator') window.dispatchEvent(new Event('app:export')); });
+      listen('menu://import-edits', () => { if (page === 'annotator') window.dispatchEvent(new Event('app:import-edits')); });
     });
   } else if (q.has('update-demo')) {
     import('./lib/updates.fake').then((m) => startUpdates(new Updates(m.fakeUpdater((q.get('update-demo') || 'available') as Parameters<typeof m.fakeUpdater>[0]))));

@@ -3,7 +3,6 @@
   import { fmt, nearest } from '../../geometry';
   import { plural } from '../../model/session.svelte';
   import type { FaceTrack } from '../../types';
-  import Toggle from '../ui/Toggle.svelte';
   import Crop from '../ui/Crop.svelte';
   import Swatch from '../ui/Swatch.svelte';
   import PersonSelect from '../ui/PersonSelect.svelte';
@@ -50,11 +49,6 @@
 <div class="row">This face is <PersonSelect current={p} onpick={assign} label="This face is" /></div>
 {#if creating}<NewPerson oncreate={create} />{/if}
 <div class="meta">Changes this track only. {#if !s.special(p)}<button class="link" onclick={() => s.select('person', p, { seek: false })}>Edit {s.nameOf(p)} instead</button>{/if}</div>
-<h3>Send to agents</h3>
-<div class="list">
-  <Toggle label="Include this track" checked={s.includedFace(track)} onchange={(v) => s.commit({ op: 'entity.include', id: track.id, included: v })} />
-  {#if !s.special(p)}<Toggle label={`Include ${s.nameOf(p)} everywhere`} checked={s.includedPerson(p)} onchange={(v) => s.commit({ op: 'entity.include', id: p, included: v })} />{/if}
-</div>
 {#if s.bundle.layers.bodies}
   <h3>Body · {model}</h3>
   {#if bodies.length}

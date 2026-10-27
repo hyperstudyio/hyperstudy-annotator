@@ -2,7 +2,6 @@
   import { useSession } from '../../model/context';
   import { fmt } from '../../geometry';
   import type { Speaker, Utterance } from '../../types';
-  import Toggle from '../ui/Toggle.svelte';
   import Crop from '../ui/Crop.svelte';
   import Swatch from '../ui/Swatch.svelte';
   import Prosody from './Prosody.svelte';
@@ -69,5 +68,4 @@
   <div class="row"><span class="meta">Set by you: {s.speakerName(sp)}</span><button onclick={() => s.commit({ op: 'utterance.speaker', utt: u.id, speaker: null })}>Back to prediction</button></div>
 {/if}
 <label class="row"><input type="checkbox" bind:checked={s.autoAdvance} /> After choosing, go to the next uncertain utterance</label>
-<div class="row"><Toggle label="Send this utterance to agents" checked={s.includedId(u.id)} onchange={(v) => s.commit({ op: 'entity.include', id: u.id, included: v })} /></div>
 <Prosody {u} />

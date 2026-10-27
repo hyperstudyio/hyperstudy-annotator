@@ -1,21 +1,22 @@
 <script lang="ts">
-  // The right-hand drawer: tabs (Inspect, Review, People, Annotate, Details), the keys for what is selected when asked
+  // The right-hand drawer: tabs (Inspect, Review, People, Annotate), the keys for what is selected when asked
   // for (? or its button), and the handle that resizes it. Collapsed (\), the video and timeline take the width.
+  import { untrack } from 'svelte';
   import { useSession } from '../model/context';
   import type { Tab } from '../model/view.svelte';
   import Inspector from './inspect/Inspector.svelte';
   import ReviewTab from './tabs/ReviewTab.svelte';
   import PeopleTab from './tabs/PeopleTab.svelte';
   import AnnotateTab from './tabs/AnnotateTab.svelte';
-  import DetailsTab from './tabs/DetailsTab.svelte';
 
   let { onresize, onresizeend, onresetwidth }: { onresize: (dx: number, start: number) => void; onresizeend: () => void; onresetwidth: () => void } = $props();
   const s = useSession();
+  $effect(() => { const now = s.selection; untrack(() => s.noteSelection(now)); });   // Back's history, whichever tab is shown
   const closed = $derived(s.view.s.drawerClosed);
   let panel = $state<HTMLDivElement>();
   let aside = $state<HTMLElement>();
   let resizing = $state(false);
-  const TABS: [Tab, string][] = [['inspect', 'Inspect'], ['review', 'Review'], ['people', 'People'], ['notes', 'Annotate'], ['data', 'Details']];
+  const TABS: [Tab, string][] = [['inspect', 'Inspect'], ['review', 'Review'], ['people', 'People'], ['notes', 'Annotate']];
 
   function startResize(e: PointerEvent) {
     e.preventDefault();
@@ -53,7 +54,6 @@
       {#if s.tab === 'review'}<ReviewTab />
       {:else if s.tab === 'people'}<PeopleTab />
       {:else if s.tab === 'notes'}<AnnotateTab />
-      {:else if s.tab === 'data'}<DetailsTab />
       {:else}<Inspector />{/if}
     </div>
     {#if s.help}<div class="help">
@@ -61,7 +61,7 @@
         <kbd>1</kbd>–<kbd>9</kbd> face <kbd>o</kbd> voice <kbd>m</kbd> several <kbd>u</kbd> unsure <kbd>x</kbd> not speech <kbd>j</kbd>/<kbd>k</kbd> next/prev
       {:else}
         <kbd>space</kbd> play <kbd>⇧space</kbd> clip <kbd>l</kbd> loop <kbd>←</kbd><kbd>→</kbd> segment <kbd>⇧←→</kbd> 1 s <kbd>,</kbd><kbd>.</kbd> shot
-        <kbd>e</kbd> include <kbd>[</kbd><kbd>]</kbd> annotate <kbd>j</kbd> review <kbd>\</kbd> panel
+        <kbd>[</kbd><kbd>]</kbd> annotate <kbd>j</kbd> review <kbd>\</kbd> panel
       {/if}
       <kbd>⌘Z</kbd> undo <kbd>?</kbd> hide these
     </div>{/if}

@@ -42,6 +42,12 @@ dialogs by hand, is still open).
   key; gated models' access and the Hugging Face key, shown only when a step uses one), Machines (this computer,
   remote servers, cloud GPU providers you add: RunPod with its API key, AWS with the credentials on the computer), App.
   A key appears where it is used, not in a list of keys. Where a step runs is chosen on its own row on Extract.
+- **The annotator's panel (2026-10-26, Luke).** Inspect edits the one thing selected (who a face is, who speaks and what
+  was said, a caption, a name, a value) and is empty until something is; Back returns to the previous selection. What
+  the timeline already shows (who is in a shot, on-screen text) is not repeated there, and captions are a timeline row.
+  Send to agents is not the annotator's to decide: HyperStudy decides it. The models behind each timeline group are its
+  ⓘ (linked, with their licence), so there is no Details tab. Overlays are rows you click, each styled by person or in
+  one colour, with opacity and width, kept per viewer.
 
 ## What exists
 

@@ -2,7 +2,6 @@
   import { useSession } from '../../model/context';
   import { fmt } from '../../geometry';
   import { plural } from '../../model/session.svelte';
-  import Toggle from '../ui/Toggle.svelte';
   import Swatch from '../ui/Swatch.svelte';
   import ObjectHeading from './ObjectHeading.svelte';
   import { lookedAtBy } from './lookedAt';
@@ -31,9 +30,6 @@
     {#each s.objectIdentities.filter((x) => x !== i) as x (x)}<option value={x}>{s.objName(x)}</option>{/each}
   </select>
 </div>
-<h3>Send to agents</h3>
-<Toggle label={`Include ${s.objName(i)}`} checked={s.includedIdentity(i)} onchange={(v) => s.commit({ op: 'entity.include', id: i, included: v })} />
-<div class="meta">Switch off for things that are irrelevant to the study.</div>
 {#if looked}<h3>Looked at by (estimated)</h3><div class="meta">{looked}</div>{/if}
 <h3>Appearances</h3>
 <div class="list">
