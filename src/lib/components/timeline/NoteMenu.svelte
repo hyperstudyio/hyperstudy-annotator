@@ -16,7 +16,13 @@
   const WIDTH = 300;
   let panel = $state<HTMLElement>();
   let at = $state<Placement | null>(null);
-  const close = () => { if (s.noteMenu === id) s.noteMenu = null; };
+  // a field being typed in saves on `change`, which comes with its blur: blurred here, before the menu leaves the page,
+  // as an engine need not blur a focused field it removes (WebKit, the app's, has not), and the typing would be lost
+  const close = () => {
+    const typing = document.activeElement as HTMLElement | null;
+    if (typing && panel?.contains(typing)) typing.blur();
+    if (s.noteMenu === id) s.noteMenu = null;
+  };
   const bar = () => document.querySelector<HTMLElement>(`.bar[data-key="${CSS.escape(id)}"]`);
   function place() {
     const el = bar();

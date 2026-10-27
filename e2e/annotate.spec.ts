@@ -331,3 +331,27 @@ test('a second drag of an annotation whose first drop is still saving starts fro
     return Number(m[1]) * 60 + Number(m[2]);
   }).toBeCloseTo(180 / pps, 0);
 });
+
+test('a value typed into the menu is kept when the menu is closed by Escape or a click elsewhere', async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Notes');
+  await form.getByLabel('Value kind').selectOption('text');
+  await form.getByLabel('About').selectOption('scene');
+  await form.getByRole('button', { name: 'Add type' }).click();
+  await page.keyboard.press('a');
+  const bar = typeRow(page, 'Notes').locator('.bar');
+  const menu = page.getByRole('dialog', { name: 'Notes annotation' });
+  await bar.dblclick();
+  await menu.getByLabel('Value').fill('laughs at the joke');
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(bar).toHaveText('laughs at the joke');
+  await bar.dblclick();
+  await menu.getByLabel('Value').fill('looks away');
+  await page.mouse.click(5, 300);   // somewhere else
+  await expect(menu).toHaveCount(0);
+  await expect(bar).toHaveText('looks away');
+});
