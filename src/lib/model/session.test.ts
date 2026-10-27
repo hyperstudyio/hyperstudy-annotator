@@ -5,7 +5,8 @@ import { NOT_PERSON, RunUnknownError, UNKNOWN } from './corrections';
 import { MemoryStorage, SHA, face, makeBundle } from './fixture.test-helpers';
 import { Session, coVisible, stampAfter } from './session.svelte';
 import { View } from './view.svelte';
-import { LocalCorrectionStore } from '../source';
+import { LocalCorrectionStore, localTypesElsewhere } from '../source';
+import type { AnnotationType } from './corrections';
 
 function session(bundle = makeBundle(), storage = new MemoryStorage()) {
   const s = new Session(bundle, new LocalCorrectionStore(bundle.sha256, storage), new View(bundle.sha256, storage));
@@ -301,4 +302,78 @@ test('Back never returns to what is already selected', () => {
   expect(s.history.map((x) => x.id)).toEqual(['shot:0']);
   s.back(); note();
   expect(s.selection).toEqual({ kind: 'shot', id: 'shot:0' });
+});
+
+describe('annotation types', () => {
+  const mood: AnnotationType = { id: 'type:mood', name: 'Mood', kind: 'category', target: 'scene', options: ['calm', 'tense'] };
+  const gaze: AnnotationType = { id: 'type:gaze', name: 'Gaze aversion', kind: 'binary', target: 'person', options: [] };
+
+  test('A annotates the selection, else the shot under the playhead, with the type last used', async () => {
+    const { s } = session();
+    expect(await s.annotateHere()).toBe(false);   // no type yet
+    await s.addType(mood);
+    await s.addType(gaze);
+    expect(s.currentType()?.id).toBe('type:gaze');
+    const u = s.bundle.utterances[0];
+    s.select('utt', u.id, { seek: false });
+    await s.annotateHere();
+    const first = [...s.S.notes.values()][0];
+    expect(first).toMatchObject({ type: 'type:gaze', start: u.start, end: u.end });
+    s.activeType = 'type:mood';
+    s.selection = null;
+    const shot = s.bundle.shotAt(s.playback.time)!;
+    await s.annotateHere();
+    expect([...s.S.notes.values()][1]).toMatchObject({ type: 'type:mood', start: shot.start, end: shot.end });
+  });
+
+  test("keys give the selected annotation its value: y or n a yes/no, 1-9 a category in its order", async () => {
+    const { s } = session();
+    await s.copyTypes([mood, gaze]);
+    await s.addNote('type:mood', 0, 1);
+    expect(s.valueFromKey('2')).toBe('tense');
+    expect(s.valueFromKey('3')).toBeUndefined();
+    expect(s.valueFromKey('y')).toBeUndefined();
+    await s.addNote('type:gaze', 0, 1);
+    expect(s.valueFromKey('y')).toBe(true);
+    expect(s.valueFromKey('N')).toBe(false);   // Shift or Caps Lock
+    expect(s.valueFromKey('1')).toBeUndefined();
+  });
+
+  test("another video's types are copied as they are, skipping those this one has, in one undo", async () => {
+    const { s } = session();
+    await s.addType(mood);
+    expect(await s.copyTypes([mood, gaze])).toBe(1);
+    expect(s.S.types.map((t) => t.id)).toEqual(['type:mood', 'type:gaze']);
+    await s.undo();
+    expect(s.S.types.map((t) => t.id)).toEqual(['type:mood']);
+  });
+
+  test('a type knows the annotations that use it', async () => {
+    const { s } = session();
+    await s.copyTypes([mood, gaze]);
+    await s.addNote('type:mood', 0, 1);
+    expect(s.usesOf('type:mood')).toHaveLength(1);
+    expect(s.usesOf('type:gaze')).toHaveLength(0);
+  });
+
+  test("in a browser, other videos are the other logs it keeps, by log, named by their titles; this video's other runs are not", async () => {
+    const storage = new MemoryStorage(), A = 'a'.repeat(64);
+    const own = new LocalCorrectionStore(A, storage, 'run2'), ownFirst = new LocalCorrectionStore(A, storage);
+    const b = new LocalCorrectionStore('b'.repeat(64), storage), c = new LocalCorrectionStore('c'.repeat(64), storage);
+    for (const st of [own, ownFirst]) await st.append([{ op: 'annotation.type', type: gaze }]);
+    for (const st of [b, c]) { await st.append([{ op: 'annotation.type', type: mood }]); storage.setItem(st.key.replace(':corrections:', ':title:'), 'clip'); }
+    expect(localTypesElsewhere(A, storage)).toEqual([{ key: b.key, title: 'clip', types: [mood] }, { key: c.key, title: 'clip', types: [mood] }]);
+  });
+
+  test("a cleared number range stays cleared when the log is read back", async () => {
+    const storage = new MemoryStorage();
+    const { s } = session(makeBundle(), storage);
+    const n: AnnotationType = { id: 'type:n', name: 'Intensity', kind: 'number', target: 'scene', options: [], min: 0, max: 10 };
+    await s.addType(n);
+    await s.commit({ op: 'annotation.type_edit', id: 'type:n', fields: { min: null } });
+    const again = session(makeBundle(), storage).s;
+    await again.load();
+    expect(again.typeOf('type:n')).toEqual({ ...n, min: undefined });
+    expect('min' in again.typeOf('type:n')!).toBe(false);
+  });
 });

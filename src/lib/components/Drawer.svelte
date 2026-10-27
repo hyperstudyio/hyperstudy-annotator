@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The right-hand drawer: tabs (Inspect, Review, People, Annotate), the keys for what is selected when asked
+  // The right-hand drawer: tabs (Inspect, Review, People), the keys for what is selected when asked
   // for (? or its button), and the handle that resizes it. Collapsed (\), the video and timeline take the width.
   import { untrack } from 'svelte';
   import { useSession } from '../model/context';
@@ -7,16 +7,17 @@
   import Inspector from './inspect/Inspector.svelte';
   import ReviewTab from './tabs/ReviewTab.svelte';
   import PeopleTab from './tabs/PeopleTab.svelte';
-  import AnnotateTab from './tabs/AnnotateTab.svelte';
 
   let { onresize, onresizeend, onresetwidth }: { onresize: (dx: number, start: number) => void; onresizeend: () => void; onresetwidth: () => void } = $props();
   const s = useSession();
   $effect(() => { const now = s.selection; untrack(() => s.noteSelection(now)); });   // Back's history, whichever tab is shown
   const closed = $derived(s.view.s.drawerClosed);
+  // the selected annotation's kind of value, for its keys
+  const kind = $derived.by(() => { const n = s.selection?.kind === 'note' ? s.S.notes.get(s.selection.id) : undefined; return n && s.typeOf(n.type)?.kind; });
   let panel = $state<HTMLDivElement>();
   let aside = $state<HTMLElement>();
   let resizing = $state(false);
-  const TABS: [Tab, string][] = [['inspect', 'Inspect'], ['review', 'Review'], ['people', 'People'], ['notes', 'Annotate']];
+  const TABS: [Tab, string][] = [['inspect', 'Inspect'], ['review', 'Review'], ['people', 'People']];
 
   function startResize(e: PointerEvent) {
     e.preventDefault();
@@ -53,15 +54,16 @@
     <div class="drawer-panel" bind:this={panel}>
       {#if s.tab === 'review'}<ReviewTab />
       {:else if s.tab === 'people'}<PeopleTab />
-      {:else if s.tab === 'notes'}<AnnotateTab />
       {:else}<Inspector />{/if}
     </div>
     {#if s.help}<div class="help">
       {#if s.selection?.kind === 'utt'}
         <kbd>1</kbd>–<kbd>9</kbd> face <kbd>o</kbd> voice <kbd>m</kbd> several <kbd>u</kbd> unsure <kbd>x</kbd> not speech <kbd>j</kbd>/<kbd>k</kbd> next/prev
+      {:else if kind === 'binary' || kind === 'category'}
+        {#if kind === 'binary'}<kbd>y</kbd> yes <kbd>n</kbd> no{:else}<kbd>1</kbd>–<kbd>9</kbd> value{/if} <kbd>a</kbd> annotate <kbd>space</kbd> play <kbd>←</kbd><kbd>→</kbd> segment
       {:else}
         <kbd>space</kbd> play <kbd>⇧space</kbd> clip <kbd>l</kbd> loop <kbd>←</kbd><kbd>→</kbd> segment <kbd>⇧←→</kbd> 1 s <kbd>,</kbd><kbd>.</kbd> shot
-        <kbd>[</kbd><kbd>]</kbd> annotate <kbd>j</kbd> review <kbd>\</kbd> panel
+        <kbd>a</kbd> annotate selection <kbd>[</kbd><kbd>]</kbd> mark a span <kbd>j</kbd> review <kbd>\</kbd> panel
       {/if}
       <kbd>⌘Z</kbd> undo <kbd>?</kbd> hide these
     </div>{/if}

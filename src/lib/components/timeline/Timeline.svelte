@@ -14,6 +14,7 @@
   import { plural, NEUTRAL } from '../../model/session.svelte';
   import Popover from '../ui/Popover.svelte';
   import ModelInfo from './ModelInfo.svelte';
+  import TypeForm from './TypeForm.svelte';
   import RowLabel from './RowLabel.svelte';
   import PlotCanvas from './PlotCanvas.svelte';
 
@@ -308,6 +309,16 @@
             <span class="text">{group.label}</span>
             <span class="count">{group.count}</span>
             <ModelInfo group={group.key} title={group.label} />
+            {#if group.key === 'annotations'}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <span class="add-type" onclick={(e) => e.stopPropagation()}>
+                <Popover label="New annotation type" width={300} chevron={false} buttonClass="plain" title="Add an annotation type: a row of its own">
+                  {#snippet button()}<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.6" /></svg>{/snippet}
+                  {#snippet children(close)}<TypeForm {close} />{/snippet}
+                </Popover>
+              </span>
+            {/if}
             {#if hiddenHere.length}<button class="link restore" title="Show hidden rows" onclick={(e) => { e.stopPropagation(); s.view.showRows(hiddenHere); }}>+{hiddenHere.length} hidden</button>{/if}
           </div>
           <div class="lane-body" style="width:{duration * pps}px; height:{collapsed ? 24 : 22}px">
@@ -405,4 +416,6 @@
   .reorder-line { position: absolute; left: 0; right: 0; height: 2px; background: var(--color-primary); z-index: 7; pointer-events: none; }
   .ghost { position: fixed; z-index: 30; pointer-events: none; padding: 2px 8px; border-radius: 4px; color: #111; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,.5);
            max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .add-type { margin-left: auto; }
+  .add-type :global(.trigger) { padding: 3px 5px; }
 </style>

@@ -30,7 +30,7 @@ export type Label =
   | { kind: 'person'; person: string }
   | { kind: 'voice'; voice: string | null }
   | { kind: 'object'; identity: string }
-  | { kind: 'type'; type: string; text: string; title: string }
+  | { kind: 'type'; type: string; text: string }
   | { kind: 'affect'; model: string; title: string };
 
 export type Plot = { kind: 'waveform' } | { kind: 'pitch' } | { kind: 'affect'; points: AffectPoint[]; ranges: Record<AffectDim, [number, number]> };
@@ -245,14 +245,14 @@ export function buildGroups(s: Session): Group[] {
   const notes = [...S.notes.values()];
   const typeRows: Row[] = S.types.map((type) => {
     const mine = notes.filter((n) => n.type === type.id).sort((a, c) => a.start - c.start), r = stack(mine);
-    return { id: `type:${type.id}`, create: type.id, hint: 'drag across this row to add a span',
-      label: { kind: 'type', type: type.id, text: type.name, title: `${type.kind} · ${type.target === 'person' ? 'about a person' : 'about the scene'}` },
+    return { id: `type:${type.id}`, create: type.id, hint: 'drag across this row, or press A, to annotate',
+      label: { kind: 'type', type: type.id, text: type.name },
       bars: mine.map((n, k): Bar => ({ key: n.id, start: n.start, end: n.end, row: r[k], sel: { kind: 'note', id: n.id },
-        text: s.noteValue(n) + (n.person ? ` · ${s.nameOf(s.root(n.person))}` : ''), colour: n.person ? s.colourOf(s.root(n.person)) : '#ce93d8',
+        text: [s.hasValue(n) ? s.noteValue(n) : '', n.person ? s.nameOf(s.root(n.person)) : ''].filter(Boolean).join(' · '), colour: n.person ? s.colourOf(s.root(n.person)) : '#ce93d8',
         flags: flags(!s.hasValue(n) && 'unconfirmed', s.isSel('note', n.id) && 'selected'), title: `${type.name}: ${s.noteValue(n)}` })) };
   });
   groups.push({ key: 'annotations', label: 'Annotations', count: `${notes.length}`,
-    rows: typeRows.length ? typeRows : [{ id: 'no-types', label: { kind: 'text', text: 'No types yet' }, bars: [], hint: 'add an annotation type in the Annotate tab', hideable: false }],
+    rows: typeRows.length ? typeRows : [{ id: 'no-types', label: { kind: 'text', text: 'No types yet' }, bars: [], hint: '+ beside Annotations adds a type: what you code, as a row of its own', hideable: false }],
     summary: notes.map((n) => ({ key: n.id, start: n.start, end: n.end, colour: '#ce93d8', flags: [] })) });
 
   return groups;

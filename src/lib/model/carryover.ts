@@ -161,7 +161,7 @@ export function refsOf(op: Op): string[] {
     case 'entity.include': return [op.id];
     case 'annotation.add': return op.note.person ? [op.note.person] : [];
     case 'annotation.edit': return op.fields.person ? [op.fields.person] : [];
-    default: return [];   // person.create, category.include, annotation.type, annotation.delete: nothing of the bundle's
+    default: return [];   // person.create, category.include, annotation.type(_edit, _delete), annotation.delete: nothing of the bundle's
   }
 }
 
@@ -244,7 +244,8 @@ function translate(op: Op, m: (id: string) => string): Op {
     case 'entity.include': return { ...op, id: m(op.id) };
     case 'annotation.add': return op.note.person ? { ...op, note: { ...op.note, person: m(op.note.person) } } : op;
     case 'annotation.edit': return op.fields.person ? { ...op, fields: { ...op.fields, person: m(op.fields.person) } } : op;
-    case 'person.create': case 'category.include': case 'annotation.type': case 'annotation.delete': return op;
+    case 'person.create': case 'category.include': case 'annotation.type': case 'annotation.type_edit': case 'annotation.type_delete':
+    case 'annotation.delete': return op;
     default:   // from a newer app: it may name ids this version cannot re-anchor
       throw new Mismatch(`this version of the app does not know “${(op as { op: string }).op}” corrections`);
   }
@@ -269,6 +270,8 @@ export function describe(op: Op): string {
     case 'entity.include': return `${label(op.id)} ${op.included ? 'included' : 'excluded'} (${kindOf(op.id)})`;
     case 'category.include': return `${op.kind} “${op.label}” ${op.included ? 'included' : 'excluded'}`;
     case 'annotation.type': return `Annotation type “${op.type.name}”`;
+    case 'annotation.type_edit': return op.fields.name ? `Annotation type renamed “${op.fields.name}”` : 'Annotation type changed';
+    case 'annotation.type_delete': return 'Annotation type deleted';
     case 'annotation.add': return 'Annotation added';
     case 'annotation.edit': return 'Annotation edited';
     case 'annotation.delete': return 'Annotation deleted';

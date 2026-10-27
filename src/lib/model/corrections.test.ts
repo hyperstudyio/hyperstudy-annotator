@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, readCorrectionsFile, unknownRefs, type Op } from './corrections';
+import { FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, readCorrectionsFile, typesIn, unknownRefs, type AnnotationType, type Op } from './corrections';
 
 const SHA = 'a'.repeat(64);
 
@@ -48,6 +48,23 @@ describe('fold', () => {
     ]);
     expect([...S.notes.values()]).toEqual([{ ...note, value: 'calm' }]);
     expect(note.value).toBeNull();   // the fold copies notes; the log is never mutated
+  });
+
+  test('a type stored without options (an early import) still folds, as a type with none', () => {
+    const raw = { op: 'annotation.type', type: { id: 'type:1', name: 'Mood', kind: 'text', target: 'scene' } } as unknown as Op;
+    expect(fold([raw]).types).toEqual([{ id: 'type:1', name: 'Mood', kind: 'text', target: 'scene', options: [] }]);
+  });
+
+  test('a type is edited and deleted by later ops, and the op that made it is left as it was', () => {
+    const type: AnnotationType = { id: 'type:1', name: 'Mood', kind: 'category', target: 'person', options: ['calm', 'tense'] };
+    const ops: Op[] = [
+      { op: 'annotation.type', type },
+      { op: 'annotation.type', type: { ...type, id: 'type:2', name: 'Gaze' } },
+      { op: 'annotation.type_edit', id: 'type:1', fields: { name: 'Mental state', options: ['calm', 'tense', 'bored'] } },
+      { op: 'annotation.type_delete', id: 'type:2' },
+    ];
+    expect(fold(ops).types).toEqual([{ ...type, name: 'Mental state', options: ['calm', 'tense', 'bored'] }]);
+    expect(type).toEqual({ id: 'type:1', name: 'Mood', kind: 'category', target: 'person', options: ['calm', 'tense'] });
   });
 });
 
@@ -104,4 +121,13 @@ test('references to ids the bundle does not define are reported', () => {
     { op: 'track.assign', track: 'face:999', person: 'person:A' },
     { op: 'utterance.speaker', utt: 'utt:1', speaker: { kind: 'face', face: 'face:7' } },
   ], has)).toEqual(['face:999', 'face:7']);
+});
+
+test("other videos' types are listed by video, each once, and videos with none are left out", () => {
+  const mood: AnnotationType = { id: 'type:1', name: 'Mood', kind: 'binary', target: 'scene', options: [] };
+  expect(typesIn([
+    { key: 'b1', title: 'clip1', ops: [{ op: 'annotation.type', type: mood }, { op: 'annotation.type', type: mood }] },
+    { key: 'b2', title: 'clip2', ops: [{ op: 'person.rename', person: 'person:A', name: 'x' }] },
+    { key: 'b3', title: 'clip3', ops: [{ op: 'annotation.type', type: mood }, { op: 'annotation.type_delete', id: 'type:1' }] },
+  ])).toEqual([{ key: 'b1', title: 'clip1', types: [mood] }]);
 });

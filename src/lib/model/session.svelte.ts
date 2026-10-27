@@ -499,11 +499,53 @@ export class Session {
   async addNote(typeId: string, start: number, end: number) {
     const type = this.typeOf(typeId);
     if (!type) return;
-    const note: Note = { id: `note:${Date.now()}`, type: typeId, start, end, value: null, person: type.target === 'person' ? this.defaultPerson() : null };
+    const note: Note = { id: `note:${crypto.randomUUID()}`, type: typeId, start, end, value: null, person: type.target === 'person' ? this.defaultPerson() : null };
     this.marking = null;
     this.activeType = typeId;
     await this.commit({ op: 'annotation.add', note });
     this.select('note', note.id, { seek: false });
+  }
+  /** The type keys and drags annotate with: the one last added, edited or used, else the first. */
+  currentType(): AnnotationType | null { return (this.activeType && this.typeOf(this.activeType)) || this.S.types[0] || null; }
+  /** A type's annotations: while it has any, what they depend on (its kind, what it is about, the categories they
+   *  use) stays as it is, and it cannot be deleted. */
+  usesOf(typeId: string): Note[] { return [...this.S.notes.values()].filter((n) => n.type === typeId); }
+  #showAnnotations() {
+    if (this.view.s.collapsed.includes('annotations')) this.view.toggleCollapsed('annotations');
+    this.view.setGroupShown('annotations', true);
+  }
+  async addType(type: AnnotationType) {
+    this.activeType = type.id;
+    this.#showAnnotations();
+    await this.commit({ op: 'annotation.type', type });
+  }
+  /** Types from another video, added as they are there: the same ids, so both videos' annotations of a type are one
+   *  type when analysed together. Those this video has already are skipped. One commit, so one undo. */
+  async copyTypes(types: AnnotationType[]): Promise<number> {
+    const have = new Set(this.S.types.map((t) => t.id)), add = types.filter((t) => !have.has(t.id));
+    if (!add.length) return 0;
+    this.activeType ??= add[0].id;
+    this.#showAnnotations();
+    await this.commit(...add.map((type): Op => ({ op: 'annotation.type', type })));
+    return add.length;
+  }
+  /** Annotate what is selected (its span), else the shot under the playhead, with the current type. */
+  async annotateHere(): Promise<boolean> {
+    const type = this.currentType(), sel = this.selection;
+    const span = sel && sel.kind !== 'person' && sel.kind !== 'note' && sel.kind !== 'objid' ? this.spanOf(sel) : null;
+    const at = span ?? this.bundle.shotAt(this.playback.time);
+    if (!type || !at) return false;
+    await this.addNote(type.id, at.start, at.end);
+    return true;
+  }
+  /** The selected annotation's value from a key: y or n a yes/no, 1–9 a category in its order. */
+  valueFromKey(key: string): Note['value'] | undefined {
+    const k = key.toLowerCase();
+    const n = this.selection?.kind === 'note' ? this.S.notes.get(this.selection.id) : undefined, type = n && this.typeOf(n.type);
+    if (!type) return undefined;
+    if (type.kind === 'binary') return k === 'y' ? true : k === 'n' ? false : undefined;
+    if (type.kind === 'category' && /^[1-9]$/.test(k)) return type.options[Number(k) - 1];
+    return undefined;
   }
 
   /** Face tracks in the shot at t whose span (with half a sample of slack) covers t. */
