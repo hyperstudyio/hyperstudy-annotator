@@ -46,8 +46,6 @@
   let video = $state<string | null>(null);
   let plan = $state<Plan | null>(null);
   let places = $state<Places>({});   // nodes the user moved to another place they can run here
-  // where the steps run, chosen once for the run: this computer, a remote server (ssh-<name>) or the cloud GPU. Each
-  // step that can run there is placed there; a step's own menu (in its details) can still move it.
   let wanted = $state<Set<string> | null>(null);   // the features on (null: the first plan's defaults)
   let ticked = $state<Ticked>({});   // the ones the user turned on themselves, with what they sent then: all they may send
   let settings = $state<Settings>({});   // settings the user chose: node -> key -> value

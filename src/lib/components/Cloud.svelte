@@ -31,15 +31,19 @@
     try { await f(); return true; } catch (e) { error = String(e); return false; } finally { busy = null; onbusy(null); }
   };
   const start = () => { adding = addable[0] ?? null; draft = ''; error = null; };
-  // RunPod with no key saved or found: the key is saved first, then RunPod checks it
+  // RunPod with no key saved or found: the key is saved first (the CLI reads it from the keychain), then RunPod checks
+  // it. A key RunPod refuses is taken out again: it would otherwise sit in the keychain, sent to every command, with
+  // RunPod not added.
   const needsKey = $derived(adding === 'runpod' && !runpodKey?.stored && !runpodKey?.elsewhere);
   const add = async () => {
     const p = adding!;
     const value = draft;
     draft = '';
     if (await act(`Checking ${NAMES[p]}…`, async () => {
-      if (p === 'runpod' && value.trim()) onkeys(await api.setKey('RUNPOD_API_KEY', value));
-      onchange(await api.cloud(true, p));
+      const saved = p === 'runpod' && !!value.trim();
+      if (saved) onkeys(await api.setKey('RUNPOD_API_KEY', value));
+      try { onchange(await api.cloud(true, p)); }
+      catch (e) { if (saved) onkeys(await api.removeKey('RUNPOD_API_KEY')); throw e; }
     })) adding = null;
   };
   const remove = (p: CloudProviderName) => act(`Removing ${NAMES[p]}…`, async () => {
@@ -57,6 +61,10 @@
     {#if addable.length && !adding}<button onclick={start} disabled={!!busy}>Add provider…</button>{/if}
   </div>
   {#if !added.length && !adding}<p class="muted">None yet. A cloud GPU is started for a step and deleted when it ends, billed by the hour.</p>{/if}
+  {#if runpodKey?.stored && !added.includes('runpod')}
+    <!-- a RunPod key in the keychain with RunPod not added (saved in an earlier version): it can still be replaced or removed -->
+    <ul class="set-rows"><KeyRow {api} k={runpodKey} label="RunPod API key" onchange={onkeys} {onbusy} /></ul>
+  {/if}
 
   {#if added.length}
     <ul class="set-rows">

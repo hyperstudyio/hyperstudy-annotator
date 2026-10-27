@@ -1,8 +1,8 @@
 <script lang="ts">
   // Settings > Models: what the steps' models need from you. Shot captions call a provider's API, with its key. Gated
   // models (their Hugging Face page asks you to accept its terms first) need access granted there and a Hugging Face
-  // key to download them; the key is shown when a step uses one, or when the models cannot be listed (an older
-  // pipeline, a listing that failed), so it can always be set.
+  // key to download them; the key is shown when a step uses one, when the models cannot be listed (an older pipeline,
+  // a listing that failed), and whenever one is saved, so it can always be set, replaced or removed.
   import KeyRow from './KeyRow.svelte';
   import { openExternal } from '../links';
   import { keyRows, type CliKeys, type KeyStatus, type ModelInfo, type PipelineApi } from '../pipeline';
@@ -35,6 +35,8 @@
   <div class="set-head"><h2 id="gated-heading">Gated models</h2></div>
   {#if problem}<p class="error">Could not list the models: {problem}</p>{/if}
   {#if models && !gated.length && !problem}<p class="muted">None of the models the steps use needs access approval.</p>
+    <!-- a key saved anyway (in 0.0.2, which listed every key) is still shown: it reaches runs, so it can be removed -->
+    {#if hf?.stored}<ul class="set-rows"><KeyRow {api} k={hf} label="Hugging Face key" onchange={onkeys} {onbusy} /></ul>{/if}
   {:else if !models || problem}
     {#if hf}<ul class="set-rows"><KeyRow {api} k={hf} elsewhere={hf.elsewhere} label="Hugging Face key" onchange={onkeys} {onbusy} /></ul>{/if}
   {:else if gated.length}

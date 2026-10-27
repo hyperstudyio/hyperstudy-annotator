@@ -104,14 +104,14 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: a step's model is gated on Hugging Face. `runs` records each run's arguments, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: a step's model is gated on Hugging Face. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A RunPod key starting "rejected" is refused, as RunPod refuses a wrong one. `runs` records each run's arguments, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hfStored = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
   let installed = setup !== 'installing' && setup !== 'install-failed';   // a first launch offline has none
@@ -126,7 +126,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   if (setup === 'running' || setup === 'installing') finish();
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
   let hosts: Host[] = remote_ ? [labHost('lab', 'you@lab')] : [];
-  const stored = new Map<string, string>();
+  const stored = new Map<string, string>(hfStored ? [['HF_TOKEN', 'hf_saved_in_0_0_2']] : []);
   const keyStatus = (): KeyStatus[] => KEYS.map((k) => ({ ...k, stored: stored.has(k.name) }));
   const cloud: CloudStatus = { enabled: remote_, machine: 'AWS g6.2xlarge, NVIDIA L4', region: 'us-east-1', hourly_usd: 0.9776,
     runpod: { enabled: false, machine: 'RunPod, one of L4, RTX 4090, RTX A5000', region: 'any', hourly_usd: 0.69 } };
@@ -189,6 +189,8 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       older('cloud');
       if (on && provider === 'runpod' && !stored.has('RUNPOD_API_KEY'))
         throw new Error('the pipeline failed: no RunPod API key: create one at https://console.runpod.io/user/settings');
+      if (on && provider === 'runpod' && stored.get('RUNPOD_API_KEY')!.startsWith('rejected'))
+        throw new Error('the pipeline failed: RunPod did not accept the key in RUNPOD_API_KEY (401 Unauthorized)');
       if (on !== undefined) { if (provider === 'runpod') cloud.runpod!.enabled = on; else cloud.enabled = on; }
       return { ...cloud, runpod: { ...cloud.runpod! } };
     },

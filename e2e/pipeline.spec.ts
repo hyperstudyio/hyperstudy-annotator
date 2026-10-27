@@ -667,3 +667,28 @@ test('RunPod is added with its key, is then a place for a step, and removing it 
   await toExtract(page);
   await expect(menu.getByRole('option', { name: /RunPod/ })).toHaveCount(0);
 });
+
+test('a RunPod key that RunPod refuses is said why and not kept: nothing is added, and the form asks for a key again', async ({ page }) => {
+  await page.goto('/?pipeline-demo=remote');
+  const settings = await settingsAt(page, /^Machines$/);
+  const cloud = settings.getByRole('region', { name: 'Cloud GPU' });
+  await cloud.getByRole('button', { name: 'Add provider…' }).click();
+  const form = cloud.getByRole('form', { name: 'Add a cloud GPU provider' });
+  await form.getByRole('textbox', { name: 'RunPod API key' }).fill('rejected-0123456789');
+  await form.getByRole('button', { name: 'Add RunPod' }).click();
+  await expect(cloud.getByText(/RunPod did not accept the key/)).toBeVisible();
+  await expect(cloud.getByRole('listitem', { name: 'RunPod', exact: true })).toHaveCount(0);
+  await expect(form.getByRole('textbox', { name: 'RunPod API key' })).toBeVisible();   // the refused key is not in the keychain
+  await expect(cloud.getByRole('listitem', { name: 'RunPod key' })).toHaveCount(0);
+});
+
+test('a key saved in the keychain always has a row, where it can be removed, even when nothing uses it now', async ({ page }) => {
+  await page.goto('/?pipeline-demo=hf-stored');   // a Hugging Face key from 0.0.2; no step uses a gated model
+  const settings = await settingsAt(page, /^Models$/);
+  const gated = settings.getByRole('region', { name: 'Gated models' });
+  await expect(gated.getByText('None of the models the steps use needs access approval.')).toBeVisible();
+  const hf = gated.getByRole('listitem', { name: 'Hugging Face key' });
+  await expect(hf).toContainText('Saved in the keychain');
+  await hf.getByRole('button', { name: 'Remove the Hugging Face key' }).click();
+  await expect(hf).toHaveCount(0);
+});
