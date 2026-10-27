@@ -55,7 +55,7 @@
   // an annotation dropped where it was dragged, drawn there until its edit is in the log: the log's times change only
   // once the store has the edit, which in the app is a round trip to its database, so the bar would show its old
   // place in between
-  let landing = $state<{ note: string; span: Span } | null>(null);
+  let landing = $state.raw<{ note: string; span: Span } | null>(null);   // raw: compared by identity when cleared
   let resizingTimeline = $state(false);
 
   const timeOf = (e: PointerEvent) => timeAtX(e.clientX, content!.getBoundingClientRect().left, pps, duration);
@@ -190,9 +190,10 @@
       case 'retime': {
         if (!g.moved) { s.select('note', g.note); s.clickPlay(); break; }   // a click: as any bar
         if (g.span.start !== g.from.start || g.span.end !== g.from.end) {
-          landing = { note: g.note, span: g.span };
+          const mine = { note: g.note, span: g.span };   // another drop while this one saves has its own
+          landing = mine;
           try { await s.commit({ op: 'annotation.edit', id: g.note, fields: { start: g.span.start, end: g.span.end } }); }
-          finally { landing = null; }
+          finally { if (landing === mine) landing = null; }
         }
         s.select('note', g.note, { seek: false });
         break;

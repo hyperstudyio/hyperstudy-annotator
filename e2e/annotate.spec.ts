@@ -182,6 +182,8 @@ test('a dropped annotation goes straight to where it was dragged, never back to 
   await form.getByLabel('Type name').fill('Engaged');
   await form.getByRole('button', { name: 'Add type' }).click();
   await page.keyboard.press('a');
+  const span = page.locator('.drawer-panel .meta').filter({ hasText: '–' }).first();
+  await expect(span).toContainText('0:00.0–0:02.8');
   await page.locator('.zoom input').fill('12');
   const bar = typeRow(page, 'Engaged').locator('.bar');
   await bar.scrollIntoViewIfNeeded();
@@ -191,15 +193,17 @@ test('a dropped annotation goes straight to where it was dragged, never back to 
   await page.mouse.down();
   for (let i = 1; i <= 5; i++) await page.mouse.move(box.x + box.width / 2 + i * 24, y);
   // every left the bar is given from the drop on (the DOM is written even where the screen is not painted)
-  const first = await bar.evaluate((el) => {
+  const [first, dropped] = await bar.evaluate((el) => {
     const w = window as unknown as { lefts: string[] };
     w.lefts = [];
     new MutationObserver(() => w.lefts.push((el as HTMLElement).style.left)).observe(el, { attributes: true, attributeFilter: ['style'] });
-    return `${parseFloat((el as HTMLElement).style.left) - 120}px`;   // where it was before the drag
+    const now = parseFloat((el as HTMLElement).style.left);
+    return [now - 120, now];   // where it was before the drag, and where it is dropped
   });
   await page.mouse.up();
   await page.keyboard.up('Alt');
-  await page.waitForTimeout(200);
-  const lefts = await page.evaluate(() => (window as unknown as { lefts: string[] }).lefts);
-  expect(lefts.map((l) => Math.round(parseFloat(l)))).not.toContain(Math.round(parseFloat(first)));
+  const lefts = () => page.evaluate(() => (window as unknown as { lefts: string[] }).lefts.map((l) => Math.round(parseFloat(l))));
+  await expect(span).not.toContainText('0:00.0–');   // the edit is in the log: any flash came before this
+  expect(Math.round(parseFloat(await bar.evaluate((el) => (el as HTMLElement).style.left)))).toBe(Math.round(dropped));
+  expect(await lefts()).not.toContain(Math.round(first));
 });
