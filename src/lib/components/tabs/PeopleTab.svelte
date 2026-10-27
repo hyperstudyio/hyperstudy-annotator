@@ -3,6 +3,7 @@
   // people" goes back to the list.
   import { useSession } from '../../model/context';
   import InspectPerson from '../inspect/InspectPerson.svelte';
+  import LeftOut from '../inspect/LeftOut.svelte';
   import Crop from '../ui/Crop.svelte';
   import Swatch from '../ui/Swatch.svelte';
   import Name from '../ui/Name.svelte';
@@ -13,6 +14,7 @@
 
 {#if open}
   <button class="link back" onclick={() => (s.selection = null)}>← All people</button>
+  <LeftOut sel={{ kind: 'person', id: open }} />
   <InspectPerson person={open} />
 {:else}
 

@@ -1,8 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: core APIs, the open and save dialogs (bundles, videos, corrections files), opening the documentation in the browser, and updating the app (check, install, relaunch).",
+  "description": "The main window: core APIs, the open and save dialogs (bundles, videos, corrections files), opening pages in the browser (the documentation, where keys are made, model pages: links.ts OPENABLE, kept the same by a test), and updating the app (check, install, relaunch).",
   "windows": ["main"],
   "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save", "updater:default", "process:allow-restart",
-                  { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://docs.hyperstudy.io/*" }] }]
+                  { "identifier": "opener:allow-open-url", "allow": [
+                    { "url": "https://docs.hyperstudy.io/*" },
+                    { "url": "https://console.anthropic.com/*" },
+                    { "url": "https://console.runpod.io/*" },
+                    { "url": "https://huggingface.co/*" },
+                    { "url": "https://github.com/*" },
+                    { "url": "https://docs.anthropic.com/*" },
+                    { "url": "https://zenodo.org/*" } ] }]
 }

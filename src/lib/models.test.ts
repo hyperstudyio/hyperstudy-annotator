@@ -30,3 +30,9 @@ test('a group lists the models of the layers it draws, each once', () => {
   expect(groupModels(layers, 'annotations')).toEqual([]);
   expect(groupModels(layers, 'objects')).toEqual([]);   // a layer that was not run
 });
+
+test('a model page on a host the app may not open is not offered', () => {
+  expect(modelLink(m('PANNs Cnn14_DecisionLevelMax', 'https://zenodo.org/record/3987831'))).toBe('https://zenodo.org/record/3987831');
+  expect(modelLink(m('MediaPipe Pose Landmarker heavy', 'https://storage.googleapis.com/mediapipe-models/pose.task'))).toBeNull();
+  expect(modelLink(m('x', 'http://github.com/a/b'))).toBeNull();   // not https
+});

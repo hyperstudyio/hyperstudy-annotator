@@ -1,6 +1,7 @@
 <script lang="ts">
   // The right-hand drawer: tabs (Inspect, Review, People, Annotate), the keys for what is selected when asked
   // for (? or its button), and the handle that resizes it. Collapsed (\), the video and timeline take the width.
+  import { untrack } from 'svelte';
   import { useSession } from '../model/context';
   import type { Tab } from '../model/view.svelte';
   import Inspector from './inspect/Inspector.svelte';
@@ -10,6 +11,7 @@
 
   let { onresize, onresizeend, onresetwidth }: { onresize: (dx: number, start: number) => void; onresizeend: () => void; onresetwidth: () => void } = $props();
   const s = useSession();
+  $effect(() => { const now = s.selection; untrack(() => s.noteSelection(now)); });   // Back's history, whichever tab is shown
   const closed = $derived(s.view.s.drawerClosed);
   let panel = $state<HTMLDivElement>();
   let aside = $state<HTMLElement>();

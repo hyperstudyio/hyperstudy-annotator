@@ -2,10 +2,9 @@
   // The Inspect tab: where the one thing selected is edited (who a face is, who speaks and what was said, a caption,
   // a name, an annotation's value). What happens when is the timeline's; this is for what it cannot change. Back
   // returns to what was selected before (a person opened from a face, from a gesture…).
-  import { untrack } from 'svelte';
   import { useSession } from '../../model/context';
-  import type { Selection } from '../../model/session.svelte';
   import InspectShot from './InspectShot.svelte';
+  import LeftOut from './LeftOut.svelte';
   import InspectUtterance from './InspectUtterance.svelte';
   import InspectFace from './InspectFace.svelte';
   import InspectPerson from './InspectPerson.svelte';
@@ -19,28 +18,11 @@
   const s = useSession();
   const sel = $derived(s.selection);
   const b = $derived(s.bundle);
-  // what was selected before, newest last: a selection made by going back is not added again
-  let history = $state<Selection[]>([]);
-  let previous: Selection | null = null, goingBack = false;
-  $effect(() => {
-    const now = s.selection;
-    untrack(() => {
-      if (!now) history = [];
-      else if (goingBack) goingBack = false;
-      else if (previous && (previous.kind !== now.kind || previous.id !== now.id)) history = [...history.slice(-19), previous];
-      previous = now;
-    });
-  });
-  function back() {
-    const to = history.at(-1);
-    if (!to) return;
-    history = history.slice(0, -1);
-    goingBack = true;
-    s.select(to.kind, to.id, { seek: false });
-  }
+  // Back: the selections before this one, kept by the session whichever tab made them (Session.back)
 </script>
 
-{#if history.length}<button class="link back" onclick={back}>← Back</button>{/if}
+{#if s.history.length}<button class="link back" onclick={() => s.back()}>← Back</button>{/if}
+{#if sel}<LeftOut {sel} />{/if}
 
 {#if sel?.kind === 'shot' && b.shot.get(sel.id)}<InspectShot shot={b.shot.get(sel.id)!} />
 {:else if sel?.kind === 'utt' && b.utt.get(sel.id)}<InspectUtterance u={b.utt.get(sel.id)!} />

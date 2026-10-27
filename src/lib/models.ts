@@ -5,14 +5,20 @@
 // cannot be worked out is left out, not guessed.
 import type { Layers } from './model/bundle';
 import type { LicenceMode, Model } from './types';
+import { openable } from './links';
 
 export interface ModelNote { name: string; detail: string | null; link: string | null; licence: LicenceMode; licenceText: string | null }
 
 const ANTHROPIC = 'https://docs.anthropic.com/en/docs/about-claude/models/overview';
 
-/** A page for the model: its source when that is a web address, its Hugging Face page (hf://, or an id shaped
- *  owner/name), Anthropic's models page for Claude; else null. */
+/** A page for the model: its source when that is a web address the app may open (links.ts), its Hugging Face page
+ *  (hf://, or an id shaped owner/name), Anthropic's models page for Claude; else null. */
 export function modelLink(m: Pick<Model, 'id' | 'source'>): string | null {
+  const link = pageOf(m);
+  return link && openable(link) ? link : null;
+}
+
+function pageOf(m: Pick<Model, 'id' | 'source'>): string | null {
   const src = m.source?.trim() ?? '';
   const web = src.match(/https?:\/\/\S+/)?.[0];
   if (web) return web;

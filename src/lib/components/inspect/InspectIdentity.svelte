@@ -30,7 +30,6 @@
     {#each s.objectIdentities.filter((x) => x !== i) as x (x)}<option value={x}>{s.objName(x)}</option>{/each}
   </select>
 </div>
-<div class="meta">Switch off for things that are irrelevant to the study.</div>
 {#if looked}<h3>Looked at by (estimated)</h3><div class="meta">{looked}</div>{/if}
 <h3>Appearances</h3>
 <div class="list">

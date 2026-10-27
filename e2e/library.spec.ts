@@ -221,3 +221,23 @@ test('an overlay is a row you click to turn on, lit when on, and its style (colo
   await expect(menu.getByText('100%')).toBeVisible();
   await expect(menu.getByRole('button', { name: 'By person' })).toHaveAttribute('aria-pressed', 'true');
 });
+
+test('a pop-up near the foot of the window opens upward, inside the window', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  // the lowest group name still on screen, with a list of models
+  const key = await page.evaluate(() => {
+    const heads = [...document.querySelectorAll<HTMLElement>('[data-group-header]')]
+      .filter((h) => h.querySelector('button[aria-label^="The models behind"]') && h.getBoundingClientRect().bottom < window.innerHeight - 4);
+    return heads.at(-1)?.dataset.groupHeader ?? null;
+  });
+  expect(key).not.toBeNull();
+  const head = page.locator(`[data-group-header="${key}"] .lane-label`);
+  await head.hover();
+  await head.getByRole('button', { name: /^The models behind/ }).click();
+  const panel = page.getByRole('dialog', { name: /^The models behind/ });
+  const box = (await panel.boundingBox())!, vh = page.viewportSize()!.height;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(vh);
+});

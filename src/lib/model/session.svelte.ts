@@ -80,6 +80,26 @@ export class Session {
   lightbox = $state<Lightbox | null>(null);
   /** A dialog is open that needs an answer first: the workspace's keys do nothing meanwhile. */
   modal = $state(false);
+  /** The selections before this one, newest last (Inspect's Back): kept by `noteSelection`, whatever tab made them. */
+  history = $state<Selection[]>([]);
+  #previous: Selection | null = null;
+  #goingBack = false;
+  /** The selection changed (the drawer calls this as it does): what it was joins the history, unless this was Back;
+   *  nothing selected starts it again. */
+  noteSelection(now: Selection | null) {
+    if (!now) this.history = [];
+    else if (this.#goingBack) this.#goingBack = false;
+    else if (this.#previous && (this.#previous.kind !== now.kind || this.#previous.id !== now.id)) this.history = [...this.history.slice(-19), this.#previous];
+    this.#previous = now;
+  }
+  /** Back to the selection before this one. */
+  back() {
+    const to = this.history.at(-1);
+    if (!to) return;
+    this.history = this.history.slice(0, -1);
+    this.#goingBack = true;
+    this.select(to.kind, to.id, { seek: false });
+  }
   /** The panel shows the keyboard keys (? toggles it). */
   help = $state(false);
   /** What this version carried over from an earlier one (the ops it could not match wait for review). */
@@ -300,6 +320,26 @@ export class Session {
       case 'objid': return this.includedIdentity(sel.id);
       case 'sound': { const s = b.sound.get(sel.id); return s ? this.includedSound(s) : true; }
       default: return this.includedId(sel.id);
+    }
+  }
+
+  /** Why the selection is left out of what agents receive, when an edit left it out (made before the annotator stopped
+   *  deciding that, or Review's "Not there"), and the edit that puts it back; null when nothing did. Not a person is
+   *  not this: it is put right by naming who the face is. */
+  leftOut(sel: Selection): { why: string; putBack: Op } | null {
+    const I = this.S.included, b = this.bundle;
+    const byPerson = (p: string) => I[p] === false && p !== NOT_PERSON
+      ? { why: `${this.nameOf(p)} was left out by an earlier edit.`, putBack: { op: 'entity.include', id: p, included: true } as Op } : null;
+    if (I[sel.id] === false) return { why: 'Left out by an earlier edit.', putBack: { op: 'entity.include', id: sel.id, included: true } };
+    switch (sel.kind) {
+      case 'person': return byPerson(sel.id);
+      case 'face': { const t = b.face.get(sel.id); return t ? byPerson(this.personOf(t)) : null; }
+      case 'object': { const o = b.object.get(sel.id), i = o ? this.identityOf(o) : null;
+        return i && I[i] === false ? { why: `${this.objName(i)} was left out by an earlier edit.`, putBack: { op: 'entity.include', id: i, included: true } } : null; }
+      case 'sound': { const x = b.sound.get(sel.id);
+        return x && this.S.category[`sound:${x.label}`] === false
+          ? { why: `Every "${x.label}" was left out by an earlier edit.`, putBack: { op: 'category.include', kind: 'sound', label: x.label, included: true } } : null; }
+      default: return null;
     }
   }
 
