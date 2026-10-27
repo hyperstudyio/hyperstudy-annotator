@@ -256,6 +256,17 @@ describe('what an earlier edit left out', () => {
     expect(s.includedSound(x)).toBe(true);
   });
 
+  test("a sound marked not there (by Review, or an edit from before it) is put right by marking it real", async () => {
+    const { s } = session();
+    const x = s.bundle.sounds[0];
+    await s.commit({ op: 'entity.include', id: x.id, included: false });
+    const out = s.leftOut({ kind: 'sound', id: x.id })!;
+    expect(out.why).toBe('Marked not there.');
+    expect(out.action).toBe('Mark real');
+    await s.commit(out.putBack);
+    expect(s.S.included[x.id]).toBe(true);
+  });
+
   test('not a person is not this: it is put right by naming who the face is', async () => {
     const { s } = session();
     await s.commit({ op: 'person.not_person', person: 'person:Person C' });
@@ -278,4 +289,16 @@ test('Back returns to the selections before, newest first, and after deselecting
   expect(s.history.map((x) => x.id)).toEqual(['shot:0', 'person:Person A']);
   s.back(); note();
   expect(s.selection).toEqual({ kind: 'person', id: 'person:Person A' });
+});
+
+test('Back never returns to what is already selected', () => {
+  const { s } = session();
+  const note = () => s.noteSelection(s.selection);
+  s.select('shot', 'shot:0', { seek: false }); note();
+  s.select('person', 'person:Person A', { seek: false }); note();
+  s.selection = null; note();   // Esc
+  s.select('person', 'person:Person A', { seek: false }); note();   // the same again
+  expect(s.history.map((x) => x.id)).toEqual(['shot:0']);
+  s.back(); note();
+  expect(s.selection).toEqual({ kind: 'shot', id: 'shot:0' });
 });
