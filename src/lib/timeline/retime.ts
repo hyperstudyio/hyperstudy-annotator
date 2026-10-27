@@ -9,15 +9,15 @@ export const MIN_LEN_S = 0.1;
 export const SNAP_PX = 6;
 
 /** The span after the pointer moved by dt seconds: the whole span (kept inside the video), or one end (never past the
- *  other, less the minimum length). */
+ *  other, less the minimum length; an annotation already shorter than that only gets longer). */
 export function retime(mode: RetimeMode, from: Span, dt: number, duration: number): Span {
   const len = from.end - from.start;
   if (mode === 'move') {
     const start = Math.min(Math.max(0, from.start + dt), Math.max(0, duration - len));
     return { start, end: start + len };
   }
-  if (mode === 'start') return { start: Math.min(Math.max(0, from.start + dt), from.end - MIN_LEN_S), end: from.end };
-  return { start: from.start, end: Math.max(Math.min(duration, from.end + dt), from.start + MIN_LEN_S) };
+  if (mode === 'start') return { start: Math.min(Math.max(0, from.start + dt), Math.max(from.start, from.end - MIN_LEN_S)), end: from.end };
+  return { start: from.start, end: Math.max(Math.min(duration, from.end + dt), Math.min(from.end, from.start + MIN_LEN_S)) };
 }
 
 /** The nearest of `times` within `tol` seconds of t, else null. */

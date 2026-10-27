@@ -34,3 +34,11 @@ test('a bar is taken by an end near its edges, by its middle elsewhere, and narr
   expect(partAt(4.5, 9)).toBe('move');
   expect(partAt(1, 9)).toBe('start');
 });
+
+test('an end of an annotation already shorter than the minimum never moves against the pointer', () => {
+  const dot = { start: 5, end: 5 };   // ] while paused, or Start = playhead at its end
+  expect(retime('end', dot, -1, 60)).toEqual(dot);
+  expect(retime('start', dot, 1, 60)).toEqual(dot);
+  expect(retime('end', dot, 0.5, 60)).toEqual({ start: 5, end: 5.5 });
+  expect(retime('start', dot, -0.5, 60)).toEqual({ start: 4.5, end: 5 });
+});
