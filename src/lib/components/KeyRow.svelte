@@ -2,12 +2,16 @@
   // One of the user's keys, where it is used (Shot captions, Gated models, a cloud provider): kept in this computer's
   // keychain by the app (keys.rs). The page sends a key once, when saved, and never gets it back: it learns only
   // whether it is stored. A key the command line already finds (a private file, its own keychain entry) is said so and
-  // need not be entered again. The field to paste one opens only when asked for.
-  import type { KeyStatus, PipelineApi } from '../pipeline';
+  // need not be entered again. The field to paste one opens only when asked for. Test asks the key's provider whether
+  // it accepts it (one request that costs nothing); a key that is part of something else's setup (a cloud provider's)
+  // is removed with it, not on its own (`removable`).
+  import { tooOld, type CheckResult, type KeyStatus, type PipelineApi } from '../pipeline';
   import { openExternal } from '../links';
 
-  let { api, k, elsewhere = null, label = 'API key', onchange, onbusy }: {
+  let { api, k, elsewhere = null, label = 'API key', removable = true, onchange, onbusy }: {
     api: PipelineApi; k: KeyStatus;
+    /** false: removed with what it belongs to (a cloud provider), not on its own */
+    removable?: boolean;
     /** where the command line finds it on its own, or null */
     elsewhere?: string | null;
     /** what the row is called where it is shown */
@@ -22,9 +26,16 @@
   let draft = $state('');
   let busy = $state<string | null>(null);
   let error = $state<string | null>(null);
+  let tested = $state<CheckResult | null>(null);
+  const CHECKABLE = ['ANTHROPIC_API_KEY', 'HF_TOKEN', 'RUNPOD_API_KEY'];
+  const test = async () => {
+    busy = `Testing the ${k.label} key…`; error = null; tested = null;
+    try { tested = await api.checkKey(k.name); } catch (e) { error = tooOld(e, 'test keys'); } finally { busy = null; }
+  };
 
   const act = async (what: string, f: () => Promise<KeyStatus[]>) => {
     busy = what; error = null; onbusy(what);
+    tested = null;
     try { onchange(await f()); } catch (e) { error = String(e); } finally { busy = null; onbusy(null); }
   };
   const save = () => {
@@ -45,8 +56,9 @@
   </span>
   <span class="actions">
     {#if !editing}
+      {#if (k.stored || elsewhere) && CHECKABLE.includes(k.name)}<button class="plain" onclick={test} disabled={!!busy} aria-label={`Test the ${k.label} key`}>Test</button>{/if}
       <button class:plain={k.stored || !!elsewhere} onclick={() => { editing = true; error = null; }} disabled={!!busy} aria-label={`${k.stored ? 'Replace' : 'Add'} the ${k.label} key`}>{k.stored || elsewhere ? 'Replace' : 'Add key'}</button>
-      {#if k.stored}<button class="plain danger" onclick={() => act(`Removing the ${k.label} key…`, () => api.removeKey(k.name))} disabled={!!busy} aria-label={`Remove the ${k.label} key`}>Remove</button>{/if}
+      {#if k.stored && removable}<button class="plain danger" onclick={() => act(`Removing the ${k.label} key…`, () => api.removeKey(k.name))} disabled={!!busy} aria-label={`Remove the ${k.label} key`}>Remove</button>{/if}
     {/if}
   </span>
   {#if editing}
@@ -58,6 +70,7 @@
     </form>
   {/if}
   {#if busy}<p class="note muted" role="status">{busy}</p>{/if}
+  {#if tested}<p class="note" class:ok={tested.ok} class:error={!tested.ok} role="status">{tested.ok ? '✓ ' : ''}{tested.detail}.</p>{/if}
   {#if error}<p class="note error" role="alert">{error}</p>{/if}
 </li>
 

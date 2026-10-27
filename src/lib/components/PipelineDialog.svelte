@@ -7,6 +7,7 @@
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
   import type { RunStatus } from './Rail.svelte';
+  import { defaultsToApply, loadDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
     settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
@@ -230,7 +231,15 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    newestPlan(api.plan(graph, video, places, settings), (p) => { plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
+    newestPlan(api.plan(graph, video, places, settings), (p) => {
+        // the defaults chosen in Settings > Models, where this run has not chosen otherwise: planned again with them
+        const missing = defaultsToApply(p, settings, loadDefaults());
+        if (Object.keys(missing).length) {
+          settings = Object.fromEntries([...new Set([...Object.keys(settings), ...Object.keys(missing)])].map((n) => [n, { ...settings[n], ...missing[n] }]));
+          makePlan(true);
+          return;
+        }
+        plan = p; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
       },
       (e) => { plan = null; error = String(e); busy = null; planning = false; });
   };
@@ -330,7 +339,7 @@
         {#if started}{headline}
         {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
       </h3>
-      {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('machines')}>Add a remote server or cloud GPU</button></p>{/if}
+      {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('compute')}>Add a remote server or cloud GPU</button></p>{/if}
       {#if total?.unknown.length && !started}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(total.unknown.map(titleOf))}, which {total.unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
       <ol class="steps">
         {#each started ? active?.nodes ?? [] : plan.nodes as n (n.id)}
@@ -374,7 +383,7 @@
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
                 {#if n.cost_usd}<span>{machineCost(plan, n) ? 'Up to ' : ''}${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
-                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'machines' : 'models')}>add it in Settings</button></span>{/each}
+                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
                 <span class="muted" id={`before-${n.id}`}>Turn on {list(before.map(titleOf))} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
               {/if}

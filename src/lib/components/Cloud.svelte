@@ -1,12 +1,12 @@
 <script lang="ts">
-  // Settings > Machines > Cloud GPU: the providers that start a GPU machine for a step and delete it after
+  // Settings > Compute > Cloud GPU: the providers that start a GPU machine for a step and delete it after
   // (`perception cloud`). A provider added here shows up in the step menus on Extract; choosing it there is still what
-  // sends a step's inputs. RunPod is set up with its API key (kept in the keychain, KeyRow); AWS uses the AWS
-  // credentials on this computer, through SkyPilot. Adding one checks it can be used first; removing RunPod removes its
-  // key too, as part of its setup.
+  // sends a step's inputs. RunPod is set up with its API key (kept in the keychain, KeyRow: replaced or tested there,
+  // never removed on its own); AWS uses the AWS credentials on this computer, through SkyPilot. Adding one checks it can
+  // be used first; Test checks again, changing nothing (`perception cloud check`); Remove takes RunPod's key with it.
   import KeyRow from './KeyRow.svelte';
   import { openExternal } from '../links';
-  import { keyRows, provider, type CliKeys, type CloudProviderName, type CloudStatus, type KeyStatus, type PipelineApi } from '../pipeline';
+  import { keyRows, provider, tooOld, type CheckResult, type CliKeys, type CloudProviderName, type CloudStatus, type KeyStatus, type PipelineApi } from '../pipeline';
 
   let { api, cloud, keys, cli, onchange, onkeys, onbusy }: {
     api: PipelineApi; cloud: CloudStatus; keys: KeyStatus[]; cli: CliKeys | null;
@@ -46,6 +46,11 @@
       catch (e) { if (saved) onkeys(await api.removeKey('RUNPOD_API_KEY')); throw e; }
     })) adding = null;
   };
+  let tested = $state<Partial<Record<CloudProviderName, CheckResult>>>({});
+  const test = async (p: CloudProviderName) => {
+    busy = `Testing ${NAMES[p]}…`; error = null; tested = { ...tested, [p]: undefined };
+    try { tested = { ...tested, [p]: await api.checkCloud(p) }; } catch (e) { error = tooOld(e, 'test cloud providers'); } finally { busy = null; }
+  };
   const remove = (p: CloudProviderName) => act(`Removing ${NAMES[p]}…`, async () => {
     onchange(await api.cloud(false, p));
     if (p === 'runpod' && runpodKey?.stored) onkeys(await api.removeKey('RUNPOD_API_KEY'));
@@ -73,10 +78,12 @@
           <div class="head">
             <strong>{NAMES[p]}</strong>
             <span class="muted">{provider(cloud, p)!.machine.replace(/^(RunPod, |AWS )/, '')}, {price(p)}</span>
-            <button class="plain danger" onclick={() => remove(p)} disabled={!!busy} aria-label={`Remove ${NAMES[p]}`}>Remove</button>
+            <button class="plain" onclick={() => test(p)} disabled={!!busy} aria-label={`Test ${NAMES[p]}`} title="Check it can be used now, changing nothing">Test</button>
+            <button class="plain danger" onclick={() => remove(p)} disabled={!!busy} aria-label={`Remove ${NAMES[p]}`} title={p === 'runpod' ? 'Its API key is removed with it' : undefined}>Remove</button>
           </div>
+          {#if tested[p]}<p class="tested" class:ok={tested[p]!.ok} class:error={!tested[p]!.ok} role="status">{tested[p]!.ok ? `✓ ${NAMES[p]} can be used` : tested[p]!.detail}.</p>{/if}
           {#if p === 'runpod' && runpodKey}
-            <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} onchange={onkeys} {onbusy} /></ul>
+            <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} removable={false} onchange={onkeys} {onbusy} /></ul>
           {:else if p === 'aws'}
             <p class="muted">Uses the AWS credentials on this computer.</p>
           {/if}
@@ -121,6 +128,7 @@
   .head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .head .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .provider p { margin: 0; font-size: 12px; }
+  .ok { color: var(--color-primary); }
   .inner > :global(li) { padding: 0; }
   .add { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-bg-surface); }
   .add p { margin: 0; }

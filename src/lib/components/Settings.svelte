@@ -1,13 +1,14 @@
 <script module lang="ts">
   /** A part of Settings another page can send you to (a step's missing key, Extract's "Add a remote server or cloud
    *  GPU", the rail's Update item). */
-  export type SettingsSection = 'models' | 'machines' | 'updates';
+  export type SettingsSection = 'models' | 'compute' | 'updates';
 </script>
 
 <script lang="ts">
-  // Settings, by what each thing is for: Models (what the steps' models need from you: a provider's key for shot
-  // captions, access and a key for gated models), Machines (where steps can run: this computer, remote servers, cloud
-  // GPU providers, each with what it needs, its key included) and App (its version and updates). A key appears where
+  // Settings, by what each thing is for: Models (every model the steps use: where it runs, its licence, the choices a
+  // step offers, and what it needs from you: a provider's key, access to a gated model), Compute (where steps can run:
+  // this computer, remote servers, cloud GPU providers, each with what it needs, its key included) and App (its
+  // version and updates). Keys and connections each have a Test. A key appears where
   // it is used, not in a list of keys. This is the one place they are set; Extract shows what a run will use and sends
   // you here, and loads them again (and plans again) when you go back. Loaded again each time this page is shown.
   import { tick, untrack } from 'svelte';
@@ -16,7 +17,7 @@
   import Cloud from './Cloud.svelte';
   import { DOCS_URL, openExternal } from '../links';
   import type { Updates } from '../updates.svelte';
-  import { placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelInfo, type PipelineApi } from '../pipeline';
+  import { placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
 
   let { api, updates = null, active = true, holdRelaunch = null, relaunchCaution = null, show = null, onshown, onbusy }: {
     api: PipelineApi | null; updates?: Updates | null; active?: boolean;
@@ -35,12 +36,12 @@
   let hosts = $state<Host[] | null>(null);   // null: a pipeline from before remote servers
   let cloud = $state<CloudStatus | null>(null);
   let doctor = $state<Doctor | null>(null);
-  let models = $state<ModelInfo[] | null>(null);   // null: an older pipeline without `models`, or not listed yet
+  let models = $state<ModelsListing | null>(null);   // null: an older pipeline without `models`, or not listed yet
   let problems = $state<{ keys?: string; models?: string; servers?: string; cloud?: string; computer?: string }>({});
   let loaded = $state(false);
   // a tab per purpose; App (the version and its updates) is the only one without a pipeline (in a browser)
-  type Tab = 'models' | 'machines' | 'app';
-  const TABS: { key: Tab; label: string }[] = [{ key: 'models', label: 'Models' }, { key: 'machines', label: 'Machines' }, { key: 'app', label: 'App' }];
+  type Tab = 'models' | 'compute' | 'app';
+  const TABS: { key: Tab; label: string }[] = [{ key: 'models', label: 'Models' }, { key: 'compute', label: 'Compute' }, { key: 'app', label: 'App' }];
   // svelte-ignore state_referenced_locally
   let tab = $state<Tab>(api ? 'models' : 'app');
   let updatesSection = $state<HTMLElement>();
@@ -122,7 +123,7 @@
       {#if problems.keys}<p class="error top">Could not read the keys: {problems.keys}</p>{/if}
       <Models {api} {keys} {cli} {models} problem={problems.models} onkeys={(now) => (keys = now)} onbusy={busy} />
       <p class="foot muted">Keys are kept in this computer's keychain, and each step gets only the keys it needs.</p>
-    {:else if tab === 'machines' && api}
+    {:else if tab === 'compute' && api}
       <!-- what this computer can run: one line, with the steps it cannot and why only when there are some -->
       <section class="set-part" aria-labelledby="computer-heading">
         <div class="set-head"><h2 id="computer-heading">This computer</h2></div>

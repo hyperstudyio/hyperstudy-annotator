@@ -1,6 +1,6 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
-import type { CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep } from './pipeline';
+import type { CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep, SshOverrides } from './pipeline';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,
@@ -104,15 +104,16 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: a step's model is gated on Hugging Face. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A RunPod key starting "rejected" is refused, as RunPod refuses a wrong one. `runs` records each run's arguments, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: a step's model is gated on Hugging Face. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hfStored = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
-                             runs: { allow: unknown; places: unknown; maxCostUsd: number | null }[] = []): PipelineApi {
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hfStored = false, oldChecks = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
+                             runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown }[] = [],
+                             added: { name: string; dest: string; overrides?: SshOverrides }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
   let installed = setup !== 'installing' && setup !== 'install-failed';   // a first launch offline has none
   let status: SetupStatus = setup === 'done' ? { state: 'done', steps: [], problem: null, notice: null, installed }
@@ -130,6 +131,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   const keyStatus = (): KeyStatus[] => KEYS.map((k) => ({ ...k, stored: stored.has(k.name) }));
   const cloud: CloudStatus = { enabled: remote_, machine: 'AWS g6.2xlarge, NVIDIA L4', region: 'us-east-1', hourly_usd: 0.9776,
     runpod: { enabled: false, machine: 'RunPod, one of L4, RTX 4090, RTX A5000', region: 'any', hourly_usd: 0.69 } };
+  const unchecked = (cmd: string) => { if (oldChecks) throw new Error(`the pipeline failed: perception: error: argument action: invalid choice: '${cmd}'`); };
   const older = (cmd = 'hosts') => { if (oldCli || (cmd === 'cloud' && noCloud)) throw new Error(`the pipeline failed: perception: error: argument cmd: invalid choice: '${cmd}'`); };
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
@@ -153,10 +155,10 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       const extra = remote_ ? { places: { ...remotePlaces, ...Object.fromEntries(hosts.map((h) => [`ssh-${h.name}:cuda`, { title: `${h.name} (SSH)`, remote: true, accelerator: 'cuda' }])) }, max_cost_usd: 0.5, estimated_usd: all.reduce((a, n) => a + (n.cached ? 0 : n.cost_usd), 0) } : {};
       return { ...plan, ...extra, nodes: noNeeds ? all.map(({ needs: _, ...n }) => n) : all };
     },
-    async run(_graph, _video, allow, places, only, _settings, maxCostUsd, on) {
+    async run(_graph, _video, allow, places, only, settings, maxCostUsd, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       if (status.state === 'running') throw new Error('the pipeline is still being set up: the run can start when it is done');
-      runs.push({ allow, places, maxCostUsd });
+      runs.push({ allow, places, maxCostUsd, settings });
       listener = on;
       const first = slowStart ? 60_000 : 0;
       const ran = script.filter((m) => m.type !== 'event' || !m.node || !only || only.includes(m.node));   // as --only does
@@ -169,12 +171,13 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
         : { v: 1, type: 'error', problems: ['the pipeline ended without finishing the run (stopped)'] });
     },
     async hosts() { older(); if (machinesError) throw new Error('the pipeline failed: PermissionError: hosts.json'); return hosts; },
-    async host(action, name, dest) {
+    async host(action, name, dest, _root, overrides) {
       older();
       // a test can hold an action open (a clean or a check over a slow link)
       await (globalThis as { __holdHost?: Promise<void> }).__holdHost;
       if (action === 'add') {
         if (!dest || dest.includes('unreachable')) throw new Error(`could not reach ${dest} (ssh exit 255): ssh: connect to host ${dest} port 22: Operation timed out`);
+        added.push({ name, dest, overrides });
         hosts = [...hosts.filter((h) => h.name !== name), labHost(name, dest)];   // as the CLI does: an existing name is replaced
       } else if (action === 'remove') hosts = hosts.filter((h) => h.name !== name);
       // a test can have the host re-added elsewhere under the same name (with the CLI), which a check then finds
@@ -183,6 +186,25 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       else if (action === 'check' && (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere)
         hosts = hosts.map((h) => h.name === name ? labHost(name, 'you@another-lab.example.edu') : h);
       return hosts;
+    },
+    async probeHost(dest) {
+      unchecked('probe');
+      await (globalThis as { __holdHost?: Promise<void> }).__holdHost;
+      if (dest.includes('unreachable')) throw new Error(`the pipeline failed: could not reach ${dest} (ssh exit 255): ssh: connect to host ${dest} port 22: Operation timed out`);
+      const h = labHost('probe', dest);
+      return { dest, root: h.root, caps: h.caps };
+    },
+    sshHosts: async () => ['lab-gpu', 'biowulf'],
+    async checkCloud(provider) {
+      unchecked('check');
+      if (provider === 'aws') return { ok: true, detail: 'aws can be used' };
+      const key = stored.get('RUNPOD_API_KEY');
+      return !key ? { ok: false, detail: 'no RunPod API key' } : key.startsWith('rejected') ? { ok: false, detail: 'RunPod did not accept the key in RUNPOD_API_KEY (401)' } : { ok: true, detail: 'runpod can be used' };
+    },
+    async checkKey(name) {
+      unchecked('check');
+      const key = stored.get(name), who = KEYS.find((k) => k.name === name)!.label;
+      return !key ? { ok: false, detail: `${name} is not set` } : key.startsWith('rejected') ? { ok: false, detail: `${who} refused the key` } : { ok: true, detail: `${who} accepted the key` };
     },
     // RunPod, as `perception cloud on runpod`: refused without a key it accepts
     async cloud(on, provider = 'aws') {
@@ -197,7 +219,12 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     async models() {
       older('models');
       const all = plan.nodes.flatMap((n) => (n.models ?? []).map((m) => ({ node: n.uses, ...m, gated: false })));
-      return gated ? [...all, { node: 'audio.diarize@1.0.0', id: 'pyannote/speaker-diarization-3.1', source: 'hf://pyannote/speaker-diarization-3.1', size_gb: 0.1, gated: true, licence_mode: 'commercial-ok' }] : all;
+      // the steps, as the pipeline describes them (an older one gives only the models)
+      const nodes = oldChecks ? null : plan.nodes.map((n) => ({ node: n.uses, title: n.title ?? n.id, service: n.service ?? null,
+        secrets: n.id === 'captions' ? ['ANTHROPIC_API_KEY'] : [], settings: n.settings ?? [] }));
+      // `gated`: a made-up gated model, to show how one asks for access (the pipeline's own models are not gated)
+      return { models: gated ? [...all, { node: 'audio.diarize@1.0.0', id: 'pyannote/speaker-diarization-3.1', source: 'hf://pyannote/speaker-diarization-3.1', size_gb: 0.1, gated: true, licence_mode: 'commercial-ok' }] : all,
+               nodes: nodes && gated ? [...nodes, { node: 'audio.diarize@1.0.0', title: 'Who speaks', service: null, secrets: [], settings: [] }] : nodes };
     },
     // the app's keychain: names and whether stored (values are kept here only to check none reaches the page)
     async keys() { return keyStatus(); },

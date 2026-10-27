@@ -82,10 +82,12 @@
   else {
     if (q.has('library-demo')) import('./lib/library.fake').then((m) => (library = m.fakeLibrary(q.get('library-demo') === 'empty')));
     const bundle = q.get('bundle');
-    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (pipeline = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary', remote: q.get('pipeline-demo') === 'remote', machinesError: q.get('pipeline-demo') === 'machines-error', noCloud: q.get('pipeline-demo') === 'no-cloud', keysError: q.get('pipeline-demo') === 'keys-error', missingKey: q.get('pipeline-demo') === 'missing-key', gated: q.get('pipeline-demo') === 'gated', hfStored: q.get('pipeline-demo') === 'hf-stored',
+    if (q.has('pipeline-demo')) import('./lib/pipeline.fake').then((m) => (pipeline = m.fakePipeline(400, { rejectRun: q.get('pipeline-demo') === 'reject-run', slowStart: q.get('pipeline-demo') === 'slow-start', noNeeds: q.get('pipeline-demo') === 'no-needs', oldCli: q.get('pipeline-demo') === 'old-cli', twoPlaces: q.get('pipeline-demo') === 'two-places', summary: q.get('pipeline-demo') === 'summary', remote: q.get('pipeline-demo') === 'remote', machinesError: q.get('pipeline-demo') === 'machines-error', noCloud: q.get('pipeline-demo') === 'no-cloud', keysError: q.get('pipeline-demo') === 'keys-error', missingKey: q.get('pipeline-demo') === 'missing-key', gated: q.get('pipeline-demo') === 'gated', hfStored: q.get('pipeline-demo') === 'hf-stored', oldChecks: q.get('pipeline-demo') === 'old-checks',
       setup: q.get('pipeline-demo') === 'setup-running' ? 'running' : q.get('pipeline-demo') === 'setup-failed' ? 'failed' : q.get('pipeline-demo') === 'installing' ? 'installing' : q.get('pipeline-demo') === 'install-failed' ? 'install-failed' : 'done' },
       // what each demo run was given (its consent, places and spending cap), for the browser tests
-      ((window as unknown as { __pipelineRuns: unknown[] }).__pipelineRuns = []))));
+      ((window as unknown as { __pipelineRuns: unknown[] }).__pipelineRuns = []),
+      // each remote server added, with its overrides of ~/.ssh/config, for the browser tests
+      ((window as unknown as { __pipelineServers: unknown[] }).__pipelineServers = []))));
     if (bundle) httpSource(bundle, q.get('video'), q.get('previous')).then((s) => (source = s)).catch((e) => (error = String(e)));
   }
 
