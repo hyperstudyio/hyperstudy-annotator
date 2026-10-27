@@ -10,11 +10,11 @@
   import type { BundleSource } from '../source';
   import type { BundleSummary } from '../types';
 
-  let { library, active = true, request = null, onrequested, onextract, onmodal }: {
+  let { library, active = true, request = null, onrequested, onmodal }: {
     library: LibraryApi; active?: boolean;
     /** a bundle to open (Extract's Open in Annotator), then `onrequested` once it is */
     request?: string | null; onrequested?: () => void;
-    onextract: () => void; onmodal?: (open: boolean) => void;
+    onmodal?: (open: boolean) => void;
   } = $props();
 
   let bundles = $state<BundleSummary[] | null>(null);   // null: not listed yet
@@ -78,7 +78,6 @@
       <div class="menu-sep"></div>
       <button class="menu-item" onclick={() => { close(); importBundle(); }} disabled={!!busy}><span class="tick"></span>Import…</button>
       {#if source}<button class="menu-item" onclick={() => { close(); window.dispatchEvent(new Event('app:import-edits')); }}><span class="tick"></span>Import edits into this video…</button>{/if}
-      <button class="menu-item" onclick={() => { close(); onextract(); }}><span class="tick"></span>Extract from a video…</button>
     {/snippet}
   </Popover>
 {/snippet}
@@ -95,11 +94,9 @@
     {#if currentBundle}<div class="bar">{@render switcher()}</div>{/if}
     <div class="empty">
       {#if bundles && !bundles.length}
-        <p>Nothing to annotate yet.</p>
-        <div class="row">
-          <button class="primary" onclick={onextract}>Extract from a video…</button>
-          <button onclick={importBundle} disabled={!!busy}>Import…</button>
-        </div>
+        <!-- extracting is Extract's page (its bundle comes here when it is done): this page imports one -->
+        <p>Nothing to annotate yet. Import a bundle to start.</p>
+        <button class="primary" onclick={importBundle} disabled={!!busy}>Import…</button>
       {:else if opening && currentBundle}
         {#if !currentBundle.video_path}
           <p>{currentBundle.title} needs its video.</p>
@@ -132,5 +129,4 @@
   .note { font-size: 12px; color: var(--color-text-muted); white-space: nowrap; }
   .empty { display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; text-align: center; }
   .empty p { margin: 0; max-width: 48ch; }
-  .row { display: flex; gap: 8px; }
 </style>

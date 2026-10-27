@@ -138,7 +138,7 @@
     <div class="page" class:on={page === 'annotator'} class:holds-viewer={!!source || !!library}>
       {#if library}
         <Annotator {library} active={page === 'annotator'} request={openRequest} onrequested={() => (openRequest = null)}
-          onextract={() => (page = 'extract')} onmodal={(m) => (modal = m)} />
+          onmodal={(m) => (modal = m)} />
       {:else if source}
         <Viewer {source} active={page === 'annotator'} onmodal={(m) => (modal = m)} />
       {:else}
