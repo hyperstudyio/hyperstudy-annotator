@@ -58,6 +58,8 @@
   const test = async (p: CloudProviderName) => {
     const of = about(p);
     busy = `Testing ${NAMES[p]}…`; error = null;
+    const { [p]: _, ...others } = results;   // the earlier answer goes: this Test may end in an error, not an answer
+    results = others;
     try { results = { ...results, [p]: { about: of, said: await api.checkCloud(p) } }; } catch (e) { error = tooOld(e, 'test cloud providers'); } finally { busy = null; }
   };
   const keyChanged = (now: KeyStatus[]) => { changed('runpod'); onkeys(now); };

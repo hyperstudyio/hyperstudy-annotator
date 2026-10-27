@@ -107,9 +107,18 @@
     if (library) openRequest = id;
     else error = `would open ${id}`;   // browser mode without ?library-demo has no library to open from
   }
+  // ⌫ outside a text field is the app's (it deletes the selected annotation), never the engine's: WebKit, the desktop
+  // app's, takes it as Back and leaves the page. The keydown still reaches the app's own handlers.
+  function noBackspaceBack(e: KeyboardEvent) {
+    if (e.key !== 'Backspace') return;
+    const el = e.target as HTMLElement | null;
+    const typing = !!el?.closest?.('textarea, [contenteditable=""], [contenteditable="true"]')
+      || (el?.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'range', 'color', 'file', 'reset', 'image'].includes((el as HTMLInputElement).type));
+    if (!typing) e.preventDefault();
+  }
 </script>
 
-<svelte:window oncontextmenu={desktop ? oncontextmenu : undefined} />
+<svelte:window oncontextmenu={desktop ? oncontextmenu : undefined} onkeydown={noBackspaceBack} />
 
 <div class="app">
   <div class="rail-wrap" inert={modal}><Rail {page} {run} update={badge} onnavigate={(p) => (page = p)} onupdate={toUpdates} /></div>

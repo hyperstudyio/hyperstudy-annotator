@@ -41,12 +41,36 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Google Chrome is preinstalled on GitHub's Ubuntu runners (playwright.config.ts uses channel: chrome); the
+      # Google Chrome is preinstalled on GitHub's Ubuntu runners (the chrome project uses channel: chrome); the
       # config starts the Vite dev server.
-      - run: npx playwright test --reporter=line,json
+      - run: npx playwright test --project chrome --reporter=line,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-results.json
       # Tests needing the bake-off data skip themselves here; a job that ran none would pass while checking nothing.
+      - name: Some browser tests ran
+        run: |
+          ran=$(jq '.stats.expected + .stats.unexpected + .stats.flaky' playwright-results.json)
+          echo "browser tests run: $ran"
+          test "$ran" -gt 0
+
+  webkit:
+    # WebKit is the desktop app's engine (WKWebView): focus, Tab and Backspace differ from Chrome's there
+    name: Browser (Playwright in WebKit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps webkit
+      - run: npx playwright test --project webkit --reporter=line,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-results.json
       - name: Some browser tests ran
         run: |
           ran=$(jq '.stats.expected + .stats.unexpected + .stats.flaky' playwright-results.json)
