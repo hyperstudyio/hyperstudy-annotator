@@ -539,7 +539,8 @@ export class Session {
     return true;
   }
   /** The selected annotation's value from a key: y or n a yes/no, 1–9 a category in its order. */
-  valueFromKey(k: string): Note['value'] | undefined {
+  valueFromKey(key: string): Note['value'] | undefined {
+    const k = key.toLowerCase();
     const n = this.selection?.kind === 'note' ? this.S.notes.get(this.selection.id) : undefined, type = n && this.typeOf(n.type);
     if (!type) return undefined;
     if (type.kind === 'binary') return k === 'y' ? true : k === 'n' ? false : undefined;

@@ -335,7 +335,7 @@ describe('annotation types', () => {
     expect(s.valueFromKey('y')).toBeUndefined();
     await s.addNote('type:gaze', 0, 1);
     expect(s.valueFromKey('y')).toBe(true);
-    expect(s.valueFromKey('n')).toBe(false);
+    expect(s.valueFromKey('N')).toBe(false);   // Shift or Caps Lock
     expect(s.valueFromKey('1')).toBeUndefined();
   });
 

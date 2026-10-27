@@ -65,9 +65,9 @@
     }
     else if (k === 'j' || k === 'k') { s.tab = 'review'; s.nextInQueue(k === 'j' ? 1 : -1); }
     else if (k === 'Escape') { if (pb.clip) pb.stop(); s.selection = null; s.marking = null; }
-    else if (k === '[' || k === 'a') {
+    else if (k === '[' || k === 'a' || k === 'A') {
       if (!s.currentType()) { s.toast('Add an annotation type first: + beside Annotations on the timeline'); return; }
-      if (k === 'a') s.annotateHere();
+      if (k !== '[') s.annotateHere();
       else { s.marking = pb.time; s.toast('Start marked; press ] at the end'); }
     }
     else if (k === ']') { const type = s.currentType(); if (s.marking !== null && type) { const a = s.marking, b = pb.time; s.addNote(type.id, Math.min(a, b), Math.max(a, b)); } }

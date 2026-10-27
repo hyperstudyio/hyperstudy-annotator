@@ -50,6 +50,11 @@ describe('fold', () => {
     expect(note.value).toBeNull();   // the fold copies notes; the log is never mutated
   });
 
+  test('a type stored without options (an early import) still folds, as a type with none', () => {
+    const raw = { op: 'annotation.type', type: { id: 'type:1', name: 'Mood', kind: 'text', target: 'scene' } } as unknown as Op;
+    expect(fold([raw]).types).toEqual([{ id: 'type:1', name: 'Mood', kind: 'text', target: 'scene', options: [] }]);
+  });
+
   test('a type is edited and deleted by later ops, and the op that made it is left as it was', () => {
     const type: AnnotationType = { id: 'type:1', name: 'Mood', kind: 'category', target: 'person', options: ['calm', 'tense'] };
     const ops: Op[] = [

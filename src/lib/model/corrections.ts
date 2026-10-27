@@ -95,7 +95,8 @@ export function fold(ops: Op[]): Corrected {
       case 'shot.caption': S.caption[op.shot] = op.caption; break;
       case 'entity.include': S.included[op.id] = op.included; break;
       case 'category.include': S.category[`${op.kind}:${op.label}`] = op.included; break;
-      case 'annotation.type': S.types.push({ ...op.type, options: [...op.type.options] }); break;
+      // a copy, so a later edit does not change the op; v1 imports stored types without options
+      case 'annotation.type': S.types.push({ ...op.type, options: op.type.options ?? [] }); break;
       case 'annotation.type_edit': {
         const t = S.types.find((x) => x.id === op.id);
         if (t) applyTypeFields(t, op.fields);
@@ -198,7 +199,7 @@ export function opFromV1(raw: Record<string, any>): Op {
     case 'entity.include': return { op: raw.op, id: v1IncludeId(raw.id), included: raw.included, at };
     case 'category.include': return { op: raw.op, kind: raw.kind, label: raw.label, included: raw.included, at };
     // types made before value kinds existed carried only `options`: categories if any, else free text
-    case 'annotation.type': return { op: raw.op, type: { kind: raw.type.options?.length ? 'category' : 'text', ...raw.type }, at };
+    case 'annotation.type': return { op: raw.op, type: { kind: raw.type.options?.length ? 'category' : 'text', ...raw.type, options: raw.type.options ?? [] }, at };
     case 'annotation.add': return { op: raw.op, note: { ...raw.note, person: raw.note.person ? v1Person(raw.note.person) : null }, at };
     case 'annotation.edit': return { op: raw.op, id: raw.id, fields: raw.fields.person ? { ...raw.fields, person: v1Person(raw.fields.person) } : raw.fields, at };
     case 'annotation.delete': return { op: raw.op, id: raw.id, at };

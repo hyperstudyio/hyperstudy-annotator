@@ -43,7 +43,7 @@
   }
 
   let elsewhere = $state<TypesElsewhere | null>(null);
-  $effect(() => { if (!type) source.typesElsewhere().then((x) => (elsewhere = x)); });
+  $effect(() => { if (!type) source.typesElsewhere().then((x) => (elsewhere = x), (e) => s.toast(`Could not read the other videos' types: ${e}`)); });
   const have = $derived(new Set(s.S.types.map((x) => x.id)));
   async function copy(types: AnnotationType[]) {
     const missing = types.filter((x) => !have.has(x.id));
