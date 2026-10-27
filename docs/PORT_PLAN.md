@@ -29,8 +29,8 @@ Search the code for `TODO: [ANNOTATOR-PORT]` to find steps that are not finished
    (`track 126` to `face:126`, `Person O` to `person:Person O`), the session's queries. Unit tests.
 2. **Persistence.** Corrections through Tauri commands (`load/append/truncate/replace_corrections`), or
    `localStorage` in browser mode. Undo removes the newest batch (ops committed together share `at`).
-3. **Layout.** Header (counts, undo, import, export), stage, drawer with tabs (Inspect, Review, People, Annotate,
-   Data), splitters for the drawer width and timeline height, the `\` key.
+3. **Layout.** Header (counts, undo, import, export), stage, drawer with tabs (Inspect, Review, People; Annotate and
+   Data were folded into the timeline later: BACKEND_PLAN decisions), splitters for the drawer width and timeline height, the `\` key.
 4. **Overlay.** Faces (by person, dashed when excluded, candidate numbers), objects, skeletons, hands, landmarks,
    gaze (Gaze-LLE peak, or the py-feat ray), facing; display smoothing; click a face or object to select it.
 5. **Timeline.** Groups (Audio and speech, Prosody, People, Objects, Gestures, Social, Sounds, On-screen text,
@@ -41,10 +41,11 @@ Search the code for `TODO: [ANNOTATOR-PORT]` to find steps that are not finished
 6. **Inspector views.** Shot, utterance (speaker choice, candidates, prosody), face track (assign, py-feat at the
    playhead), person (merge, not a person, co-visible warning, similar people), object track and identity,
    sound, text, gesture, facing, gaze event, note. Lightboxes: every track of a person, compare two people.
-7. **Tabs.** Review queue (uncertain speakers by shot, possible duplicates, unconfirmed sounds), People,
-   Annotate (types: yes/no, category, number, text; about a person or the scene), Data (layers, models, licences).
-8. **Keys.** Space, Shift+Space, L, arrows, Shift+arrows, `,` `.` shots, `j` `k` review, `e` include, `[` `]`
-   annotate, 1-9 `o` `m` `u` `x` speaker, Esc, Cmd+Z, `\`.
+7. **Tabs.** Review queue (uncertain speakers by shot, possible duplicates, unconfirmed sounds), People. Annotation
+   types (yes/no, category, number, text; about a person or the scene) are made and edited on the timeline's
+   Annotations group; the models behind each group are its ⓘ.
+8. **Keys.** Space, Shift+Space, L, arrows, Shift+arrows, `,` `.` shots, `j` `k` review, `a` annotate the selection,
+   `[` `]` mark a span, `y` `n` and 1-9 a selected annotation's value, 1-9 `o` `m` `u` `x` speaker, Esc, Cmd+Z, `\`.
 9. **Browser check** of every step in Chrome against the prototype, then the native app.
 
 ## Status (2026-10-23)
