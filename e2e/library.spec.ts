@@ -259,3 +259,15 @@ test('Tab past either end of a pop-up closes it and returns to its button', asyn
   await expect(panel).toHaveCount(0);
   await expect(button).toBeFocused();
 });
+
+test('⌫ outside a text field never takes the app off its page (WebKit goes back on it)', async ({ page }) => {
+  await needsData(page);
+  await page.goto('/?library-demo');
+  await loaded(page);
+  const here = page.url();
+  await page.getByRole('button', { name: 'Layers shown in the timeline' }).click();
+  await page.getByRole('dialog', { name: 'Layers shown in the timeline' }).getByRole('checkbox').first().focus();
+  await page.keyboard.press('Backspace');
+  await expect(page).toHaveURL(here);
+  await expect(page.getByRole('dialog', { name: 'Layers shown in the timeline' })).toBeVisible();
+});
