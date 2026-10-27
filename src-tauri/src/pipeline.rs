@@ -422,12 +422,17 @@ impl<F: FnMut()> Drop for OnPanic<F> {
 }
 
 /// `--place NODE=PLACE` arguments for where the user chose nodes run. Node ids and places must have the CLI's own form,
-/// so nothing else reaches its command line: a node id, never an option (no leading '-'); a place `backend:target`, the
-/// target as cloud or SSH places will name theirs (cloud:a100, ssh:lab-gpu.local).
+/// so nothing else reaches its command line: a node id, never an option (no leading '-'); a place `backend:accelerator`
+/// as the plan offers them, the backend one of the pipeline's (native, self, cloud, runpod) or `ssh-NAME` for a lab
+/// server added as NAME, which is checked as `hosts add` checks it (host_args): ssh-liquidswords2:cuda.
 pub fn place_args(places: &std::collections::BTreeMap<String, String>) -> Result<Vec<String>> {
     let starts = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric());
     let id_ok = |s: &str| starts(s) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    let backend_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase());
+    let host_ok = |s: &str| (1..=31).contains(&s.len()) && starts(s) && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let backend_ok = |s: &str| match s.strip_prefix("ssh-") {
+        Some(host) => host_ok(host),
+        None => ["native", "self", "cloud", "runpod"].contains(&s),
+    };
     let target_ok = |s: &str| starts(s) && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || ".-_".contains(c));
     let mut out = vec![];
     for (node, place) in places {
@@ -1273,12 +1278,17 @@ esac
         let mut places = std::collections::BTreeMap::new();
         places.insert("faces".to_string(), "native:cpu".to_string());
         assert_eq!(place_args(&places).unwrap(), vec!["--place".to_string(), "faces=native:cpu".to_string()]);
-        let mut later = std::collections::BTreeMap::new();   // the places cloud and SSH backends will offer
-        later.insert("faces".to_string(), "cloud:a100".to_string());
-        later.insert("asr".to_string(), "ssh:lab-gpu.local".to_string());
-        assert!(place_args(&later).is_ok());
+        // the places the pipeline's plan offers: its backends (native, self, cloud, runpod, and ssh-NAME for a lab
+        // server added as NAME, hosts.py) and an accelerator
+        for place in ["cloud:cuda", "runpod:cuda", "self:cpu", "ssh-liquidswords2:cuda", "ssh-lab:cpu", "ssh-a:mps", "ssh-a234567890123456789012345678901:cuda"] {
+            let mut one = std::collections::BTreeMap::new();
+            one.insert("faces".to_string(), place.to_string());
+            assert_eq!(place_args(&one).unwrap(), vec!["--place".to_string(), format!("faces={place}")], "{place}");
+        }
         for (node, place) in [("faces", "native:cpu --allow-downloads"), ("../x", "native:cpu"), ("faces", "NATIVE:CPU"), ("faces", "native"),
-                              ("--allow-downloads", "native:cpu"), ("-x", "native:cpu")] {
+                              ("--allow-downloads", "native:cpu"), ("-x", "native:cpu"), ("faces", "ssh-:cuda"), ("faces", "ssh--x:cuda"),
+                              ("faces", "ssh-Lab:cuda"), ("faces", "ssh-lab.local:cuda"), ("faces", "ssh-a2345678901234567890123456789012:cuda"),
+                              ("faces", "lab-1:cuda"), ("faces", "ssh-lab:cuda=x"), ("faces", "foo:cuda"), ("faces", "ssh:cuda")] {
             let mut bad = std::collections::BTreeMap::new();
             bad.insert(node.to_string(), place.to_string());
             assert!(place_args(&bad).is_err(), "{node}={place}");
