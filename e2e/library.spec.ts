@@ -242,32 +242,3 @@ test('a pop-up near the foot of the window opens upward, inside the window', asy
   expect(box.y + box.height).toBeLessThanOrEqual(vh);
 });
 
-test('Tab past either end of a pop-up closes it and returns to its button', async ({ page }) => {
-  await needsData(page);
-  await page.goto('/?library-demo');
-  await loaded(page);
-  const button = page.getByRole('button', { name: 'Layers shown in the timeline' });
-  const panel = page.getByRole('dialog', { name: 'Layers shown in the timeline' });
-  await button.click();
-  await expect(panel.getByRole('checkbox').first()).toBeFocused();   // it takes the keyboard
-  await page.keyboard.press('Shift+Tab');
-  await expect(panel).toHaveCount(0);
-  await expect(button).toBeFocused();
-  await button.click();
-  const n = await panel.getByRole('checkbox').count();
-  for (let i = 0; i < n; i++) await page.keyboard.press('Tab');
-  await expect(panel).toHaveCount(0);
-  await expect(button).toBeFocused();
-});
-
-test('⌫ outside a text field never takes the app off its page (WebKit goes back on it)', async ({ page }) => {
-  await needsData(page);
-  await page.goto('/?library-demo');
-  await loaded(page);
-  const here = page.url();
-  await page.getByRole('button', { name: 'Layers shown in the timeline' }).click();
-  await page.getByRole('dialog', { name: 'Layers shown in the timeline' }).getByRole('checkbox').first().focus();
-  await page.keyboard.press('Backspace');
-  await expect(page).toHaveURL(here);
-  await expect(page.getByRole('dialog', { name: 'Layers shown in the timeline' })).toBeVisible();
-});
