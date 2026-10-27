@@ -434,7 +434,10 @@
   <footer>
     <div class="status" aria-live="polite">
       {#if error}<p class="error">{error}</p>{/if}
-      {#if stale && !busy}<p class="muted">Start run waits until what is chosen can be planned: choose again.</p>{/if}
+      <!-- a plan can fail for a reason that is not the choice (the pipeline or a server briefly unavailable), and the menu
+           already shows the choice, so choosing it again does nothing: Plan again plans the same choices -->
+      {#if stale && !busy}<p class="muted">Start run waits until what is chosen can be planned: choose again, or
+        <button class="link" onclick={() => makePlan(true)}>Plan again</button>.</p>{/if}
       {#if error && !plan && !busy && (Object.keys(places).length || Object.keys(settings).length)}
         <p><button class="link" onclick={unchoose}>Plan again with each step's own place and settings</button></p>
       {/if}
