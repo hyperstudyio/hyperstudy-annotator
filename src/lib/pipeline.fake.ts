@@ -197,9 +197,10 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     sshHosts: async () => ['lab-gpu', 'biowulf'],
     async checkCloud(provider) {
       unchecked('check');
-      if (provider === 'aws') return { ok: true, detail: 'aws can be used' };
-      const key = stored.get('RUNPOD_API_KEY');
-      return !key ? { ok: false, detail: 'no RunPod API key' } : key.startsWith('rejected') ? { ok: false, detail: 'RunPod did not accept the key in RUNPOD_API_KEY (401)' } : { ok: true, detail: 'runpod can be used' };
+      const key = stored.get('RUNPOD_API_KEY');   // the key it checks is the one when it starts
+      await (globalThis as { __holdCheck?: Promise<void> }).__holdCheck;   // tests: an answer held back (a slow network)
+      if (provider === 'runpod') return !key ? { ok: false, detail: 'no RunPod API key' } : key.startsWith('rejected') ? { ok: false, detail: 'RunPod did not accept the key in RUNPOD_API_KEY (401)' } : { ok: true, detail: 'runpod can be used' };
+      return { ok: true, detail: 'aws can be used' };
     },
     async checkKey(name) {
       unchecked('check');
