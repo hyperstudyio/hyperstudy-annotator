@@ -28,6 +28,7 @@ export type Lightbox = { kind: 'person'; person: string } | { kind: 'face'; face
 
 export type SelKind = 'face' | 'person' | 'utt' | 'sound' | 'text' | 'shot' | 'note' | 'object' | 'objid' | 'gesture' | 'facing' | 'gaze';
 export interface Selection { kind: SelKind; id: string }
+const same = (a: Selection | null, b: Selection | null) => !!a && !!b && a.kind === b.kind && a.id === b.id;
 /** A segment of a timeline row: what arrow keys step through. */
 export interface Segment { kind: SelKind; id: string; span: Span }
 
@@ -88,7 +89,9 @@ export class Session {
    *  Deselecting (Esc, which also stops a clip) keeps it: Back returns to what was selected. */
   noteSelection(now: Selection | null) {
     if (this.#goingBack) this.#goingBack = false;
-    else if (this.#previous && (!now || this.#previous.kind !== now.kind || this.#previous.id !== now.id)) this.history = [...this.history.slice(-19), this.#previous];
+    else if (this.#previous && !same(this.#previous, now)) this.history = [...this.history.slice(-19), this.#previous];
+    // selected again after Esc: it is no longer before this one
+    if (now && same(this.history.at(-1) ?? null, now)) this.history = this.history.slice(0, -1);
     this.#previous = now;
   }
   /** Back to the selection before this one. */
@@ -325,10 +328,11 @@ export class Session {
   /** Why the selection is left out of what agents receive, when an edit left it out (made before the annotator stopped
    *  deciding that, or Review's "Not there"), and the edit that puts it back; null when nothing did. Not a person is
    *  not this: it is put right by naming who the face is. */
-  leftOut(sel: Selection): { why: string; putBack: Op } | null {
+  leftOut(sel: Selection): { why: string; putBack: Op; action?: string } | null {
     const I = this.S.included, b = this.bundle;
     const byPerson = (p: string) => I[p] === false && p !== NOT_PERSON
       ? { why: `${this.nameOf(p)} was left out by an earlier edit.`, putBack: { op: 'entity.include', id: p, included: true } as Op } : null;
+    if (I[sel.id] === false && sel.kind === 'sound') return { why: 'Marked not there in Review.', putBack: { op: 'entity.include', id: sel.id, included: true }, action: 'Mark real' };
     if (I[sel.id] === false) return { why: 'Left out by an earlier edit.', putBack: { op: 'entity.include', id: sel.id, included: true } };
     switch (sel.kind) {
       case 'person': return byPerson(sel.id);

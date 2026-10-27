@@ -9,7 +9,7 @@
   const out = $derived(s.leftOut(sel));
 </script>
 
-{#if out}<p class="left-out">{out.why} <button class="link" onclick={() => s.commit(out.putBack)}>Put back</button></p>{/if}
+{#if out}<p class="left-out">{out.why} <button class="link" onclick={() => s.commit(out.putBack)}>{out.action ?? 'Put back'}</button></p>{/if}
 
 <style>
   .left-out { margin: 0 0 10px; padding: 6px 8px; border-radius: 6px; background: var(--color-caution-light); }
