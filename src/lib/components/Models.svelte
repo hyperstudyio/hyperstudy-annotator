@@ -38,8 +38,17 @@
   const leftover = $derived(rows.filter((r) => r.stored && r.name !== 'RUNPOD_API_KEY' && !used.has(r.name)
     && !(r.name === 'HF_TOKEN' && gated.length) && !(anthropicOld && r.name === 'ANTHROPIC_API_KEY')));
   let defaults = $state(loadDefaults());
-  const valueOf = (s: StepInfo, k: string, fallback: string | null) => defaults[s.node]?.[k] ?? fallback ?? '';
-  const choose = (s: StepInfo, k: string, v: string) => { defaults = saveDefault(s.node, k, v); };
+  // a default kept is the step's only while the pipeline still offers it (an update can take a model away): else its own
+  const valueOf = (s: StepInfo, k: string, fallback: string | null) => {
+    const kept = defaults[s.node]?.[k], choices = s.settings.find((x) => x.key === k)?.choices ?? [];
+    return (kept !== undefined && choices.includes(kept) ? kept : fallback) ?? '';
+  };
+  let unsaved = $state<string | null>(null);
+  const choose = (s: StepInfo, k: string, v: string) => {
+    const r = saveDefault(s.node, k, v);
+    defaults = r.defaults;
+    unsaved = r.saved ? null : `Could not keep this choice (${r.problem}): Extract plans with the step's own default.`;
+  };
   // its page from its id; then called as people say it (a Claude model by its name)
   const note = (m: ModelInfo) => {
     const n = modelNote({ id: m.id, source: m.source, revision: null, licence: null, licence_mode: m.licence_mode as LicenceMode });
@@ -72,6 +81,7 @@
             {/each}
             <div class="where muted">{[s.service ? `Runs on the ${s.service}` : 'Runs on your computers', ...modelsOf(s).map(size).filter(Boolean)].join(' · ')}</div>
             {#if s.settings.length}
+              {#if unsaved}<p class="error">{unsaved}</p>{/if}
               <div class="choices">
                 {#each s.settings as st (st.key)}
                   <label class="choice">{capital(st.key)}

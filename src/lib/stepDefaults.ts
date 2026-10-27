@@ -10,11 +10,15 @@ const KEY = 'hyperstudy-annotator:step-defaults';
 export function loadDefaults(storage: Storage | null = globalThis.localStorage ?? null): StepDefaults {
   try { return JSON.parse(storage?.getItem(KEY) ?? '{}') as StepDefaults; } catch { return {}; }   // none kept: the pipeline's
 }
-export function saveDefault(step: string, key: string, value: string, storage: Storage | null = globalThis.localStorage ?? null): StepDefaults {
-  const now = loadDefaults(storage);
-  now[step] = { ...now[step], [key]: value };
-  try { storage?.setItem(KEY, JSON.stringify(now)); } catch { /* not kept: Extract uses the pipeline's own default */ }
-  return now;
+/** Keep a default; `saved` false (and why) when it could not be kept, so it is said, not shown as kept. */
+export function saveDefault(step: string, key: string, value: string, storage: Storage | null = globalThis.localStorage ?? null):
+    { defaults: StepDefaults; saved: boolean; problem?: string } {
+  const before = loadDefaults(storage), now = { ...before, [step]: { ...before[step], [key]: value } };
+  try {
+    if (!storage) throw new Error('no storage here');
+    storage.setItem(KEY, JSON.stringify(now));
+    return { defaults: now, saved: true };
+  } catch (e) { return { defaults: before, saved: false, problem: String(e) }; }
 }
 
 /** The defaults a plan's steps take, by step id: each one the run has not chosen otherwise and that is one of the

@@ -70,7 +70,7 @@ export interface HostProbe { dest: string; root: string; caps: Host['caps'] }
 /** What a host is reached with over what ~/.ssh/config says (`hosts add|probe --user --port --identity`). */
 export interface SshOverrides { user?: string; port?: number; identity?: string }
 /** An error from a pipeline that predates a command (argparse: invalid choice), said as what to do. */
-export const tooOld = (e: unknown, what: string) => /invalid choice/.test(String(e)) ? `Update the pipeline to ${what}.` : String(e);
+export const tooOld = (e: unknown, what: string) => /invalid choice|unrecognized arguments/.test(String(e)) ? `Update the pipeline to ${what}.` : String(e);
 /** A key the app keeps for the pipeline (in the system keychain): what it is for and whether one is stored. The app
  *  never sends a key's value to this page. */
 export interface KeyStatus { name: string; label: string; purpose: string; url: string; stored: boolean }

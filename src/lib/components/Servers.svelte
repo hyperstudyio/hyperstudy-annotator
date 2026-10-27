@@ -53,8 +53,14 @@
     finally { busy = null; onbusy(null); }
   };
   const add = async () => {
-    if (await act(`Reaching ${dest.trim()}…`, () => api.host('add', name.trim(), dest.trim(), root.trim() || undefined, overrides()))) reset();
+    const o = overrides();
+    busy = `Reaching ${dest.trim()}…`; error = null; onbusy(busy);
+    try { onchange(await api.host('add', name.trim(), dest.trim(), root.trim() || undefined, o)); reset(); }
+    catch (e) { error = Object.keys(o).length ? tooOld(e, 'set a user, port or key file for a server') : String(e); }
+    finally { busy = null; onbusy(null); }
   };
+  // a test said what one host, user, port and key reached: changing any of them makes it unsaid
+  $effect(() => { void [dest, user, port, identity]; probed = null; });
   // what changes how it is reached, as ssh would be told it
   const via = (h: Host) => `${h.user ? `${h.user}@` : ''}${h.dest}${h.port ? `:${h.port}` : ''}${h.identity ? `, key ${h.identity.replace(/^.*\//, '')}` : ''}`;
   const when = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -88,8 +94,7 @@
       <p class="lede">Reached through your own <code>ssh</code>: your keys are never copied, and no password is asked.</p>
       <label for="server-dest">Host</label>
       <div class="field">
-        <input id="server-dest" bind:value={dest} list="ssh-hosts" placeholder="e.g. lab-gpu, or you@gpu.example.edu" autocomplete="off" spellcheck="false" required use:focus
-          oninput={() => (probed = null)} />
+        <input id="server-dest" bind:value={dest} list="ssh-hosts" placeholder="e.g. lab-gpu, or you@gpu.example.edu" autocomplete="off" spellcheck="false" required use:focus />
         <datalist id="ssh-hosts">{#each known as k (k)}<option value={k}></option>{/each}</datalist>
         <span class="muted">{known.length ? 'A host from your ~/.ssh/config, or user@host.' : 'user@host, or a host from your ~/.ssh/config.'}</span>
       </div>

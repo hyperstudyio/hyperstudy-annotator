@@ -635,6 +635,9 @@ test('a server is tested before it is added, with what overrides ~/.ssh/config f
   await form.getByLabel('Key file').fill('~/.ssh/id_lab');
   await form.getByRole('button', { name: 'Test connection' }).click();
   await expect(form.getByRole('status')).toContainText('Reached lab-gpu.example.edu: Linux, 32 cores');
+  await form.getByLabel('Port').fill('2223');
+  await expect(form.getByRole('status')).toHaveCount(0);                                 // what was tested is not this any more
+  await form.getByLabel('Port').fill('2222');
   expect(await page.evaluate(() => (window as unknown as { __pipelineServers: unknown[] }).__pipelineServers)).toEqual([]);   // nothing added by a test
   await form.getByRole('button', { name: 'Add server' }).click();
   const row = settings.getByRole('listitem', { name: 'lab-gpu' });
@@ -816,4 +819,13 @@ test('changing the captions default in Settings changes what Extract plans next,
   await extract.getByRole('button', { name: 'Start run' }).click();
   const runs = await page.evaluate(() => (window as unknown as { __pipelineRuns: { settings: Record<string, Record<string, string>> }[] }).__pipelineRuns);
   expect(runs.at(-1)!.settings.captions?.model ?? 'claude-haiku-5-5').toBe('claude-haiku-5-5');
+});
+
+test('a default the pipeline no longer offers is not shown as chosen: the step shows its own default', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('hyperstudy-annotator:step-defaults',
+    JSON.stringify({ 'vlm.shot-captions@1.0.0': { model: 'claude-sonnet-4' } })));   // a model an update took away
+  await page.goto('/?pipeline-demo');
+  const settings = await settingsAt(page, /^Models$/);
+  await expect(settings.getByRole('combobox', { name: 'Shot captions: model' })).toHaveValue('claude-haiku-5-5');
+  await expect(settings.getByRole('listitem', { name: 'Shot captions' })).toContainText('Claude Haiku 5.5');
 });
