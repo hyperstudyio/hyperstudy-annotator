@@ -36,11 +36,15 @@
     return () => watch.disconnect();
   });
   const focusable = () => [...(panelEl?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]') ?? [])];
+  // Tab moves through the panel's own controls here, not by the engine's order: WebKit (the desktop app's) skips
+  // buttons and checkboxes by default, which would take the focus out of an open panel. Past an end: back to the button.
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') { e.stopPropagation(); back(); return; }
     if (e.key !== 'Tab') return;
-    const f = focusable(), at = f.indexOf(document.activeElement as HTMLElement);
-    if ((e.shiftKey && at <= 0) || (!e.shiftKey && at === f.length - 1)) { e.preventDefault(); back(); }   // past an end: back to the button
+    e.preventDefault();
+    const f = focusable(), at = f.indexOf(document.activeElement as HTMLElement), next = at + (e.shiftKey ? -1 : 1);
+    if (at < 0 || next < 0 || next >= f.length) back();
+    else f[next].focus();
   }
   // focus gone somewhere that is neither the panel nor its button (a click elsewhere is `outside`)
   const onfocusout = (e: FocusEvent) => {

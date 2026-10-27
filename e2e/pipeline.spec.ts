@@ -891,3 +891,15 @@ test("testing AWS keeps its answer when RunPod's key changes", async ({ page }) 
   await cloud.getByRole('button', { name: 'Add RunPod' }).click();
   await expect(aws.locator('p.tested')).toHaveText('✓ AWS can be used.');
 });
+
+test("a Test that fails leaves no earlier ✓ beside its error", async ({ page }) => {
+  await page.goto('/?pipeline-demo=remote');
+  const settings = await settingsAt(page, /^Compute$/);
+  const aws = settings.getByRole('region', { name: 'Cloud GPU' }).getByRole('listitem', { name: 'AWS', exact: true });
+  await aws.getByRole('button', { name: 'Test AWS' }).click();
+  await expect(aws.locator('p.tested')).toHaveText('✓ AWS can be used.');
+  await page.evaluate(() => { (window as unknown as { __holdCheck?: Promise<void> }).__holdCheck = Promise.reject(new Error('the pipeline failed: network is unreachable')); });
+  await aws.getByRole('button', { name: 'Test AWS' }).click();
+  await expect(settings.getByText(/network is unreachable/)).toBeVisible();
+  await expect(aws.locator('p.tested')).toHaveCount(0);
+});
