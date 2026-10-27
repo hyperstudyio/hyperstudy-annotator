@@ -94,7 +94,7 @@
   .overlays { display: grid; gap: 2px; padding: 2px; }
   .head { display: flex; justify-content: space-between; align-items: baseline; padding: 4px 8px 6px; color: var(--color-text-muted); font-size: 12px; }
   .row { border-radius: 6px; }
-  .row.on { background: var(--color-primary-light); box-shadow: inset 2px 0 0 var(--color-primary); }
+  .row.on { background: var(--color-primary-light); box-shadow: inset 0 0 0 1px var(--color-primary); }   /* as a button that is on (Loop) */
   .line { display: flex; align-items: center; }
   .toggle { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 7px 10px; color: var(--color-text-muted); }
   .style { flex: none; background: none; border: 0; padding: 4px 8px; color: var(--color-text-muted); }

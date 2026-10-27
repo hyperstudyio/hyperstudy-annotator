@@ -52,6 +52,10 @@
     | { kind: 'resize'; id: string; y: number; h0: number; now: number }
     | { kind: 'retime'; note: string; mode: RetimeMode; x: number; t0: number; from: Span; span: Span; at: number | null; times: number[]; moved: boolean; px: number; py: number };
   let gesture = $state<Gesture | null>(null);
+  // an annotation dropped where it was dragged, drawn there until its edit is in the log: the log's times change only
+  // once the store has the edit, which in the app is a round trip to its database, so the bar would show its old
+  // place in between
+  let landing = $state.raw<{ note: string; span: Span } | null>(null);   // raw: compared by identity when cleared
   let resizingTimeline = $state(false);
 
   const timeOf = (e: PointerEvent) => timeAtX(e.clientX, content!.getBoundingClientRect().left, pps, duration);
@@ -185,8 +189,12 @@
       case 'resize': if (g.now !== g.h0) s.view.setHeight(g.id, g.now); break;
       case 'retime': {
         if (!g.moved) { s.select('note', g.note); s.clickPlay(); break; }   // a click: as any bar
-        if (g.span.start !== g.from.start || g.span.end !== g.from.end)
-          await s.commit({ op: 'annotation.edit', id: g.note, fields: { start: g.span.start, end: g.span.end } });
+        if (g.span.start !== g.from.start || g.span.end !== g.from.end) {
+          const mine = { note: g.note, span: g.span };   // another drop while this one saves has its own
+          landing = mine;
+          try { await s.commit({ op: 'annotation.edit', id: g.note, fields: { start: g.span.start, end: g.span.end } }); }
+          finally { if (landing === mine) landing = null; }
+        }
         s.select('note', g.note, { seek: false });
         break;
       }
@@ -261,7 +269,8 @@
   });
   const heightOf = (row: Row) => (gesture?.kind === 'resize' && gesture.id === row.id ? gesture.now : rowHeight(row, s.view.s.heights));
   // an annotation being dragged is drawn where it would go
-  const spanOf = (bar: Bar): Span => (gesture?.kind === 'retime' && gesture.note === bar.retime ? gesture.span : bar);
+  const spanOf = (bar: Bar): Span => (gesture?.kind === 'retime' && gesture.note === bar.retime ? gesture.span
+    : landing && landing.note === bar.retime ? landing.span : bar);
   const barStyle = (b: Bar, bar = { ...b, ...spanOf(b) }) => `left:${bar.start * pps}px; width:${Math.max(3, (bar.end - bar.start) * pps - 1)}px; top:${bar.top ?? (bar.row ?? 0) * ROW_H + 3}px;${bar.colour ? ` background:${bar.colour};` : ''}`;
 </script>
 
