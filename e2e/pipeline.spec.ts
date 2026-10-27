@@ -749,6 +749,11 @@ test('RunPod whose key has gone keeps a Test of its own, which says the key is m
   await expect(runpod.getByRole('button', { name: 'Test the RunPod key' })).toHaveCount(0);   // nothing for the key to test
   await runpod.getByRole('button', { name: 'Test RunPod' }).click();
   await expect(runpod.locator('p.tested')).toHaveText('no RunPod API key.');
+  await runpod.getByRole('button', { name: 'Add the RunPod key' }).click();         // the next thing done
+  await runpod.getByRole('textbox', { name: 'RunPod key' }).fill('rp-good');
+  await runpod.getByRole('button', { name: 'Save' }).click();
+  await expect(runpod.getByRole('listitem', { name: 'RunPod key' })).toContainText('Saved in the keychain');
+  await expect(runpod.locator('p.tested')).toHaveCount(0);                            // said of the key before
 });
 
 test('RunPod is added with its key, is then a place for a step, and removing it removes its key', async ({ page }) => {

@@ -48,11 +48,12 @@
       catch (e) { if (saved) onkeys(await api.removeKey('RUNPOD_API_KEY')); throw e; }
     })) { changed(p); adding = null; }
   };
-  // What a Test said is shown only while the provider it was said of is unchanged (each time it is added or removed):
-  // a Test that answers after it was removed and added again, or about another provider, is not shown as the new one's.
+  // What a Test said is shown only while what it was said of is unchanged: the provider (each time it is added or
+  // removed, and RunPod's key each time it is saved here) and where RunPod's key is found. RunPod's own Test, shown
+  // while its key has gone, says so: adding the key is the next thing done, and the answer is not the new key's.
   let changes = $state<Record<CloudProviderName, number>>({ aws: 0, runpod: 0 });
   const changed = (p: CloudProviderName) => { changes = { ...changes, [p]: changes[p] + 1 }; };
-  const about = (p: CloudProviderName) => `${changes[p]}`;
+  const about = (p: CloudProviderName) => `${changes[p]}|${p === 'runpod' ? `${runpodKey?.stored}|${runpodKey?.elsewhere ?? ''}` : ''}`;
   let results = $state<Partial<Record<CloudProviderName, { about: string; said: CheckResult }>>>({});
   const tested = $derived(Object.fromEntries((Object.keys(results) as CloudProviderName[])
     .filter((p) => results[p]!.about === about(p)).map((p) => [p, results[p]!.said])) as Partial<Record<CloudProviderName, CheckResult>>);
@@ -63,6 +64,7 @@
     results = others;
     try { results = { ...results, [p]: { about: of, said: await api.checkCloud(p) } }; } catch (e) { error = tooOld(e, 'test cloud providers'); } finally { busy = null; }
   };
+  const keyChanged = (now: KeyStatus[]) => { changed('runpod'); onkeys(now); };
   const remove = (p: CloudProviderName) => act(`Removing ${NAMES[p]}…`, async () => {
     changed(p);
     onchange(await api.cloud(false, p));
@@ -99,7 +101,7 @@
           </div>
           {#if tested[p]}<p class="tested" class:ok={tested[p]!.ok} class:error={!tested[p]!.ok} role="status">{tested[p]!.ok ? `✓ ${NAMES[p]} can be used` : tested[p]!.detail}.</p>{/if}
           {#if p === 'runpod' && runpodKey}
-            <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} removable={false} onchange={onkeys} {onbusy} /></ul>
+            <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} removable={false} onchange={keyChanged} {onbusy} /></ul>
           {:else if p === 'aws'}
             <p class="muted">Uses the AWS credentials on this computer.</p>
           {/if}
