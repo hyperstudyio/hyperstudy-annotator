@@ -193,6 +193,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       return { ...cloud, runpod: { ...cloud.runpod! } };
     },
     async models() {
+      older('models');
       const all = plan.nodes.flatMap((n) => (n.models ?? []).map((m) => ({ node: n.uses, ...m, gated: false })));
       return gated ? [...all, { node: 'audio.diarize@1.0.0', id: 'pyannote/speaker-diarization-3.1', source: 'hf://pyannote/speaker-diarization-3.1', size_gb: 0.1, gated: true, licence_mode: 'commercial-ok' }] : all;
     },

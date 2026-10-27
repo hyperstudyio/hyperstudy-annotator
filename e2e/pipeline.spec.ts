@@ -566,6 +566,13 @@ test('gated models are listed with where to ask for access; with none, Models sa
   await expect(settings.getByRole('listitem', { name: 'Hugging Face key' })).toHaveCount(0);   // asked for only where it is needed
 });
 
+test('a pipeline that cannot list its models still offers the Hugging Face key, and says nothing is wrong', async ({ page }) => {
+  await page.goto('/?pipeline-demo=old-cli');
+  const settings = await settingsAt(page, /^Models$/);
+  await expect(settings.getByRole('listitem', { name: 'Hugging Face key' })).toBeVisible();
+  await expect(settings.getByText(/Could not list the models/)).toHaveCount(0);   // an older pipeline, not a failure
+});
+
 test('a step missing a key says which, and leads to where it is set', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=missing-key');
   await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();

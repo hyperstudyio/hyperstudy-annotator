@@ -60,7 +60,7 @@
 </script>
 
 {#snippet switcher()}
-  <Popover label={`Switch video, now ${currentBundle?.title ?? ''}`} width={320} buttonClass="switch">
+  <Popover label={`Switch video, now ${currentBundle?.title ?? ''}`} width={320} buttonClass="video-switch">
     {#snippet button()}<span class="title">{currentBundle?.title ?? 'Videos'}</span>{/snippet}
     {#snippet children(close)}
       {#if (bundles?.length ?? 0) > 6}<input class="filter" type="search" bind:value={filter} placeholder="Find a video" aria-label="Find a video" />{/if}
@@ -120,8 +120,8 @@
   .status { display: flex; gap: 10px; align-items: center; padding: 6px 16px; font-size: 12px; border-bottom: 1px solid var(--color-border-default); }
   .bar { padding: 8px 16px; background: var(--color-bg-surface); border-bottom: 1px solid var(--color-border-default); }
   /* the video's name, as the header's title: a menu that does not look like a button until you point at it */
-  :global(.switch) { background: none !important; border-color: transparent !important; padding: 2px 6px !important; margin-left: -6px; }
-  :global(.switch:hover) { background: var(--color-bg-hover) !important; }
+  :global(button.video-switch) { background: none; border-color: transparent; padding: 2px 6px; margin-left: -6px; }
+  :global(button.video-switch:hover:not(:disabled)) { background: var(--color-bg-hover); }
   .title { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .filter { width: calc(100% - 8px); margin: 4px; }
   .videos { list-style: none; margin: 0; padding: 0; }

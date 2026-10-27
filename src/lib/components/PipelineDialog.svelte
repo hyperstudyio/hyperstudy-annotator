@@ -376,7 +376,7 @@
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
                 {#if n.cost_usd}<span>{machineCost(plan, n) ? 'Up to ' : ''}${n.cost_usd.toFixed(2)}</span>{/if}
                 {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
-                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.('models')}>add it in Settings</button></span>{/each}
+                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'machines' : 'models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
                 <span class="muted" id={`before-${n.id}`}>Turn on {list(before.map(titleOf))} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
               {/if}

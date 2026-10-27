@@ -220,9 +220,24 @@ impl Procs {
     }
 }
 
-/// Whether any process of the group `g` is left (on Windows, `stop_process` already ended the whole tree, forcibly).
+/// Whether any process of the group `g` is still running (on Windows, `stop_process` already ended the whole tree,
+/// forcibly).
 fn group_alive(g: u32) -> bool {
-    cfg!(unix) && Command::new("kill").args(["-0", "--", &format!("-{g}")]).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    cfg!(unix) && running(|_, pgid| pgid == g)
+}
+
+/// Whether a process that `which(pid, pgid)` picks is running. A zombie is not: it has ended and waits only to be
+/// reaped, and one whose parent was killed with it waits for the system to reap it, in its own time (`kill -0`, which
+/// succeeds on a zombie, held quitting for the whole grace and took a group TERM had ended for one it had to kill).
+fn running(which: impl Fn(u32, u32) -> bool) -> bool {
+    let Ok(out) = Command::new("ps").args(["-A", "-o", "pid=,pgid=,stat="]).stderr(Stdio::null()).output() else { return false };
+    String::from_utf8_lossy(&out.stdout).lines().any(|l| {
+        let mut f = l.split_whitespace();
+        match (f.next().and_then(|x| x.parse().ok()), f.next().and_then(|x| x.parse().ok()), f.next()) {
+            (Some(pid), Some(pgid), Some(stat)) => which(pid, pgid) && !stat.starts_with('Z'),
+            _ => false,
+        }
+    })
 }
 
 /// The app is quitting (`commands::stop_on_exit`): a run in progress is canceled as Cancel does, then every command the
@@ -861,7 +876,22 @@ printf '{\"v\": 1, \"type\": \"doctor\", \"path\": \"%s\", \"pref\": \"%s\", \"p
     }
 
     fn alive(pid: u32) -> bool {
-        Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().unwrap().success()
+        running(|p, _| p == pid)
+    }
+
+    #[test]
+    fn a_zombie_is_not_running() {
+        // exited and never waited for: a zombie, which `kill -0` still finds
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !String::from_utf8_lossy(&Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap().stdout).trim().starts_with('Z') {
+            assert!(std::time::Instant::now() < deadline, "the child never ended");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(Command::new("kill").args(["-0", &pid.to_string()]).status().unwrap().success(), "kill -0 finds a zombie");
+        assert!(!alive(pid) && !group_alive(pid), "a zombie counted as running");
+        child.wait().unwrap();
     }
 
     #[test]

@@ -382,12 +382,12 @@ pub async fn pipeline_cloud(state: State<'_, AppState>, on: Option<bool>, provid
     blocking(move || p.one(&args, "cloud")).await
 }
 
-/// The CLI's arguments for `pipeline_cloud`: only the providers the pipeline knows reach its command line.
+/// The CLI's arguments for `pipeline_cloud`: only the providers the pipeline knows reach its command line. AWS is the
+/// CLI's default and is not named, so a pipeline from before RunPod (no provider argument) still turns it on and off.
 pub fn cloud_args(on: Option<bool>, provider: Option<&str>) -> Result<Vec<&'static str>> {
     let action = match on { None => "status", Some(true) => "on", Some(false) => "off" };
     let provider = match provider {
-        None => None,
-        Some("aws") => Some("aws"),
+        None | Some("aws") => None,
         Some("runpod") => Some("runpod"),
         Some(other) => return Err(Error::Bundle(format!("not a cloud provider the pipeline has: {other:?}"))),
     };
@@ -588,7 +588,7 @@ mod tests {
     fn only_known_cloud_providers_reach_the_command_line() {
         assert_eq!(cloud_args(None, None).unwrap(), ["cloud", "status"]);
         assert_eq!(cloud_args(Some(true), Some("runpod")).unwrap(), ["cloud", "on", "runpod"]);
-        assert_eq!(cloud_args(Some(false), Some("aws")).unwrap(), ["cloud", "off", "aws"]);
+        assert_eq!(cloud_args(Some(false), Some("aws")).unwrap(), ["cloud", "off"]);   // the default: an older pipeline has no argument for it
         for bad in ["gcp", "--json", "runpod; rm", ""] {
             assert!(cloud_args(Some(true), Some(bad)).is_err(), "{bad:?}");
         }

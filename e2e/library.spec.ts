@@ -161,3 +161,18 @@ test('Export saves the annotated result, with the edits, as <title>.annotated.js
   expect(saved.format).toBe('perception-annotated/1');
   expect(Array.isArray(saved.edits)).toBe(true);
 });
+
+test('an on/off switch in the panel looks on when on and off when off (the switcher\'s style is its own)', async ({ page }) => {
+  await page.goto('/?library-demo');
+  await needsData(page);
+  await loaded(page);
+  const toggle = page.locator('.toggle', { hasText: 'Send this caption to agents' });
+  const track = toggle.locator('.switch');
+  const colour = () => track.evaluate((el) => getComputedStyle(el).backgroundColor);
+  const before = await colour();
+  const was = await toggle.locator('input').isChecked();
+  await toggle.click();
+  await expect(toggle.locator('input')).toBeChecked({ checked: !was });
+  await expect.poll(colour).not.toBe(before);   // after its 0.15 s transition
+  expect(before).not.toBe('rgba(0, 0, 0, 0)');   // drawn either way, not see-through
+});
