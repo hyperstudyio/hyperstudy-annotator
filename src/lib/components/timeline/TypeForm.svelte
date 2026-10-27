@@ -5,7 +5,7 @@
   // use; and it cannot be deleted (Session.usesOf).
   import { useSession, useSource } from '../../model/context';
   import { VALUE_KINDS } from '../../model/session.svelte';
-  import type { AnnotationType, ValueKind } from '../../model/corrections';
+  import { applyTypeFields, type AnnotationType, type TypeFields, type ValueKind } from '../../model/corrections';
   import type { TypesElsewhere } from '../../source';
 
   let { type, close }: { type?: AnnotationType; close: () => void } = $props();
@@ -18,9 +18,9 @@
   const usedValue = (o: string) => uses.filter((n) => n.value === o).length;
   let option = $state('');
 
-  function set(fields: Partial<Omit<AnnotationType, 'id'>>) {
+  function set(fields: TypeFields) {
     if (type) s.commit({ op: 'annotation.type_edit', id: type.id, fields });
-    else Object.assign(draft, fields);
+    else applyTypeFields(draft, fields);
   }
   function addOption() {
     const o = option.trim();
@@ -84,9 +84,9 @@
   {:else if t.kind === 'number'}
     <div class="field">Range
       <span class="range">
-        <input type="number" aria-label="Minimum" placeholder="min" value={t.min ?? ''} onchange={(e) => set({ min: e.currentTarget.value === '' ? undefined : Number(e.currentTarget.value) })} />
+        <input type="number" aria-label="Minimum" placeholder="min" value={t.min ?? ''} onchange={(e) => set({ min: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) })} />
         to
-        <input type="number" aria-label="Maximum" placeholder="max" value={t.max ?? ''} onchange={(e) => set({ max: e.currentTarget.value === '' ? undefined : Number(e.currentTarget.value) })} />
+        <input type="number" aria-label="Maximum" placeholder="max" value={t.max ?? ''} onchange={(e) => set({ max: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) })} />
       </span>
     </div>
   {/if}
@@ -107,7 +107,7 @@
     {#if elsewhere?.length}
       <div class="copy">
         <div class="meta">Or copy from another video</div>
-        {#each elsewhere as v (v.title)}
+        {#each elsewhere as v (v.key)}
           {@const missing = v.types.filter((x) => !have.has(x.id))}
           <div class="video">
             <span class="grow"><span class="title">{v.title}</span><span class="meta">{v.types.map((x) => x.name).join(', ')}</span></span>

@@ -84,3 +84,29 @@ test("another video's types are copied into this one", async ({ page }) => {
   await expect(typeRow(page, 'Mood')).toBeVisible();
   await expect(typeRow(page, 'Laughs')).toBeVisible();
 });
+
+test('a cleared range bound stays cleared after a reload', async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Intensity');
+  await form.getByLabel('Value kind').selectOption('number');
+  await form.getByLabel('Minimum').fill('0');
+  await form.getByLabel('Maximum').fill('10');
+  await form.getByRole('button', { name: 'Add type' }).click();
+  const editor = async () => {
+    await header(page).scrollIntoViewIfNeeded();
+    await typeRow(page, 'Intensity').getByRole('button', { name: 'Annotation type Intensity', exact: true }).click();
+    return page.getByRole('dialog', { name: 'Annotation type Intensity' });
+  };
+  let edit = await editor();
+  await expect(edit.getByLabel('Minimum')).toHaveValue('0');
+  await edit.getByLabel('Minimum').fill('');
+  await edit.getByLabel('Minimum').press('Tab');   // change fires as the field is left
+  await page.reload();
+  await page.locator('.tl-content').waitFor();
+  edit = await editor();
+  await expect(edit.getByLabel('Minimum')).toHaveValue('');
+  await expect(edit.getByLabel('Maximum')).toHaveValue('10');
+});

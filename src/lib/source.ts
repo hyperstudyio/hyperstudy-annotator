@@ -71,7 +71,8 @@ export interface BundleSource {
   typesElsewhere(): Promise<TypesElsewhere>;
 }
 
-export type TypesElsewhere = { title: string; types: AnnotationType[] }[];
+/** By the log they come from (a bundle id, or a browser's storage key): runs of different videos can share a title. */
+export type TypesElsewhere = { key: string; title: string; types: AnnotationType[] }[];
 
 export const inTauri = () => '__TAURI_INTERNALS__' in window;
 
@@ -120,8 +121,9 @@ export async function tauriSource(id: string): Promise<BundleSource> {
       replace: (ops) => api.replaceCorrections(id, ops),
     },
     async typesElsewhere() {
-      const others = (await api.list()).filter((b) => b.id !== id && b.corrections > 0);
-      return typesIn(await Promise.all(others.map(async (b) => ({ title: b.title, ops: await api.loadCorrections(b.id) }))));
+      // other videos: this video's other runs are its versions, whose types carry over with their ids
+      const others = (await api.list()).filter((b) => b.video_sha256 !== summary.video_sha256 && b.corrections > 0);
+      return typesIn(await Promise.all(others.map(async (b) => ({ key: b.id, title: b.title, ops: await api.loadCorrections(b.id) }))));
     },
     lineage: {
       record: () => api.getCarryover(id),
@@ -181,13 +183,14 @@ export class LocalCorrectionStore implements CorrectionStore {
   }
 }
 
-/** Browser mode's other videos: the other logs this browser keeps, named by the title kept when each was opened. */
-export function localTypesElsewhere(own: string, storage: Storage = localStorage): TypesElsewhere {
-  const prefix = 'hyperstudy-annotator:corrections:', logs: { title: string; ops: Op[] }[] = [];
+/** Browser mode's other videos: the logs this browser keeps for other videos (a video's logs are keyed by its sha256,
+ *  then a run's URL), named by the title kept when each was opened. */
+export function localTypesElsewhere(videoSha256: string, storage: Storage = localStorage): TypesElsewhere {
+  const prefix = 'hyperstudy-annotator:corrections:', logs: { key: string; title: string; ops: Op[] }[] = [];
   for (let i = 0; i < storage.length; i++) {
     const key = storage.key(i);
-    if (!key?.startsWith(prefix) || key === own) continue;
-    logs.push({ title: storage.getItem(key.replace(':corrections:', ':title:')) ?? key.slice(prefix.length, prefix.length + 12), ops: JSON.parse(storage.getItem(key) ?? '[]') });
+    if (!key?.startsWith(prefix) || key.startsWith(prefix + videoSha256)) continue;
+    logs.push({ key, title: storage.getItem(key.replace(':corrections:', ':title:')) ?? key.slice(prefix.length, prefix.length + 12), ops: JSON.parse(storage.getItem(key) ?? '[]') });
   }
   return typesIn(logs);
 }
@@ -248,7 +251,7 @@ export async function httpSource(bundleUrl: string, videoUrl: string | null, pre
     videoUrl,
     corrections: store,
     lineage: previousUrl ? localLineage(base, previousUrl, videoUrl, store) : undefined,
-    async typesElsewhere() { return localTypesElsewhere(store.key); },
+    async typesElsewhere() { return localTypesElsewhere(manifest.video.sha256); },
     async layer<T>(name: string) {
       const entry = manifest.layers[name];
       return entry ? getJson<T>(entry.file) : null;

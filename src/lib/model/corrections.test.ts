@@ -121,8 +121,8 @@ test('references to ids the bundle does not define are reported', () => {
 test("other videos' types are listed by video, each once, and videos with none are left out", () => {
   const mood: AnnotationType = { id: 'type:1', name: 'Mood', kind: 'binary', target: 'scene', options: [] };
   expect(typesIn([
-    { title: 'clip1', ops: [{ op: 'annotation.type', type: mood }, { op: 'annotation.type', type: mood }] },
-    { title: 'clip2', ops: [{ op: 'person.rename', person: 'person:A', name: 'x' }] },
-    { title: 'clip3', ops: [{ op: 'annotation.type', type: mood }, { op: 'annotation.type_delete', id: 'type:1' }] },
-  ])).toEqual([{ title: 'clip1', types: [mood] }]);
+    { key: 'b1', title: 'clip1', ops: [{ op: 'annotation.type', type: mood }, { op: 'annotation.type', type: mood }] },
+    { key: 'b2', title: 'clip2', ops: [{ op: 'person.rename', person: 'person:A', name: 'x' }] },
+    { key: 'b3', title: 'clip3', ops: [{ op: 'annotation.type', type: mood }, { op: 'annotation.type_delete', id: 'type:1' }] },
+  ])).toEqual([{ key: 'b1', title: 'clip1', types: [mood] }]);
 });

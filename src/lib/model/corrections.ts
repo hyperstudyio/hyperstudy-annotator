@@ -10,6 +10,12 @@ export const NOT_PERSON = 'not_person';  // false detections, faces in pictures 
 
 export type ValueKind = 'binary' | 'category' | 'number' | 'text';
 export interface AnnotationType { id: string; name: string; kind: ValueKind; target: 'person' | 'scene'; options: string[]; min?: number; max?: number }
+/** A type's fields an edit changes. A range bound is cleared with null: an op is stored as JSON, which drops a key
+ *  whose value is undefined, so the cleared bound would come back when the log is read. */
+export type TypeFields = Partial<Omit<AnnotationType, 'id' | 'min' | 'max'>> & { min?: number | null; max?: number | null };
+export function applyTypeFields(t: AnnotationType, fields: TypeFields) {
+  for (const [k, v] of Object.entries(fields)) { if (v === null) delete t[k as 'min' | 'max']; else Object.assign(t, { [k]: v }); }
+}
 export interface Note { id: string; type: string; start: number; end: number; value: boolean | string | number | null; person: string | null }
 
 /** `carried_from`: an op carried over from an earlier version's log (a re-run), naming the op it copies there.
@@ -31,7 +37,7 @@ export type Op = { at?: string; carried_from?: { bundle: string; index: number }
   | { op: 'entity.include'; id: string; included: boolean }
   | { op: 'category.include'; kind: string; label: string; included: boolean }
   | { op: 'annotation.type'; type: AnnotationType }
-  | { op: 'annotation.type_edit'; id: string; fields: Partial<Omit<AnnotationType, 'id'>> }
+  | { op: 'annotation.type_edit'; id: string; fields: TypeFields }
   | { op: 'annotation.type_delete'; id: string }
   | { op: 'annotation.add'; note: Note }
   | { op: 'annotation.edit'; id: string; fields: Partial<Omit<Note, 'id' | 'type'>> }
@@ -90,7 +96,11 @@ export function fold(ops: Op[]): Corrected {
       case 'entity.include': S.included[op.id] = op.included; break;
       case 'category.include': S.category[`${op.kind}:${op.label}`] = op.included; break;
       case 'annotation.type': S.types.push({ ...op.type, options: [...op.type.options] }); break;
-      case 'annotation.type_edit': { const t = S.types.find((x) => x.id === op.id); if (t) Object.assign(t, op.fields); break; }
+      case 'annotation.type_edit': {
+        const t = S.types.find((x) => x.id === op.id);
+        if (t) applyTypeFields(t, op.fields);
+        break;
+      }
       case 'annotation.type_delete': S.types = S.types.filter((x) => x.id !== op.id); break;
       case 'annotation.add': S.notes.set(op.note.id, { ...op.note }); break;
       case 'annotation.edit': { const n = S.notes.get(op.id); if (n) Object.assign(n, op.fields); break; }
@@ -101,8 +111,8 @@ export function fold(ops: Op[]): Corrected {
 }
 
 /** The annotation types other videos' logs define, by video (to copy from one); videos with none are left out. */
-export function typesIn(logs: { title: string; ops: Op[] }[]): { title: string; types: AnnotationType[] }[] {
-  return logs.map(({ title, ops }) => ({ title, types: fold(ops).types.filter((t, i, all) => all.findIndex((x) => x.id === t.id) === i) }))
+export function typesIn(logs: { key: string; title: string; ops: Op[] }[]): { key: string; title: string; types: AnnotationType[] }[] {
+  return logs.map(({ key, title, ops }) => ({ key, title, types: fold(ops).types.filter((t, i, all) => all.findIndex((x) => x.id === t.id) === i) }))
     .filter((x) => x.types.length);
 }
 

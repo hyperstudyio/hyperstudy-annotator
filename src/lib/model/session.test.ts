@@ -356,12 +356,24 @@ describe('annotation types', () => {
     expect(s.usesOf('type:gaze')).toHaveLength(0);
   });
 
-  test("in a browser, other videos are the other logs it keeps, named by their titles", async () => {
+  test("in a browser, other videos are the other logs it keeps, by log, named by their titles; this video's other runs are not", async () => {
+    const storage = new MemoryStorage(), A = 'a'.repeat(64);
+    const own = new LocalCorrectionStore(A, storage, 'run2'), ownFirst = new LocalCorrectionStore(A, storage);
+    const b = new LocalCorrectionStore('b'.repeat(64), storage), c = new LocalCorrectionStore('c'.repeat(64), storage);
+    for (const st of [own, ownFirst]) await st.append([{ op: 'annotation.type', type: gaze }]);
+    for (const st of [b, c]) { await st.append([{ op: 'annotation.type', type: mood }]); storage.setItem(st.key.replace(':corrections:', ':title:'), 'clip'); }
+    expect(localTypesElsewhere(A, storage)).toEqual([{ key: b.key, title: 'clip', types: [mood] }, { key: c.key, title: 'clip', types: [mood] }]);
+  });
+
+  test("a cleared number range stays cleared when the log is read back", async () => {
     const storage = new MemoryStorage();
-    const own = new LocalCorrectionStore('a'.repeat(64), storage), other = new LocalCorrectionStore('b'.repeat(64), storage);
-    await own.append([{ op: 'annotation.type', type: gaze }]);
-    await other.append([{ op: 'annotation.type', type: mood }]);
-    storage.setItem(other.key.replace(':corrections:', ':title:'), 'clip2');
-    expect(localTypesElsewhere(own.key, storage)).toEqual([{ title: 'clip2', types: [mood] }]);
+    const { s } = session(makeBundle(), storage);
+    const n: AnnotationType = { id: 'type:n', name: 'Intensity', kind: 'number', target: 'scene', options: [], min: 0, max: 10 };
+    await s.addType(n);
+    await s.commit({ op: 'annotation.type_edit', id: 'type:n', fields: { min: null } });
+    const again = session(makeBundle(), storage).s;
+    await again.load();
+    expect(again.typeOf('type:n')).toEqual({ ...n, min: undefined });
+    expect('min' in again.typeOf('type:n')!).toBe(false);
   });
 });
