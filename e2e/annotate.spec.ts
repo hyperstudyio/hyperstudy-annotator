@@ -173,3 +173,33 @@ test("an annotation is moved by its middle and lengthened or shortened by its en
   await page.mouse.up();
   await expect(span).toContainText('–0:02.8');
 });
+
+test('a dropped annotation goes straight to where it was dragged, never back to where it was first', async ({ page }) => {
+  await open(page);
+  await header(page).scrollIntoViewIfNeeded();
+  await header(page).getByRole('button', { name: 'New annotation type', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'New annotation type' });
+  await form.getByLabel('Type name').fill('Engaged');
+  await form.getByRole('button', { name: 'Add type' }).click();
+  await page.keyboard.press('a');
+  await page.locator('.zoom input').fill('12');
+  const bar = typeRow(page, 'Engaged').locator('.bar');
+  await bar.scrollIntoViewIfNeeded();
+  const box = (await bar.boundingBox())!, y = box.y + box.height / 2;
+  await page.keyboard.down('Alt');
+  await page.mouse.move(box.x + box.width / 2, y);
+  await page.mouse.down();
+  for (let i = 1; i <= 5; i++) await page.mouse.move(box.x + box.width / 2 + i * 24, y);
+  // every left the bar is given from the drop on (the DOM is written even where the screen is not painted)
+  const first = await bar.evaluate((el) => {
+    const w = window as unknown as { lefts: string[] };
+    w.lefts = [];
+    new MutationObserver(() => w.lefts.push((el as HTMLElement).style.left)).observe(el, { attributes: true, attributeFilter: ['style'] });
+    return `${parseFloat((el as HTMLElement).style.left) - 120}px`;   // where it was before the drag
+  });
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  await page.waitForTimeout(200);
+  const lefts = await page.evaluate(() => (window as unknown as { lefts: string[] }).lefts);
+  expect(lefts.map((l) => Math.round(parseFloat(l)))).not.toContain(Math.round(parseFloat(first)));
+});
