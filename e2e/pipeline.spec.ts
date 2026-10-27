@@ -331,44 +331,55 @@ test('each place says where it is, how long the step would take and what it cost
   expect(box!.x + box!.width).toBeLessThanOrEqual(cell!.x + cell!.width);   // the longest option stays inside its column
 });
 
-test('a place that cannot be planned is said why and undone: the steps stay, with the place they had, and can be moved again', async ({ page }) => {
+test('a place that cannot be planned is said why: the steps stay, Start run waits, and choosing again plans again', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   const menu = placeMenu(dialog, 'faces', 'Face tracks');
   await expect(menu).toHaveValue('native:mps');
   await page.evaluate(() => { (window as unknown as { __refusePlace?: string }).__refusePlace = 'ssh-lab:cuda'; });
   await menu.selectOption('ssh-lab:cuda');
   await expect(dialog.getByText('not a node and a place: "faces" = "ssh-lab:cuda"')).toBeVisible();
-  await expect(menu).toHaveValue('native:mps');                                   // the choice before, and its plan
-  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
-  await page.evaluate(() => { delete (window as unknown as { __refusePlace?: string }).__refusePlace; });
-  await menu.selectOption('ssh-lab:cuda');
-  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');                                 // what is chosen, to choose again
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();  // the plan on screen is not of it
+  await expect(dialog.getByText(/Start run waits until what is chosen can be planned/)).toBeVisible();
+  await menu.selectOption('native:mps');
   await expect(dialog.getByText(/not a node and a place/)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
   await dialog.getByRole('button', { name: 'Start run' }).click();
-  expect((await runs(page))[0].places).toEqual({ faces: 'ssh-lab:cuda' });
+  expect((await runs(page))[0].places).toEqual({ faces: 'native:mps' });
 });
 
-test('a choice refused while another was planning goes back to what the plan on screen was made with, both of them', async ({ page }) => {
+test('changes made while a refused one was planning are not run: Start run waits for a plan of all of them', async ({ page }) => {
   type W = { __holdPlan?: Promise<void>; __refusePlace?: string; releasePlan?: () => void };
   const dialog = await planned(page, '/?pipeline-demo=remote');
   const faces = placeMenu(dialog, 'faces', 'Face tracks');
   await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
   await dialog.getByRole('button', { name: 'Shot captions' }).click();
   const model = dialog.getByRole('listitem', { name: 'captions' }).getByRole('combobox', { name: 'Model' });
-  await expect(model).toHaveValue('claude-haiku-5-5');
   await page.evaluate(() => { const w = window as unknown as W; w.__holdPlan = new Promise((r) => { w.releasePlan = r; }); });
-  await faces.selectOption('ssh-lab:cuda');                                       // its plan held back
-  await model.selectOption('claude-opus-5-5');                                    // planned with it, held too
+  await model.selectOption('claude-opus-5-5');                                    // its plan held back
+  await faces.selectOption('ssh-lab:cuda');                                       // planned with it, held too
   await page.evaluate(() => { const w = window as unknown as W; w.__refusePlace = 'ssh-lab:cuda'; w.releasePlan!(); });
   await expect(dialog.getByText('not a node and a place: "faces" = "ssh-lab:cuda"')).toBeVisible();
-  await expect(faces).toHaveValue('native:mps');                                  // not the lab server, never planned
-  await expect(model).toHaveValue('claude-haiku-5-5');
-  await expect(dialog.getByRole('heading', { name: /\$0\.16$/ })).toBeVisible();   // the plan on screen, Haiku's
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();  // Opus was never planned either
+  await expect(model).toHaveValue('claude-opus-5-5');
   await page.evaluate(() => { const w = window as unknown as W; delete w.__refusePlace; delete w.__holdPlan; });
-  await dialog.getByRole('button', { name: 'Start run' }).click();
-  const [ran] = await runs(page);
-  expect(ran.places ?? {}).toEqual({});
-  expect(ran.allow.uploads).not.toHaveProperty('faces');
+  await faces.selectOption('native:mps');
+  await expect(dialog.getByRole('heading', { name: /\$6\.24$/ })).toBeVisible();   // planned with Opus now
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+});
+
+test('another video that cannot be planned with what was chosen offers to plan with each step\'s own place', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await placeMenu(dialog, 'faces', 'Face tracks').selectOption('ssh-lab:cuda');
+  await expect(placeMenu(dialog, 'faces', 'Face tracks')).toHaveValue('ssh-lab:cuda');
+  await page.evaluate(() => { (window as unknown as { __refusePlace?: string }).__refusePlace = 'ssh-lab:cuda'; });   // the server since refused
+  await dialog.getByRole('button', { name: 'Change…' }).click();
+  await expect(dialog.getByText(/not a node and a place/)).toBeVisible();
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).toHaveCount(0);   // no plan of this video yet
+  await dialog.getByRole('button', { name: "Plan again with each step's own place and settings" }).click();
+  await expect(placeMenu(dialog, 'faces', 'Face tracks')).toHaveValue('native:mps');
+  await expect(dialog.getByText(/not a node and a place/)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
 });
 
 test('moving a step to a lab server is the choice to send it its inputs: it stays on, and the run may send them there only', async ({ page }) => {

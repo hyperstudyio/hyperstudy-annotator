@@ -76,12 +76,15 @@
   const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
   let planning = $state(false);   // a newer plan is on its way: the one on screen is not what would run
+  // a plan of the choices failed: the plan on screen stays, with its menus to choose again, but it is not of what is
+  // chosen now, so Start run waits for one that is. Nothing chosen is put back: the menus show what is chosen
+  let stale = $state(false);
   // what blocks a run: the plan's own problems, and a step that would send data off beyond what the user agreed to
   const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
     `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
   const settingUp = $derived(setup?.state === 'installing' || setup?.state === 'running');   // Start run waits for it
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !configBusy && !settingUp);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !stale && !configBusy && !settingUp);
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -223,28 +226,20 @@
     await makePlan(true);
   };
   const chooseSetting = async (node: string, key: string, value: string) => { settings = { ...settings, [node]: { ...settings[node], [key]: value } }; await makePlan(true); };
-  // the places and settings the plan on screen was made with, and the consent given then for the steps it places:
-  // a change that cannot be planned goes back to these, with any other change made while it was planning (it was
-  // planned only with the one refused), so what is chosen is always what the plan on screen shows and Start run sends
-  let planned: { places: Places; settings: Settings; ticked: Ticked } = { places: {}, settings: {}, ticked: {} };
-  const unchoose = () => {
-    const moved = Object.keys({ ...places, ...planned.places }).filter((n) => places[n] !== planned.places[n]);
-    const back = Object.fromEntries(Object.entries(ticked).filter(([n]) => !moved.includes(n)));
-    for (const n of moved) if (planned.ticked[n]) back[n] = planned.ticked[n];
-    places = planned.places; settings = planned.settings; ticked = back;
-  };
+  // no plan at all (another video, with a place or setting it cannot be planned with): planned again, if the user says
+  // so, with each step's own place and settings
+  const unchoose = async () => { places = {}; settings = {}; ticked = {}; await makePlan(); };
   const total = $derived(active ? totalEstimate(active) : null);
   const cost = $derived(active?.nodes.filter((n) => !n.cached).reduce((a, n) => a + n.cost_usd, 0) ?? 0);
   // Only the newest plan request may set the plan, so a slow one cannot show one graph while another would run.
   const newestPlan = latestOnly();
   // `keep`: a new place or setting replans the same steps, so the plan stays on screen (and the control just changed
-  // keeps the keyboard) while Start run waits for the new one. If it cannot be planned, the plan on screen stays and
-  // the choices go back to the ones it was made with (`unchoose`), so the step list, and the menu to choose again, stay
+  // keeps the keyboard) while Start run waits for the new one. If it cannot be planned, the plan on screen stays,
+  // `stale`, so the step list and the menu to choose again stay
   const makePlan = async (keep = false) => {
     if (!keep) plan = null;
     error = null;
     if (!graph || !video) return;
-    const asked = { places, settings, ticked };
     busy = 'Planning…'; planning = true;
     newestPlan(api.plan(graph, video, places, withDefaults(fromDefaults, settings)), (p) => {
         // the defaults chosen in Settings > Models, where this run has not chosen otherwise: planned again when they are
@@ -255,9 +250,9 @@
           makePlan(true);
           return;
         }
-        plan = p; planned = asked; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
+        plan = p; stale = false; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
       },
-      (e) => { if (keep && plan) unchoose(); else plan = null; error = String(e); busy = null; planning = false; });
+      (e) => { if (keep && plan) stale = true; else { plan = null; stale = false; } error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = []; arrived = []; now = Date.now();
@@ -439,6 +434,10 @@
   <footer>
     <div class="status" aria-live="polite">
       {#if error}<p class="error">{error}</p>{/if}
+      {#if stale && !busy}<p class="muted">Start run waits until what is chosen can be planned: choose again.</p>{/if}
+      {#if error && !plan && !busy && (Object.keys(places).length || Object.keys(settings).length)}
+        <p><button class="link" onclick={unchoose}>Plan again with each step's own place and settings</button></p>
+      {/if}
       {#each view.problems as p (p)}<p class="error">{p}</p>{/each}
       {#if view.status && view.status !== 'succeeded'}<p class="error">The run {view.status}. The step marked failed says why.</p>{/if}
       {#each why as b (b)}<p class="error">{b[0].toUpperCase() + b.slice(1)}.</p>{/each}
