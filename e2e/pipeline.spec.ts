@@ -348,6 +348,20 @@ test('a place that cannot be planned is said why: the steps stay, Start run wait
   expect((await runs(page))[0].places).toEqual({ faces: 'native:mps' });
 });
 
+test('a plan that failed for a reason that was not the choice is planned again, with the same choices, when asked', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await page.evaluate(() => { (window as unknown as { __refusePlace?: string }).__refusePlace = 'ssh-lab:cuda'; });   // a server briefly unreachable
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeDisabled();
+  await page.evaluate(() => { delete (window as unknown as { __refusePlace?: string }).__refusePlace; });          // reachable again
+  await dialog.getByRole('button', { name: 'Plan again' }).click();
+  await expect(dialog.getByText(/not a node and a place/)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Start run' })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  expect((await runs(page))[0].places).toEqual({ faces: 'ssh-lab:cuda' });       // the same choice, not another
+});
+
 test('changes made while a refused one was planning are not run: Start run waits for a plan of all of them', async ({ page }) => {
   type W = { __holdPlan?: Promise<void>; __refusePlace?: string; releasePlan?: () => void };
   const dialog = await planned(page, '/?pipeline-demo=remote');
