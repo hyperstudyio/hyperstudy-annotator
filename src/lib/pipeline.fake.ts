@@ -104,7 +104,7 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
@@ -127,6 +127,9 @@ function hfCheck(token: string | undefined): CheckResult {
     gating: m.id.startsWith('facebook/') ? 'manual' as const : 'auto' as const })));
   const why = !token ? 'HF_TOKEN is not set' : token.startsWith('rejected') ? 'Hugging Face refused the key' : null;
   if (why) return { ok: false, detail: why, account: null, models: models.map((m) => ({ ...m, access: 'unknown' as const, reason: why })) };
+  // a token whose value says "unscoped": fine-grained without reading gated repos (`keys check` cannot say access then)
+  if (token!.includes('unscoped')) return { ok: true, detail: 'Hugging Face accepted the key (as ana)', account: 'ana',
+    models: models.map((m) => ({ ...m, access: 'unknown' as const, reason: 'the token cannot read gated repos: turn on its "Read access to contents of all public gated repos you can access"' })) };
   const pending = token!.includes('pending') && !(globalThis as { __metaGranted?: boolean }).__metaGranted;
   return { ok: true, detail: 'Hugging Face accepted the key (as ana)', account: 'ana',
     models: models.map((m) => ({ ...m, access: pending && m.id.includes('dinov3') ? 'not-granted' as const : 'granted' as const, reason: null })) };
@@ -232,8 +235,10 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       unchecked('check');
       await (globalThis as { __holdCheck?: Promise<void> }).__holdCheck;
       const key = stored.get(name) ?? (name === 'HF_TOKEN' && gated && hf === 'file' ? 'hf_demo_file' : undefined), who = KEYS.find((k) => k.name === name)!.label;
-      // tests: a check that fails, not for want of the command (the CLI crashed, the network is down)
-      if ((globalThis as { __checkFails?: string }).__checkFails) throw new Error((globalThis as { __checkFails?: string }).__checkFails);
+      // tests: a check that fails, not for want of the command (the CLI crashed, the network is down); said as the
+      // stand-in's, so a page left with it set is not taken for a real failure
+      const fails = (globalThis as { __checkFails?: string }).__checkFails;
+      if (fails) throw new Error(`${fails} (the demo's stand-in failure, __checkFails)`);
       if (name === 'HF_TOKEN' && gated && hf !== 'old') return hfCheck(key);
       return !key ? { ok: false, detail: `${name} is not set` } : key.startsWith('rejected') ? { ok: false, detail: `${who} refused the key` } : { ok: true, detail: `${who} accepted the key` };
     },

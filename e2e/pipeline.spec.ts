@@ -704,8 +704,14 @@ test('saving a token checks every model at once, and Check again shows a review 
   await expect(settings.getByRole('button', { name: 'Needs Hugging Face access' })).toHaveCount(0);
   await hf.getByRole('button', { name: 'Show steps' }).click();
   await expect(model(hf, 'DINOv3')).toContainText('✓ Granted');
+  await expect(hf.getByRole('heading', { name: 'Hugging Face access' })).toBeFocused();   // not lost with the button
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await hf.getByLabel('Paste it here').fill('hf_thrown_away');
   await hf.getByRole('button', { name: 'Hide steps' }).click();
   await expect(hf.locator('.steps')).toHaveCount(0);
+  await expect(hf.getByRole('heading', { name: 'Hugging Face' })).toBeFocused();
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await expect(hf.getByLabel('Paste it here')).toHaveValue('');                            // put away with the steps
 });
 
 test('a token Hugging Face refuses is said plainly, with no model said granted, and a new one is checked at once', async ({ page }) => {
@@ -734,6 +740,14 @@ test("while a new token is saved and checked, the old token's answer is not show
   await expect(model(hf, 'SAM 3')).not.toContainText('Granted');
   await page.evaluate(() => (globalThis as { __release?: () => void }).__release?.());
   await expect(hf.getByRole('alert')).toHaveText('Hugging Face refused this token.');
+});
+
+test('a model whose access could not be checked says why, once, where it can be read', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated');
+  await hf.getByLabel('Paste it here').fill('hf_unscoped_0123456789');
+  await hf.getByLabel('Paste it here').press('Enter');
+  await expect(model(hf, 'SAM 3')).toContainText('Could not check');
+  await expect(hf.getByText(/cannot read gated repos/)).toHaveCount(1);
 });
 
 test('with every model granted it is one line; removing the token brings the steps back', async ({ page }) => {

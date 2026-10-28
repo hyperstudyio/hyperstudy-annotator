@@ -5,7 +5,7 @@
   // the account it belongs to, and each model's access (`keys check HF_TOKEN`); Check again asks again, as an owner's
   // review takes time. Once every model is granted it is one line, with the steps a click away. A pipeline from before
   // the per-model check keeps the key's own Test.
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { openExternal } from '../links';
   import { NEW_TOKEN_URL, SIGN_IN_URL, accessOf, allGranted, grantedBy, pageOf, perModel, shortName } from '../hfAccess';
   import { olderCli, tooOld, type CheckResult, type KeyStatus, type PipelineApi } from '../pipeline';
@@ -31,6 +31,14 @@
   let error = $state<string | null>(null);
   let tested = $state<CheckResult | null>(null);   // a pipeline from before: its Test's answer
   let showSteps = $state(false);
+  let section = $state<HTMLElement>();
+  // the steps shown or put away: the button pressed goes with them, so focus goes to the heading
+  const steps = async (show: boolean) => {
+    showSteps = show;
+    if (!show) { editing = false; draft = ''; }
+    await tick();
+    section?.querySelector<HTMLElement>('h2')?.focus();
+  };
   let asked = 0;
 
   // the latest question wins: an answer to an earlier one (a token since replaced) is dropped
@@ -79,7 +87,7 @@
   const count = $derived(repos.length === 1 ? 'access to its model' : `access to all ${repos.length} models`);
 </script>
 
-<section class="set-part hf" aria-label="Hugging Face access" id="hf-access">
+<section class="set-part hf" aria-label="Hugging Face access" id="hf-access" bind:this={section}>
   {#if collapsed}
     <div class="set-head line">
       <h2 tabindex="-1">Hugging Face</h2>
@@ -88,13 +96,13 @@
         <button class="plain" onclick={() => ask(true)} disabled={checking || !!busy}>Check again</button>
         <button class="plain" onclick={() => { editing = true; }} disabled={!!busy} aria-label="Replace the Hugging Face token">Replace</button>
         {#if k.stored}<button class="plain danger" onclick={() => act('Removing the Hugging Face token…', () => api.removeKey(k.name))} disabled={!!busy} aria-label="Remove the Hugging Face token">Remove</button>{/if}
-        <button class="plain" onclick={() => (showSteps = true)} aria-expanded="false">Show steps</button>
+        <button class="plain" onclick={() => steps(true)}>Show steps</button>
       </span>
     </div>
   {:else}
     <div class="set-head">
       <h2 tabindex="-1">Hugging Face access</h2>
-      {#if done}<button class="plain" onclick={() => { showSteps = false; editing = false; }} aria-expanded="true">Hide steps</button>{/if}
+      {#if done}<button class="plain" onclick={() => steps(false)}>Hide steps</button>{/if}
     </div>
     <ol class="steps">
       <li aria-label="Sign in">
@@ -119,10 +127,12 @@
                 {#if grantedBy(m.repo, accessOf(check, m.repo)?.gating)}<span class="how">{grantedBy(m.repo, accessOf(check, m.repo)?.gating)}</span>{/if}
               </span>
               <button class:plain={a?.access === 'granted'} onclick={() => openExternal(pageOf(m.repo))} aria-label={`Ask for access to ${shortName(m.repo)}`}>Ask for access</button>
-              <span class="status {a?.access ?? ''}" title={a?.reason ?? undefined}>{a ? STATUS[a.access] : ''}</span>
+              <span class="status {a?.access ?? ''}">{a ? STATUS[a.access] : ''}</span>
             </li>
           {/each}
         </ul>
+        <!-- why a model could not be checked, once for every model it is said of -->
+        {#each [...new Set(gated.map((m) => status(m.repo)?.reason).filter(Boolean))] as why (why)}<p class="note muted">{why!.charAt(0).toUpperCase() + why!.slice(1)}.</p>{/each}
       </li>
       <li aria-label="Create a token">
         <span class="n" class:done={accepted} aria-hidden="true">3</span>
@@ -179,7 +189,7 @@
   .n { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-text-muted); text-align: right; }
   .n.done { color: var(--color-primary); }
   .models { grid-column: 2 / -1; list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 2px; }
-  .models > li { display: grid; grid-template-columns: 4.75rem 8.5rem minmax(0, 1fr) auto 5.25rem; grid-template-areas: "name used how ask status";
+  .models > li { display: grid; grid-template-columns: 4.75rem 8rem minmax(0, 1fr) auto 6.75rem; grid-template-areas: "name used how ask status";
                  gap: 4px 12px; align-items: baseline; padding: 3px 0; }
   .name { grid-area: name; color: var(--color-text-primary); overflow-wrap: anywhere; }
   .meta { display: contents; }
