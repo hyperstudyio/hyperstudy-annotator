@@ -55,7 +55,7 @@
   $effect(() => { untrack(() => ask()); });
 
   const act = async (what: string, f: () => Promise<KeyStatus[]>) => {
-    asked++;   // an answer on its way is the old token's
+    asked++; check = null;   // what was said, and an answer on its way, are the old token's
     checking = false; busy = what; error = null; tested = null; onbusy(what);
     try { onkeys(await f()); } catch (e) { error = String(e); busy = null; onbusy(null); return; }
     busy = null; onbusy(null);

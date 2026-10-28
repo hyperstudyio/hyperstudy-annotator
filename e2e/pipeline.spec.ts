@@ -722,6 +722,20 @@ test('a token Hugging Face refuses is said plainly, with no model said granted, 
   await expect(hf.getByRole('alert')).toHaveCount(0);
 });
 
+test("while a new token is saved and checked, the old token's answer is not shown as the new one's", async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-granted');
+  await expect(hf).toContainText('Signed in as ana');
+  await page.evaluate(() => { const g = globalThis as { __holdCheck?: Promise<void>; __release?: () => void }; g.__holdCheck = new Promise((r) => { g.__release = r; }); });
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await hf.getByLabel('Paste it here').fill('rejected-0123456789');
+  await hf.getByLabel('Paste it here').press('Enter');
+  await expect(hf.getByRole('status')).toHaveText('Checking…');
+  await expect(hf).not.toContainText('Signed in');
+  await expect(model(hf, 'SAM 3')).not.toContainText('Granted');
+  await page.evaluate(() => (globalThis as { __release?: () => void }).__release?.());
+  await expect(hf.getByRole('alert')).toHaveText('Hugging Face refused this token.');
+});
+
 test('with every model granted it is one line; removing the token brings the steps back', async ({ page }) => {
   const { settings, hf } = await hfAccessAt(page, 'gated-granted');
   await expect(hf).toContainText('Hugging Face');
