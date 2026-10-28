@@ -39,6 +39,8 @@
     await tick();
     section?.querySelector<HTMLElement>('h2')?.focus();
   };
+  // the field put away: its draft with it, and focus to the heading, as the field (and on the one line, Replace) goes
+  const cancel = () => { editing = false; draft = ''; return steps(showSteps); };
   let asked = 0;
 
   // the latest question wins: an answer to an earlier one (a token since replaced) is dropped
@@ -63,9 +65,11 @@
   $effect(() => { untrack(() => ask()); });
 
   const act = async (what: string, f: () => Promise<KeyStatus[]>) => {
+    const before = check;
     asked++; check = null;   // what was said, and an answer on its way, are the old token's
     checking = false; busy = what; error = null; tested = null; onbusy(what);
-    try { onkeys(await f()); } catch (e) { error = String(e); busy = null; onbusy(null); return; }
+    // the keychain refused: the token is as it was, and so is what was said of it
+    try { onkeys(await f()); } catch (e) { check = before; error = String(e); busy = null; onbusy(null); return; }
     busy = null; onbusy(null);
     await ask();
   };
@@ -146,12 +150,12 @@
             <label for="hf-token">Paste it here</label>
             {#if editing}
               <input id="hf-token" type="password" bind:value={draft} placeholder="hf_…" autocomplete="off" spellcheck="false" use:focus
-                     onkeydown={(e) => { if (e.key === 'Escape') { editing = false; draft = ''; } }} />
+                     onkeydown={(e) => { if (e.key === 'Escape') cancel(); }} />
             {:else}
               <input id="hf-token" type="password" bind:value={draft} placeholder="hf_…" autocomplete="off" spellcheck="false" />
             {/if}
             <button type="submit" class="primary" disabled={!draft.trim() || !!busy}>Save</button>
-            {#if has}<button type="button" onclick={() => { editing = false; draft = ''; }}>Cancel</button>{/if}
+            {#if has}<button type="button" onclick={cancel}>Cancel</button>{/if}
           </form>
           <span></span>
         {:else}

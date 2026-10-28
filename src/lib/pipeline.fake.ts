@@ -268,6 +268,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       if (!KEYS.some((k) => k.name === name)) throw new Error(`not a key the app keeps: "${name}"`);
       if (!value.trim()) throw new Error('a key is one line of text');
       await (globalThis as { __holdKey?: Promise<void> }).__holdKey;   // tests: the keychain's answer held back
+      if ((globalThis as { __keychainRefuses?: boolean }).__keychainRefuses) throw new Error('the keychain refused (the demo\'s stand-in failure, __keychainRefuses)');
       stored.set(name, value.trim());
       return keyStatus();
     },

@@ -783,13 +783,27 @@ test('a check that fails is said, not taken for an older pipeline, and can be as
   await expect(hf.getByRole('alert')).toHaveCount(0);
 });
 
-test('a token half pasted and put away with Escape is gone the next time', async ({ page }) => {
-  const { hf } = await hfAccessAt(page, 'gated-pending');
-  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+test('a token half pasted and put away with Escape is gone the next time, and focus stays in the section', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-granted');
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();   // from the one line
   await hf.getByLabel('Paste it here').fill('hf_thrown_away');
   await hf.getByLabel('Paste it here').press('Escape');
+  await expect(hf.getByRole('heading', { name: 'Hugging Face' })).toBeFocused();
   await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
   await expect(hf.getByLabel('Paste it here')).toHaveValue('');
+  await hf.getByRole('button', { name: 'Cancel' }).click();
+  await expect(hf.getByRole('heading', { name: 'Hugging Face' })).toBeFocused();
+});
+
+test('a token the keychain refuses to save leaves what was said of the one kept', async ({ page }) => {
+  const { settings, hf } = await hfAccessAt(page, 'gated-granted');
+  await page.evaluate(() => { (globalThis as { __keychainRefuses?: boolean }).__keychainRefuses = true; });
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await hf.getByLabel('Paste it here').fill('hf_demo_new');
+  await hf.getByLabel('Paste it here').press('Enter');
+  await expect(hf.getByRole('alert')).toContainText('the keychain refused');
+  await expect(hf).toContainText('Signed in as ana');
+  await expect(settings.getByRole('button', { name: 'Needs Hugging Face access' })).toHaveCount(0);
 });
 
 test('a pipeline whose check does not say each model\'s access keeps the token\'s Test', async ({ page }) => {
