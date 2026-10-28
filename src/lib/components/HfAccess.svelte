@@ -8,7 +8,7 @@
   import { untrack } from 'svelte';
   import { openExternal } from '../links';
   import { NEW_TOKEN_URL, SIGN_IN_URL, accessOf, allGranted, grantedBy, pageOf, perModel, shortName } from '../hfAccess';
-  import { tooOld, type CheckResult, type KeyStatus, type PipelineApi } from '../pipeline';
+  import { olderCli, tooOld, type CheckResult, type KeyStatus, type PipelineApi } from '../pipeline';
 
   let { api, k, elsewhere = null, gated, stepTitle, check = $bindable(null), onkeys, onbusy }: {
     api: PipelineApi; k: KeyStatus;
@@ -46,8 +46,10 @@
     } catch (e) {
       if (mine !== asked) return;
       check = null;
-      legacy = true;
-      if (manual) error = tooOld(e, 'test keys');
+      // a pipeline from before keys check has no check to keep; any other failure is said, and can be asked again
+      legacy = olderCli(e);
+      if (!legacy) error = `Could not check the token: ${e}`;
+      else if (manual) error = tooOld(e, 'test keys');
     } finally { if (mine === asked) checking = false; }
   }
   $effect(() => { untrack(() => ask()); });
@@ -134,7 +136,7 @@
             <label for="hf-token">Paste it here</label>
             {#if editing}
               <input id="hf-token" type="password" bind:value={draft} placeholder="hf_…" autocomplete="off" spellcheck="false" use:focus
-                     onkeydown={(e) => { if (e.key === 'Escape') editing = false; }} />
+                     onkeydown={(e) => { if (e.key === 'Escape') { editing = false; draft = ''; } }} />
             {:else}
               <input id="hf-token" type="password" bind:value={draft} placeholder="hf_…" autocomplete="off" spellcheck="false" />
             {/if}

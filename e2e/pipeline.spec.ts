@@ -741,6 +741,29 @@ test('a token the command line finds in a file is checked too, and is not the ap
   await expect(hf).toContainText('Found in ~/.config/hyperstudy/bakeoff.env');
 });
 
+test('a check that fails is said, not taken for an older pipeline, and can be asked again', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated');
+  await page.evaluate(() => { (globalThis as { __checkFails?: string }).__checkFails = 'the pipeline failed: URLError: Network is unreachable'; });
+  const token = hf.getByRole('form', { name: 'Hugging Face token' });
+  await token.getByLabel('Paste it here').fill('hf_demo_0123456789');
+  await token.getByRole('button', { name: 'Save' }).click();
+  await expect(hf.getByRole('alert')).toContainText('Network is unreachable');
+  await expect(hf.getByRole('button', { name: 'Test the Hugging Face token' })).toHaveCount(0);
+  await page.evaluate(() => { delete (globalThis as { __checkFails?: string }).__checkFails; });
+  await hf.getByRole('button', { name: 'Check again' }).click();
+  await expect(hf).toContainText('Signed in as ana · access to all 3 models');
+  await expect(hf.getByRole('alert')).toHaveCount(0);
+});
+
+test('a token half pasted and put away with Escape is gone the next time', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-pending');
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await hf.getByLabel('Paste it here').fill('hf_thrown_away');
+  await hf.getByLabel('Paste it here').press('Escape');
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await expect(hf.getByLabel('Paste it here')).toHaveValue('');
+});
+
 test('a pipeline whose check does not say each model\'s access keeps the token\'s Test', async ({ page }) => {
   const { hf } = await hfAccessAt(page, 'gated-old');
   await expect(model(hf, 'SAM 3')).toBeVisible();

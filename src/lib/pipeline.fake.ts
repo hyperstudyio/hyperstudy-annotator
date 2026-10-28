@@ -232,6 +232,8 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       unchecked('check');
       await (globalThis as { __holdCheck?: Promise<void> }).__holdCheck;
       const key = stored.get(name) ?? (name === 'HF_TOKEN' && gated && hf === 'file' ? 'hf_demo_file' : undefined), who = KEYS.find((k) => k.name === name)!.label;
+      // tests: a check that fails, not for want of the command (the CLI crashed, the network is down)
+      if ((globalThis as { __checkFails?: string }).__checkFails) throw new Error((globalThis as { __checkFails?: string }).__checkFails);
       if (name === 'HF_TOKEN' && gated && hf !== 'old') return hfCheck(key);
       return !key ? { ok: false, detail: `${name} is not set` } : key.startsWith('rejected') ? { ok: false, detail: `${who} refused the key` } : { ok: true, detail: `${who} accepted the key` };
     },
