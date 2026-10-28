@@ -644,14 +644,186 @@ test("the captions model chosen in Models is what Extract plans with, and Extrac
   void dialog;
 });
 
-test('gated models are listed with where to ask for access, and the Hugging Face key that downloads them', async ({ page }) => {
-  await planned(page, '/?pipeline-demo=gated');
+// --- Hugging Face access: the gated models' steps, set up in order at the top of Models --------------------------------
+
+/** Settings > Models in a gated demo, with the pages the app opens recorded rather than opened. */
+async function hfAccessAt(page: Page, demo: string) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __opened: string[] };
+    w.__opened = [];
+    window.open = (url?: string | URL) => { w.__opened.push(String(url)); return null; };
+  });
+  await page.goto(`/?pipeline-demo=${demo}`);
   const settings = await settingsAt(page, /^Models$/);
-  const step = settings.getByRole('listitem', { name: 'Who speaks' });
-  await expect(step).toContainText('speaker-diarization-3.1');
-  await expect(step.getByRole('button', { name: 'Request access on Hugging Face' })).toBeVisible();
-  const hf = settings.getByRole('region', { name: 'Hugging Face' }).getByRole('listitem', { name: 'Hugging Face key' });
-  await expect(hf).toContainText('Found in ~/.config/hyperstudy/bakeoff.env');           // a file the CLI reads
+  return { settings, hf: settings.getByRole('region', { name: 'Hugging Face access' }) };
+}
+const opened = (page: Page) => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened);
+const model = (hf: Locator, name: string) => hf.getByRole('listitem', { name: 'Ask for access' }).getByRole('listitem', { name });
+
+test('gated models: the steps to set up Hugging Face, each model with how it is granted and where to ask', async ({ page }) => {
+  const { settings, hf } = await hfAccessAt(page, 'gated');
+  await expect(hf.getByRole('heading', { name: 'Hugging Face access' })).toBeVisible();
+  await expect(hf.locator('.steps > li')).toHaveCount(4);
+  await expect(model(hf, 'SAM 3')).toContainText('Objects');
+  await expect(model(hf, 'SAM 3')).toContainText('Meta reviews requests');
+  await expect(model(hf, 'DINOv3')).toContainText('Meta reviews requests');
+  await expect(model(hf, 'pyannote')).toContainText('Speaker diarization');
+  await expect(model(hf, 'pyannote')).toContainText('Granted on accepting the terms');
+  await expect(model(hf, 'SAM 3')).not.toContainText(/Granted|Not yet/);                      // nothing known without a token
+  await hf.getByRole('button', { name: 'Open Hugging Face' }).click();
+  await hf.getByRole('button', { name: 'Ask for access to DINOv3' }).click();
+  await hf.getByRole('button', { name: 'Create token' }).click();
+  expect(await opened(page)).toEqual(['https://huggingface.co/login', 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m',
+    'https://huggingface.co/settings/tokens/new?tokenType=read']);
+  // the steps that need it say so, and lead to it; the token is not asked for again on them
+  const objects = settings.getByRole('listitem', { name: 'Objects' });
+  await expect(objects).toContainText('facebook/sam3');
+  await expect(settings.getByRole('listitem', { name: 'Speaker diarization' }).getByRole('button', { name: 'Needs Hugging Face access' })).toBeVisible();
+  await expect(settings.getByRole('listitem', { name: 'Hugging Face key' })).toHaveCount(0);
+  await objects.getByRole('button', { name: 'Needs Hugging Face access' }).click();
+  await expect(hf.getByRole('heading', { name: 'Hugging Face access' })).toBeFocused();
+});
+
+test('saving a token checks every model at once, and Check again shows a review Meta has since granted', async ({ page }) => {
+  const { settings, hf } = await hfAccessAt(page, 'gated');
+  const token = hf.getByRole('form', { name: 'Hugging Face token' });
+  await token.getByLabel('Paste it here').fill('hf_demo_pending_0123456789');
+  await token.getByRole('button', { name: 'Save' }).click();
+  await expect(hf).toContainText('Signed in as ana');
+  await expect(hf).toContainText('Saved in the keychain');
+  expect(await page.content()).not.toContain('hf_demo_pending_0123456789');
+  await expect(model(hf, 'SAM 3')).toContainText('✓ Granted');
+  await expect(model(hf, 'DINOv3')).toContainText('Not yet');
+  await expect(model(hf, 'pyannote')).toContainText('✓ Granted');
+  await expect(settings.getByRole('listitem', { name: 'Objects' }).getByRole('button', { name: 'Needs Hugging Face access' })).toBeVisible();
+  await expect(settings.getByRole('listitem', { name: 'Speaker diarization' }).getByRole('button', { name: 'Needs Hugging Face access' })).toHaveCount(0);
+  await page.evaluate(() => { (globalThis as { __metaGranted?: boolean }).__metaGranted = true; });
+  await hf.getByRole('button', { name: 'Check again' }).click();
+  await expect(hf).toContainText('Signed in as ana · access to all 3 models');                 // one line now
+  await expect(hf.locator('.steps')).toHaveCount(0);
+  await expect(settings.getByRole('button', { name: 'Needs Hugging Face access' })).toHaveCount(0);
+  await hf.getByRole('button', { name: 'Show steps' }).click();
+  await expect(model(hf, 'DINOv3')).toContainText('✓ Granted');
+  await expect(hf.getByRole('heading', { name: 'Hugging Face access' })).toBeFocused();   // not lost with the button
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await hf.getByLabel('Paste it here').fill('hf_thrown_away');
+  await hf.getByRole('button', { name: 'Hide steps' }).click();
+  await expect(hf.locator('.steps')).toHaveCount(0);
+  await expect(hf.getByRole('heading', { name: 'Hugging Face' })).toBeFocused();
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await expect(hf.getByLabel('Paste it here')).toHaveValue('');                            // put away with the steps
+});
+
+test('a token Hugging Face refuses is said plainly, with no model said granted, and a new one is checked at once', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-refused');
+  await expect(hf.getByRole('alert')).toHaveText('Hugging Face refused this token.');
+  await expect(hf).not.toContainText('Signed in');
+  await expect(model(hf, 'SAM 3')).not.toContainText(/Granted|Not yet/);
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  const field = hf.getByLabel('Paste it here');
+  await expect(field).toBeFocused();
+  await field.fill('hf_demo_0123456789');
+  await field.press('Enter');
+  await expect(hf).toContainText('Signed in as ana · access to all 3 models');
+  await expect(hf.getByRole('alert')).toHaveCount(0);
+});
+
+test("while a new token is saved and checked, the old token's answer is not shown as the new one's", async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-granted');
+  await expect(hf).toContainText('Signed in as ana');
+  await page.evaluate(() => { const g = globalThis as { __holdCheck?: Promise<void>; __release?: () => void }; g.__holdCheck = new Promise((r) => { g.__release = r; }); });
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await hf.getByLabel('Paste it here').fill('rejected-0123456789');
+  await hf.getByLabel('Paste it here').press('Enter');
+  await expect(hf.getByRole('status')).toHaveText('Checking…');
+  await expect(hf).not.toContainText('Signed in');
+  await expect(model(hf, 'SAM 3')).not.toContainText('Granted');
+  await page.evaluate(() => (globalThis as { __release?: () => void }).__release?.());
+  await expect(hf.getByRole('alert')).toHaveText('Hugging Face refused this token.');
+});
+
+test('a model whose access could not be checked says why, once, where it can be read', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated');
+  await hf.getByLabel('Paste it here').fill('hf_unscoped_0123456789');
+  await hf.getByLabel('Paste it here').press('Enter');
+  await expect(model(hf, 'SAM 3')).toContainText('Could not check');
+  await expect(hf.getByText(/cannot read gated repos/)).toHaveCount(1);
+});
+
+test('with every model granted it is one line; removing the token brings the steps back', async ({ page }) => {
+  const { settings, hf } = await hfAccessAt(page, 'gated-granted');
+  await expect(hf).toContainText('Hugging Face');
+  await expect(hf).toContainText('Signed in as ana · access to all 3 models');
+  await expect(settings.getByRole('button', { name: 'Needs Hugging Face access' })).toHaveCount(0);
+  await hf.getByRole('button', { name: 'Remove the Hugging Face token' }).click();
+  await expect(hf.getByLabel('Paste it here')).toBeVisible();
+  await expect(model(hf, 'SAM 3')).not.toContainText('Granted');
+  await expect(settings.getByRole('button', { name: 'Needs Hugging Face access' })).toHaveCount(2);
+});
+
+test('a token the command line finds in a file is checked too, and is not the app\'s to remove', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-file');
+  await expect(hf).toContainText('Signed in as ana · access to all 3 models');
+  await expect(hf.getByRole('button', { name: 'Remove the Hugging Face token' })).toHaveCount(0);
+  await hf.getByRole('button', { name: 'Show steps' }).click();
+  await expect(hf).toContainText('Found in ~/.config/hyperstudy/bakeoff.env');
+});
+
+test('a check that fails is said, not taken for an older pipeline, and can be asked again', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated');
+  await page.evaluate(() => { (globalThis as { __checkFails?: string }).__checkFails = 'the pipeline failed: URLError: Network is unreachable'; });
+  const token = hf.getByRole('form', { name: 'Hugging Face token' });
+  await token.getByLabel('Paste it here').fill('hf_demo_0123456789');
+  await token.getByRole('button', { name: 'Save' }).click();
+  await expect(hf.getByRole('alert')).toContainText('Network is unreachable');
+  await expect(hf.getByRole('button', { name: 'Test the Hugging Face token' })).toHaveCount(0);
+  await page.evaluate(() => { delete (globalThis as { __checkFails?: string }).__checkFails; });
+  await hf.getByRole('button', { name: 'Check again' }).click();
+  await expect(hf).toContainText('Signed in as ana · access to all 3 models');
+  await expect(hf.getByRole('alert')).toHaveCount(0);
+});
+
+test('a token half pasted and put away with Escape is gone the next time, and focus stays in the section', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-granted');
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();   // from the one line
+  await hf.getByLabel('Paste it here').fill('hf_thrown_away');
+  await hf.getByLabel('Paste it here').press('Escape');
+  await expect(hf.getByRole('heading', { name: 'Hugging Face' })).toBeFocused();
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await expect(hf.getByLabel('Paste it here')).toHaveValue('');
+  await hf.getByRole('button', { name: 'Cancel' }).click();
+  await expect(hf.getByRole('heading', { name: 'Hugging Face' })).toBeFocused();
+});
+
+test('a token the keychain refuses to save leaves what was said of the one kept', async ({ page }) => {
+  const { settings, hf } = await hfAccessAt(page, 'gated-granted');
+  await page.evaluate(() => { (globalThis as { __keychainRefuses?: boolean }).__keychainRefuses = true; });
+  await hf.getByRole('button', { name: 'Replace the Hugging Face token' }).click();
+  await hf.getByLabel('Paste it here').fill('hf_demo_new');
+  await hf.getByLabel('Paste it here').press('Enter');
+  await expect(hf.getByRole('alert')).toContainText('the keychain refused');
+  await expect(hf).toContainText('Signed in as ana');
+  await expect(settings.getByRole('button', { name: 'Needs Hugging Face access' })).toHaveCount(0);
+});
+
+test('a pipeline whose check does not say each model\'s access keeps the token\'s Test', async ({ page }) => {
+  const { hf } = await hfAccessAt(page, 'gated-old');
+  await expect(model(hf, 'SAM 3')).toBeVisible();
+  await expect(hf.getByRole('button', { name: 'Check again' })).toHaveCount(0);
+  await hf.getByRole('button', { name: 'Test the Hugging Face token' }).click();
+  await expect(hf.getByRole('status')).toHaveText('✓ Hugging Face accepted the key.');
+  await expect(model(hf, 'SAM 3')).not.toContainText('Granted');                              // not said, so not shown
+});
+
+test('Hugging Face access fits a narrow window', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { hf } = await hfAccessAt(page, 'gated-pending');
+  await expect(model(hf, 'DINOv3')).toContainText('Not yet');
+  for (const name of ['SAM 3', 'DINOv3', 'pyannote']) {
+    const box = (await model(hf, name).boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 });
 
 test('a pipeline that cannot list its steps still offers the Anthropic key, and says nothing is wrong', async ({ page }) => {

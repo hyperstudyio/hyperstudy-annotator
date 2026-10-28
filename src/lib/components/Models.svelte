@@ -2,15 +2,17 @@
   // Settings > Models: every model the steps use, by step: what it is (a page to read about it, as the timeline's ⓘ
   // gives), where it runs (here, or a hosted API), its licence when it limits use, the choices the step offers (their
   // defaults: Extract can still change them for one run, stepDefaults.ts), and what it needs from you: a provider's key
-  // (with a Test), or access to a gated model on Hugging Face and the Hugging Face key to download it. A key saved that
+  // (with a Test), or access to a gated model on Hugging Face, set up at the top (HfAccess). A key saved that
   // no step uses (0.0.2 listed every key) is shown so it can be removed. A pipeline from before steps were listed gives
   // only the models: they are listed by step ref, and the keys the app keeps are shown below them.
   import KeyRow from './KeyRow.svelte';
+  import HfAccess from './HfAccess.svelte';
+  import { accessOf, gatedModels, repoOf } from '../hfAccess';
   import { openExternal } from '../links';
   import { LICENCE_TEXT } from '../library';
   import { downloadSize, modelNote } from '../models';
   import { loadDefaults, saveDefault } from '../stepDefaults';
-  import { choiceLabel, choiceName, keyRows, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
+  import { choiceLabel, choiceName, keyRows, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
   import type { LicenceMode } from '../types';
   let { api, keys, cli, models, problem = null, onkeys, onbusy }: {
     api: PipelineApi; keys: KeyStatus[]; cli: CliKeys | null;
@@ -28,9 +30,20 @@
     const all = (models?.models ?? []).filter((m) => m.node === s.node), pick = s.settings.find((x) => x.key === 'model');
     return pick && all.some((m) => pick.choices.includes(m.id)) ? all.filter((m) => m.id === valueOf(s, 'model', pick.value)) : all;
   };
-  const gated = $derived((models?.models ?? []).filter((m) => m.gated));
+  const gated = $derived(gatedModels(models?.models ?? []));
   const used = $derived(new Set(steps.flatMap((s) => s.secrets)));
   const hf = $derived(key('HF_TOKEN'));
+  // the Hugging Face token is set up with the access it gives, above the steps, not on each step that downloads with it
+  const hfShown = $derived(!!(gated.length && hf));
+  let hfCheck = $state<CheckResult | null>(null);
+  const stepTitle = (node: string) => steps.find((s) => s.node === node)?.title ?? node.replace(/@.*/, '');
+  // a step waits on Hugging Face while one of its gated models is not known to be granted
+  const needsAccess = (s: StepInfo) => modelsOf(s).some((m) => m.gated && accessOf(hfCheck, repoOf(m))?.access !== 'granted');
+  const toAccess = () => {
+    const at = document.getElementById('hf-access');
+    at?.scrollIntoView({ block: 'start' });
+    at?.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
+  };
   // a pipeline that does not list its steps: the Anthropic key, as before
   const anthropicOld = $derived(!models?.nodes ? key('ANTHROPIC_API_KEY') : undefined);
   // every other key saved that no step here names (0.0.2 listed every key): it still reaches the pipeline's commands,
@@ -57,9 +70,12 @@
   // only a licence that limits use is said; the rest is the common case
   const limits = (m: ModelInfo) => m.licence_mode === 'academic-only' || m.licence_mode === 'needs-review';
   const size = (m: ModelInfo) => downloadSize(m.size_gb);
-  const page = (m: ModelInfo) => `https://huggingface.co/${(m.source?.startsWith('hf://') ? m.source.slice(5) : m.id).split('@')[0]}`;
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 </script>
+
+{#if hfShown && hf}
+  <HfAccess {api} k={hf} elsewhere={hf.elsewhere} {gated} {stepTitle} bind:check={hfCheck} {onkeys} {onbusy} />
+{/if}
 
 <section class="set-part" aria-labelledby="models-heading">
   <div class="set-head"><h2 id="models-heading">The steps' models</h2></div>
@@ -92,27 +108,17 @@
                 {/each}
               </div>
             {/if}
-            {#each s.secrets as name (name)}
+            {#each s.secrets.filter((n) => !(hfShown && n === 'HF_TOKEN')) as name (name)}
               {@const k = key(name)}
               {#if k}<ul class="set-rows keys"><KeyRow {api} {k} elsewhere={k.elsewhere} label={`${k.label} key`} onchange={onkeys} {onbusy} /></ul>{/if}
             {/each}
-            {#each modelsOf(s).filter((m) => m.gated) as m (m.id)}
-              <div class="gated">Needs access granted on its page first. <button class="link" onclick={() => openExternal(page(m))}>Request access on Hugging Face</button></div>
-            {/each}
+            {#if hfShown && needsAccess(s)}<button class="link gated" onclick={toAccess}>Needs Hugging Face access</button>{/if}
           </div>
         </li>
       {/each}
     </ul>
   {/if}
 </section>
-
-{#if gated.length && hf}
-  <section class="set-part" aria-labelledby="hf-heading">
-    <div class="set-head"><h2 id="hf-heading">Hugging Face</h2></div>
-    <p class="muted">Gated models download with your Hugging Face key, once access is granted on their pages.</p>
-    <ul class="set-rows"><KeyRow {api} k={hf} elsewhere={hf.elsewhere} label="Hugging Face key" onchange={onkeys} {onbusy} /></ul>
-  </section>
-{/if}
 
 {#if anthropicOld || leftover.length}
   <section class="set-part" aria-labelledby="keys-heading">
@@ -137,6 +143,6 @@
   .choice { display: inline-flex; gap: 8px; align-items: center; color: var(--color-text-secondary); font-size: 13px; }
   .keys > :global(li) { padding: 4px 0 0; border: 0; }
   .keys :global(.key) { grid-template-columns: 7rem minmax(0, 1fr) auto; }
-  .gated { font-size: 12px; color: var(--color-caution); }
+  .gated { font-size: 12px; color: var(--color-caution); justify-self: start; text-align: left; }
   @media (max-width: 560px) { .step { grid-template-columns: minmax(0, 1fr); } }
 </style>

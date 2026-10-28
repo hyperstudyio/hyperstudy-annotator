@@ -1,6 +1,6 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
-import type { CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep, SshOverrides } from './pipeline';
+import type { CheckResult, CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep, SshOverrides } from './pipeline';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,
@@ -104,14 +104,38 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: a step's model is gated on Hugging Face. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hfStored = false, oldChecks = false, runpodKeyGone = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
+// the steps with gated models, as hyperstudy-perception's manifests declare them (vision.objects, audio.diarize)
+const GATED = [
+  { node: 'vision.objects@1.0.0', title: 'Objects', service: null, secrets: ['ANTHROPIC_API_KEY', 'HF_TOKEN'], settings: [], models: [
+    { node: 'vision.objects@1.0.0', id: 'facebook/sam3', source: 'hf://facebook/sam3@3c879f39826c281e95690f02c7821c4de09afae7', size_gb: 3.44, gated: true, licence_mode: 'commercial-ok' },
+    { node: 'vision.objects@1.0.0', id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: 'hf://facebook/dinov3-vitl16-pretrain-lvd1689m@ea8dc2863c51be0a264bab82070e3e8836b02d51', size_gb: 1.21, gated: true, licence_mode: 'commercial-ok' },
+    { node: 'vision.objects@1.0.0', id: 'claude-haiku-5-5', source: null, size_gb: null, gated: false, licence_mode: 'api-terms' }] },
+  { node: 'audio.diarize@1.1.0', title: 'Speaker diarization', service: null, secrets: ['HF_TOKEN'], settings: [], models: [
+    { node: 'audio.diarize@1.1.0', id: 'pyannote/speaker-diarization-community-1', source: 'hf://pyannote/speaker-diarization-community-1@3533c8cf8e369892e6b79ff1bf80f7b0286a54ee', size_gb: 0.03, gated: true, licence_mode: 'commercial-ok' }] },
+];
+
+/** `keys check HF_TOKEN` as Hugging Face would answer it: the account, and each gated model's access. */
+function hfCheck(token: string | undefined): CheckResult {
+  const models = GATED.flatMap((s) => s.models.filter((m) => m.gated).map((m) => ({ id: m.id, repo: m.id, revision: m.source!.split('@')[1], nodes: [s.node],
+    gating: m.id.startsWith('facebook/') ? 'manual' as const : 'auto' as const })));
+  const why = !token ? 'HF_TOKEN is not set' : token.startsWith('rejected') ? 'Hugging Face refused the key' : null;
+  if (why) return { ok: false, detail: why, account: null, models: models.map((m) => ({ ...m, access: 'unknown' as const, reason: why })) };
+  // a token whose value says "unscoped": fine-grained without reading gated repos (`keys check` cannot say access then)
+  if (token!.includes('unscoped')) return { ok: true, detail: 'Hugging Face accepted the key (as ana)', account: 'ana',
+    models: models.map((m) => ({ ...m, access: 'unknown' as const, reason: 'the token cannot read gated repos: turn on its "Read access to contents of all public gated repos you can access"' })) };
+  const pending = token!.includes('pending') && !(globalThis as { __metaGranted?: boolean }).__metaGranted;
+  return { ok: true, detail: 'Hugging Face accepted the key (as ana)', account: 'ana',
+    models: models.map((m) => ({ ...m, access: pending && m.id.includes('dinov3') ? 'not-granted' as const : 'granted' as const, reason: null })) };
+}
+
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hf = 'none' as 'none' | 'granted' | 'pending' | 'refused' | 'file' | 'old', hfStored = false, oldChecks = false, runpodKeyGone = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown }[] = [],
                              added: { name: string; dest: string; overrides?: SshOverrides }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
@@ -127,7 +151,8 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   if (setup === 'running' || setup === 'installing') finish();
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
   let hosts: Host[] = remote_ ? [labHost('lab', 'you@lab')] : [];
-  const stored = new Map<string, string>(hfStored ? [['HF_TOKEN', 'hf_saved_in_0_0_2']] : []);
+  const hfSaved = gated && { granted: 'hf_demo', pending: 'hf_demo_pending', refused: 'rejected-hf', old: 'hf_demo' }[hf as string];
+  const stored = new Map<string, string>(hfStored ? [['HF_TOKEN', 'hf_saved_in_0_0_2']] : hfSaved ? [['HF_TOKEN', hfSaved]] : []);
   const keyStatus = (): KeyStatus[] => KEYS.map((k) => ({ ...k, stored: stored.has(k.name) }));
   const cloud: CloudStatus = { enabled: remote_, machine: 'AWS g6.2xlarge, NVIDIA L4', region: 'us-east-1', hourly_usd: 0.9776,
     // runpodKeyGone: RunPod added with a key the CLI found then, gone since (unset, or taken out of the keychain elsewhere)
@@ -209,7 +234,12 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     async checkKey(name) {
       unchecked('check');
       await (globalThis as { __holdCheck?: Promise<void> }).__holdCheck;
-      const key = stored.get(name), who = KEYS.find((k) => k.name === name)!.label;
+      const key = stored.get(name) ?? (name === 'HF_TOKEN' && gated && hf === 'file' ? 'hf_demo_file' : undefined), who = KEYS.find((k) => k.name === name)!.label;
+      // tests: a check that fails, not for want of the command (the CLI crashed, the network is down); said as the
+      // stand-in's, so a page left with it set is not taken for a real failure
+      const fails = (globalThis as { __checkFails?: string }).__checkFails;
+      if (fails) throw new Error(`${fails} (the demo's stand-in failure, __checkFails)`);
+      if (name === 'HF_TOKEN' && gated && hf !== 'old') return hfCheck(key);
       return !key ? { ok: false, detail: `${name} is not set` } : key.startsWith('rejected') ? { ok: false, detail: `${who} refused the key` } : { ok: true, detail: `${who} accepted the key` };
     },
     // RunPod, as `perception cloud on runpod`: refused without a key it accepts
@@ -228,9 +258,9 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       // the steps, as the pipeline describes them (an older one gives only the models)
       const nodes = oldChecks ? null : plan.nodes.map((n) => ({ node: n.uses, title: n.title ?? n.id, service: n.service ?? null,
         secrets: n.id === 'captions' ? ['ANTHROPIC_API_KEY'] : [], settings: n.settings ?? [] }));
-      // `gated`: a made-up gated model, to show how one asks for access (the pipeline's own models are not gated)
-      return { models: gated ? [...all, { node: 'audio.diarize@1.0.0', id: 'pyannote/speaker-diarization-3.1', source: 'hf://pyannote/speaker-diarization-3.1', size_gb: 0.1, gated: true, licence_mode: 'commercial-ok' }] : all,
-               nodes: nodes && gated ? [...nodes, { node: 'audio.diarize@1.0.0', title: 'Who speaks', service: null, secrets: [], settings: [] }] : nodes };
+      // `gated`: the steps whose models are gated, as the pipeline's manifests declare them
+      return { models: gated ? [...all, ...GATED.flatMap((s) => s.models)] : all,
+               nodes: nodes && gated ? [...nodes, ...GATED.map(({ models: _, ...s }) => s)] : nodes };
     },
     // the app's keychain: names and whether stored (values are kept here only to check none reaches the page)
     async keys() { return keyStatus(); },
@@ -238,11 +268,17 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       if (!KEYS.some((k) => k.name === name)) throw new Error(`not a key the app keeps: "${name}"`);
       if (!value.trim()) throw new Error('a key is one line of text');
       await (globalThis as { __holdKey?: Promise<void> }).__holdKey;   // tests: the keychain's answer held back
+      if ((globalThis as { __keychainRefuses?: boolean }).__keychainRefuses) throw new Error('the keychain refused (the demo\'s stand-in failure, __keychainRefuses)');
       stored.set(name, value.trim());
       return keyStatus();
     },
     async removeKey(name) { stored.delete(name); return keyStatus(); },
-    async cliKeys() { older('keys'); if (keysError) throw new Error('the pipeline failed: PermissionError: keys.json'); return { keys: [{ name: 'HF_TOKEN', source: '~/.config/hyperstudy/bakeoff.env' }], problems: [] }; },
+    async cliKeys() {
+      older('keys');
+      if (keysError) throw new Error('the pipeline failed: PermissionError: keys.json');
+      // the gated demos' token is the app's (or, `file`, the CLI's): none to begin with
+      return { keys: !gated || hf === 'file' ? [{ name: 'HF_TOKEN', source: '~/.config/hyperstudy/bakeoff.env' }] : [], problems: [] };
+    },
     pickVideo: async () => '/videos/clip.mp4',
   };
 }

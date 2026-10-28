@@ -63,14 +63,22 @@ export interface ModelInfo { node: string; id: string; source: string | null; si
 export interface StepInfo { node: string; title: string; service: string | null; secrets: string[]; settings: Setting[] }
 /** The models, and the steps (null from a pipeline before them: then only the models are known). */
 export interface ModelsListing { models: ModelInfo[]; nodes: StepInfo[] | null }
-/** What a provider said of a key, or whether a cloud provider can be used (`keys check`, `cloud check`). */
-export interface CheckResult { ok: boolean; detail: string }
+/** A gated model's access with a Hugging Face token (`keys check HF_TOKEN`'s `models`): granted; not granted (asked
+ *  for and pending, or never asked: Hugging Face answers both alike); or unknown (no token it accepts, or no answer:
+ *  `reason`). `gating`: how it is granted, by the owner (`manual`) or on accepting the terms (`auto`). */
+export interface ModelAccess { id: string; repo: string; revision: string; nodes: string[]; gating: 'manual' | 'auto' | null;
+  access: 'granted' | 'not-granted' | 'unknown'; reason: string | null }
+/** What a provider said of a key, or whether a cloud provider can be used (`keys check`, `cloud check`). For
+ *  `HF_TOKEN`, also its account's name and each gated model's access (absent from a pipeline before them). */
+export interface CheckResult { ok: boolean; detail: string; account?: string | null; models?: ModelAccess[] }
 /** What a destination has, reached as adding it would, with nothing added (`hosts probe`). */
 export interface HostProbe { dest: string; root: string; caps: Host['caps'] }
 /** What a host is reached with over what ~/.ssh/config says (`hosts add|probe --user --port --identity`). */
 export interface SshOverrides { user?: string; port?: number; identity?: string }
 /** An error from a pipeline that predates a command (argparse: invalid choice), said as what to do. */
-export const tooOld = (e: unknown, what: string) => /invalid choice|unrecognized arguments/.test(String(e)) ? `Update the pipeline to ${what}.` : String(e);
+export const tooOld = (e: unknown, what: string) => olderCli(e) ? `Update the pipeline to ${what}.` : String(e);
+/** Whether an error is a pipeline's that predates the command (argparse: invalid choice). */
+export const olderCli = (e: unknown) => /invalid choice|unrecognized arguments/.test(String(e));
 /** A key the app keeps for the pipeline (in the system keychain): what it is for and whether one is stored. The app
  *  never sends a key's value to this page. */
 export interface KeyStatus { name: string; label: string; purpose: string; url: string; stored: boolean }
