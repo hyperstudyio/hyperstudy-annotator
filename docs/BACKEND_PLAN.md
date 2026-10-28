@@ -52,6 +52,15 @@ dialogs by hand, is still open).
   lists your pods with the key), so a second would only repeat it. Its own Test shows only while the key is gone. A server is added from a host
   in ~/.ssh/config (or user@host), tested before it is added (`hosts probe`: nothing added, nothing made there), with
   user, port, key file and folder under Advanced; ssh is the user's own, in batch mode (no passwords).
+- **Hugging Face access (2026-10-28, Luke).** Gated models (SAM 3 and DINOv3 for objects, pyannote for speaker
+  diarization) need access granted to your own account (Hugging Face grants it per person, never per organisation)
+  and a token. Settings > Models opens with a Hugging Face access section whenever a step uses one, numbered because
+  it is a sequence: sign in, ask for access on each model's page (with how it is granted: Meta reviews its requests,
+  pyannote grants on accepting the terms), create a Read token, paste it. Saving checks at once (`keys check HF_TOKEN`,
+  perception #38): the account it belongs to and each model's access, Granted or Not yet; Check again asks again
+  while a review is pending, and a refused token is said plainly. With every model granted it is one line. A step says
+  "Needs Hugging Face access" only while one of its models is not granted. A pipeline before the per-model check keeps
+  the token's Test.
 - **The annotator's panel (2026-10-26, Luke).** Inspect edits the one thing selected (who a face is, who speaks and what
   was said, a caption, a name, a value) and is empty until something is; Back returns to the previous selection. What
   the timeline already shows (who is in a shot, on-screen text) is not repeated there, and captions are a timeline row.
