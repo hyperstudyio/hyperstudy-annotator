@@ -63,6 +63,7 @@ impl Awake {
     #[cfg(target_os = "macos")]
     pub fn hold(reason: &str) -> Option<Awake> {
         let (Some(kind), Some(named)) = (iokit::CfString::new("PreventUserIdleSystemSleep"), iokit::CfString::new(&name(reason))) else {
+            eprintln!("could not keep the Mac awake for the run (no CFString)");
             return None;
         };
         let mut id = 0u32;
