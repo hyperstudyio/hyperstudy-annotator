@@ -311,12 +311,9 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
             None => None,
         };
         // a node on another machine (as the plan's `places` say, perception #15) sends its inputs there: the plan must
-        // say where, plainly. A place the plan's `places` do not list is not taken to be this machine.
-        if let Some(places) = plan.get("places").filter(|p| !p.is_null()) {
-            let here = n["place"].as_str().map(|p| places[p]["remote"] == Value::Bool(false)).unwrap_or(n["place"].is_null());
-            if !here && to.is_none() {
-                return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data")));
-            }
+        // say where, plainly
+        if here(plan, n) == Some(false) && to.is_none() {
+            return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data")));
         }
         // the same data sent somewhere else is not what was agreed to either
         if (to.is_some() || !kinds.is_empty()) && allowed.get(id).map(|a| a.service.as_deref()) != Some(to) {
@@ -326,18 +323,24 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
     Ok(())
 }
 
-/// The other machines a plan puts nodes on (lab servers, cloud GPUs), by the plan's titles for them: a place its `places`
-/// do not say is this machine counts, as in `upload_gate`. Cached nodes count too: a cache can be gone by the time the
-/// run reaches them. A plan without `places` (a CLI from before other machines) has none.
+/// Whether the plan's node `n` runs on this machine, as the plan's `places` say (perception #15): only a place they say
+/// is not remote is (or no place). A place they do not list, or one that is not plainly a place, is not taken to be
+/// this machine. None for a plan without `places` (a CLI from before other machines).
+fn here(plan: &Value, n: &Value) -> Option<bool> {
+    let places = plan.get("places").filter(|p| !p.is_null())?;
+    Some(n["place"].as_str().map(|p| places[p]["remote"] == Value::Bool(false)).unwrap_or(n["place"].is_null()))
+}
+
+/// The other machines a plan puts nodes on (lab servers, cloud GPUs), by the plan's titles for them, as `upload_gate`
+/// reads the plan (`here`). Cached nodes count too: a cache can be gone by the time the run reaches them.
 pub fn remote_places(plan: &Value) -> Vec<String> {
-    let places = &plan["places"];
-    if !places.is_object() {
-        return vec![];
-    }
     let mut out: Vec<String> = vec![];
-    for place in plan["nodes"].as_array().into_iter().flatten().filter_map(|n| n["place"].as_str()) {
-        let title = places[place]["title"].as_str().unwrap_or(place);
-        if places[place]["remote"] != Value::Bool(false) && !out.iter().any(|t| t == title) {
+    for n in plan["nodes"].as_array().into_iter().flatten().filter(|n| here(plan, n) == Some(false)) {
+        let title = match n["place"].as_str() {
+            Some(p) => plan["places"][p]["title"].as_str().unwrap_or(p),
+            None => "another machine",
+        };
+        if !out.iter().any(|t| t == title) {
             out.push(title.to_string());
         }
     }
@@ -1218,6 +1221,9 @@ esac
         let mut cached = node("faces", "ssh-lab:cuda".into());
         cached["cached"] = true.into();
         assert_eq!(remote_places(&plan(serde_json::json!([cached]))), ["lab (SSH)"]);
+        // a place that is not plainly one, or places that are not a map, are not taken to be this machine (as upload_gate)
+        assert_eq!(remote_places(&plan(serde_json::json!([node("faces", serde_json::json!({"host": "lab"}))]))), ["another machine"]);
+        assert_eq!(remote_places(&serde_json::json!({"nodes": [node("faces", "native:mps".into())], "places": []})), ["native:mps"]);
         // a CLI from before other machines places nothing elsewhere
         assert!(remote_places(&serde_json::json!({"nodes": [node("decode", "native:mps".into())]})).is_empty());
     }
