@@ -10,7 +10,7 @@
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    featureOf, featureRows, featureState, oncePerModel, stepsOf, tickFeature, settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
+    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -375,7 +375,7 @@
           {@const s = stateOf(n)}
           {@const done = steps.every((p) => p.cached)}
           {@const on = pick.chosen.includes(n.id)}
-          {@const needers = [...new Set(steps.flatMap((p) => pick.neededBy[p.id] ?? []))].filter((x) => !steps.some((p) => p.id === x))}
+          {@const needers = neededFeature(started ? active! : plan, pick.neededBy, n.id)}
           {@const needed = needers.length ? needers : undefined}
           {@const before = on || !canPick(plan) ? [] : titlesOf(mustTurnOnFirst(plan, wanted ?? defaultFeatures(plan), n.id, ticked))}   <!-- steps to turn on first -->
           <!-- where it runs: the steps that run on a machine (a feature's API steps run at their API, as its details say) -->

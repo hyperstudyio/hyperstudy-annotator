@@ -220,11 +220,21 @@ export const sends = (n: PlanNode) => dest(n) !== null || !!n.uploads?.length;
 export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: dest(n) });
 
 /** The feature a step is part of (the pipeline says, perception #45: objects_names is a step of objects), when the
- *  plan has that feature; else the step itself, a feature of its own. */
+ *  plan has that feature and turning it on agrees to what the step sends: nothing, only kinds the feature itself sends
+ *  to the same place, or its inputs to the other machine the user chose for it (another machine is never a default).
+ *  Else the step itself, a feature of its own: a step that sends more is turned on by itself (BACKEND_PLAN.md). */
 export function featureOf(plan: Plan, id: string): string {
-  const f = plan.nodes.find((n) => n.id === id)?.part_of;
-  return f && f !== id && plan.nodes.some((n) => n.id === f) ? f : id;
+  const n = plan.nodes.find((x) => x.id === id), head = n?.part_of && n.part_of !== id ? plan.nodes.find((x) => x.id === n.part_of) : undefined;
+  if (!n || !head) return id;
+  const within = !sends(n) || (!!n.place && plan.places?.[n.place]?.remote === true)
+    || (dest(n) === dest(head) && (n.uploads ?? []).every((k) => (head.uploads ?? []).includes(k)));
+  return within ? head.id : id;
 }
+
+/** The features that hold feature `id` on (they need it), not counting its own steps: a feature another needs only one
+ *  of its steps from is not held, on or off (turned off, the step stays for the other, the feature goes). */
+export const neededFeature = (plan: Plan, neededBy: Record<string, string[]>, id: string): string[] =>
+  (neededBy[id] ?? []).filter((x) => !stepsOf(plan, id).includes(x));
 
 /** A feature's steps, in the plan's order: itself and the steps part of it. */
 export const stepsOf = (plan: Plan, id: string): string[] =>

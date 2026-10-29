@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysText, featureOf, featureRows, featureState, oncePerModel, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysText, featureOf, featureRows, neededFeature, featureState, oncePerModel, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -369,4 +369,31 @@ test("Settings lists a feature's steps in its row, each model once, a download o
   expect(oncePerModel([m('vision.objects@2.0.0', 'claude-haiku-5-5'), m('vision.objects@2.0.0', 'facebook/sam3', { size_gb: 9 }),
     m('vision.objects-names@1.0.0', 'claude-haiku-5-5'), sam])).toEqual([m('vision.objects@2.0.0', 'claude-haiku-5-5'), sam]);
   expect(oncePerModel([m('a@1', 'x', { size_gb: 2 })])).toEqual([m('a@1', 'x', { size_gb: 2 })]);   // kept, though no download (Models: downloadSize)
+});
+
+test("a feature that is off is not held off by another feature that needs one of its steps", () => {
+  // summary (free) needs the tracks, not Objects: Objects can still be turned on, and once on is held by nothing
+  const plan = { ...objectsPlan, nodes: [...objectsPlan.nodes.map((n) => n.id === 'objects_track' ? { ...n, needs: ['decode'] } : n), step('summary', ['objects_track'])] };
+  const off = picked(plan, defaultFeatures(plan));
+  expect(off.chosen).toContain('objects_track');
+  expect(neededFeature(plan, off.neededBy, 'objects')).toEqual([]);
+  expect(neededFeature(plan, picked(plan, new Set(['objects', 'summary'])).neededBy, 'objects')).toEqual([]);
+  // the feature itself needed by another: held on
+  const gaze = { ...objectsPlan, nodes: [...objectsPlan.nodes, step('layers', ['objects'])] };
+  expect(neededFeature(gaze, picked(gaze, new Set(['layers'])).neededBy, 'objects')).toEqual(['layers']);
+});
+
+test("a step that sends beyond what its feature sends is not agreed to with it: it is turned on by itself", () => {
+  // the names would send the transcript to another API: ticking Objects is not the choice to send that
+  const other = { ...objectsPlan, nodes: objectsPlan.nodes.map((n) => n.id === 'objects_names'
+    ? { ...n, uploads: ['frames', 'transcript'], service: 'Other API', upload_to: 'Other API' } : n) };
+  expect(featureOf(other, 'objects_names')).toBe('objects_names');
+  expect(featureOf(other, 'objects_track')).toBe('objects');                   // it sends nothing: still Objects'
+  expect(Object.keys(tickFeature(other, 'objects'))).toEqual(['objects_track', 'objects']);
+  expect(mustTurnOnFirst(other, new Set(), 'objects')).toEqual(['objects_names']);
+  expect(featureRows(other, []).map((n) => n.id)).toEqual(['decode', 'faces', 'objects_names', 'objects', 'gaze']);
+  // the tracks on a lab server send it their inputs: agreed to by choosing that place (never a default), so still Objects'
+  const lab: Plan = { ...objectsPlan, places: { 'ssh-lab:cuda': { title: 'lab (SSH)', remote: true, accelerator: 'cuda' } },
+    nodes: objectsPlan.nodes.map((n) => n.id === 'objects_track' ? { ...n, place: 'ssh-lab:cuda', uploads: ['video'], upload_to: 'lab (SSH)' } : n) };
+  expect(featureOf(lab, 'objects_track')).toBe('objects');
 });
