@@ -523,8 +523,12 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &str, video: &str,
     // consent is checked here too, against a fresh plan of what is about to run, not only in the dialog
     let places: Vec<&str> = places.iter().map(String::as_str).collect();
     let plan_args = [&["plan", graph, "--input", &input][..], &places].concat();
-    pipeline::upload_gate(&p.one(&plan_args, "plan")?, uploads)?;
+    let plan = p.one(&plan_args, "plan")?;
+    pipeline::upload_gate(&plan, uploads)?;
     state.control.before_start()?;   // canceled while that plan ran: nothing starts
+    // with nodes on other machines, the Mac does not idle to sleep until the run ends (a remote node out of touch with
+    // it for 600 s is ended)
+    let mut awake = pipeline::AwakeForRun::new(pipeline::remote_places(&plan));
     // models download as part of running the features chosen (their details list them)
     let cap: Vec<&str> = cap.iter().map(String::as_str).collect();
     let mut args = [&["run", graph, "--input", &input, "--allow-downloads"][..], &places, &cap].concat();
@@ -543,8 +547,10 @@ fn run_and_import(app: &AppHandle, p: &Pipeline, graph: &str, video: &str,
                 *state.running.lock().unwrap() = Some(id.to_string());
             }
         }
+        awake.see(o);
         let _ = app.emit("pipeline", o);
     })?;
+    drop(awake);   // the run has ended: its export and import are this Mac's alone
     let Some((run, status)) = outcome else { return Ok(None) };   // refused: its objects said why
     let run = pipeline::run_id(&run)?.to_string();   // it names a folder this function deletes
     if status != "succeeded" {

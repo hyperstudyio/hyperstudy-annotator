@@ -311,12 +311,9 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
             None => None,
         };
         // a node on another machine (as the plan's `places` say, perception #15) sends its inputs there: the plan must
-        // say where, plainly. A place the plan's `places` do not list is not taken to be this machine.
-        if let Some(places) = plan.get("places").filter(|p| !p.is_null()) {
-            let here = n["place"].as_str().map(|p| places[p]["remote"] == Value::Bool(false)).unwrap_or(n["place"].is_null());
-            if !here && to.is_none() {
-                return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data")));
-            }
+        // say where, plainly
+        if here(plan, n) == Some(false) && to.is_none() {
+            return Err(Error::Bundle(format!("the pipeline's plan does not say plainly where {id} sends its data")));
         }
         // the same data sent somewhere else is not what was agreed to either
         if (to.is_some() || !kinds.is_empty()) && allowed.get(id).map(|a| a.service.as_deref()) != Some(to) {
@@ -324,6 +321,58 @@ pub fn upload_gate(plan: &Value, allowed: &Uploads) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether the plan's node `n` runs on this machine, as the plan's `places` say (perception #15): only a place they say
+/// is not remote is (or no place). A place they do not list, or one that is not plainly a place, is not taken to be
+/// this machine. None for a plan without `places` (a CLI from before other machines).
+fn here(plan: &Value, n: &Value) -> Option<bool> {
+    let places = plan.get("places").filter(|p| !p.is_null())?;
+    Some(n["place"].as_str().map(|p| places[p]["remote"] == Value::Bool(false)).unwrap_or(n["place"].is_null()))
+}
+
+/// The other machines a plan puts nodes on (lab servers, cloud GPUs), by the plan's titles for them, as `upload_gate`
+/// reads the plan (`here`). Cached nodes count too: a cache can be gone by the time the run reaches them.
+pub fn remote_places(plan: &Value) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for n in plan["nodes"].as_array().into_iter().flatten().filter(|n| here(plan, n) == Some(false)) {
+        let title = match n["place"].as_str() {
+            Some(p) => plan["places"][p]["title"].as_str().unwrap_or(p),
+            None => "another machine",
+        };
+        if !out.iter().any(|t| t == title) {
+            out.push(title.to_string());
+        }
+    }
+    out
+}
+
+/// The Mac kept from idle sleep (`awake.rs`) during a run with nodes on other machines (`remote`, from its plan): from
+/// when the CLI names the run, before which it has started no node, until this is dropped as the run ends (succeeded,
+/// failed, canceled, or its thread crashed).
+pub struct AwakeForRun {
+    remote: Vec<String>,
+    held: Option<crate::awake::Awake>,
+}
+
+impl AwakeForRun {
+    pub fn new(remote: Vec<String>) -> Self {
+        AwakeForRun { remote, held: None }
+    }
+
+    /// One of the run's objects, as it arrives.
+    pub fn see(&mut self, o: &Value) {
+        if o["type"] != "run.created" || self.remote.is_empty() || self.held.is_some() {
+            return;
+        }
+        let run = o["run"].as_str().and_then(|r| run_id(r).ok()).unwrap_or("starting");
+        self.held = crate::awake::Awake::hold(&format!("HyperStudy Annotator: run {run} has steps on {}", self.remote.join(", ")));
+    }
+
+    #[cfg(test)]
+    pub fn held(&self) -> bool {
+        self.held.is_some()
+    }
 }
 
 /// `--max-cost-usd N` for the run's spending cap (the graph's, raised by what a cloud machine costs: the dialog
@@ -1154,6 +1203,62 @@ esac
         assert!(upload_gate(&placed("native:mps", None), &other).is_ok());
         assert!(upload_gate(&placed("ssh-lab:cuda", Some(serde_json::json!("lab (SSH)"))), &agreed_to("lab (SSH)", &[])).is_ok());   // said, and agreed
         assert!(upload_gate(&on(serde_json::json!({"host": "lab"}), serde_json::json!([])), &agreed_to("lab (SSH)", &[])).unwrap_err().to_string().contains("plainly"));
+    }
+
+    #[test]
+    fn the_other_machines_a_run_uses_are_the_places_its_plan_does_not_say_are_this_one() {
+        let plan = |nodes: Value| serde_json::json!({"v": 1, "type": "plan", "ok": true, "nodes": nodes,
+            "places": {"native:mps": {"title": "This machine", "remote": false, "accelerator": "mps"},
+                       "ssh-lab:cuda": {"title": "lab (SSH)", "remote": true, "accelerator": "cuda"},
+                       "runpod:cuda": {"title": "Cloud GPU (RunPod)", "remote": true, "accelerator": "cuda"}}});
+        let node = |id: &str, place: Value| serde_json::json!({"id": id, "cached": false, "place": place});
+        assert!(remote_places(&plan(serde_json::json!([node("decode", "native:mps".into()), node("captions", Value::Null)]))).is_empty());
+        assert_eq!(remote_places(&plan(serde_json::json!([node("decode", "native:mps".into()), node("faces", "ssh-lab:cuda".into()),
+                                                          node("gaze", "ssh-lab:cuda".into()), node("objects", "runpod:cuda".into())]))),
+                   ["lab (SSH)", "Cloud GPU (RunPod)"]);
+        // a place the plan does not list is not taken to be this machine; a cached node may run after all
+        assert_eq!(remote_places(&plan(serde_json::json!([node("faces", "ssh-gpu9:cuda".into())]))), ["ssh-gpu9:cuda"]);
+        let mut cached = node("faces", "ssh-lab:cuda".into());
+        cached["cached"] = true.into();
+        assert_eq!(remote_places(&plan(serde_json::json!([cached]))), ["lab (SSH)"]);
+        // a place that is not plainly one, or places that are not a map, are not taken to be this machine (as upload_gate)
+        assert_eq!(remote_places(&plan(serde_json::json!([node("faces", serde_json::json!({"host": "lab"}))]))), ["another machine"]);
+        assert_eq!(remote_places(&serde_json::json!({"nodes": [node("faces", "native:mps".into())], "places": []})), ["native:mps"]);
+        // a CLI from before other machines places nothing elsewhere
+        assert!(remote_places(&serde_json::json!({"nodes": [node("decode", "native:mps".into())]})).is_empty());
+    }
+
+    #[test]
+    fn a_run_with_steps_elsewhere_keeps_the_mac_awake_from_when_it_is_named_until_it_ends() {
+        let dir = repo();
+        let objects = ["{\"v\": 1, \"type\": \"run.created\", \"run\": \"20261028-120000-abc123\", \"store\": \"/s\"}",
+                       "{\"v\": 1, \"type\": \"event\", \"node\": \"faces\", \"kind\": \"task.started\"}",
+                       "{\"v\": 1, \"type\": \"run.finished\", \"run\": \"20261028-120000-abc123\", \"status\": \"canceled\"}"];
+        let p = Pipeline::checkout(dir.path(), fake_uv(dir.path(), &objects.join("\n"), "", 0)).unwrap();
+        let lab = format!("lab {} (SSH)", uuid::Uuid::new_v4());   // its own name: other tests hold theirs meanwhile
+        let mut awake = AwakeForRun::new(vec![lab.clone()]);
+        #[cfg(target_os = "macos")]
+        let reason = format!("HyperStudy Annotator: run 20261028-120000-abc123 has steps on {lab}");
+        let mut during = vec![];
+        assert!(!awake.held());
+        p.run_to_end(&["run"], |o| {
+            awake.see(o);
+            during.push((o["type"].as_str().unwrap().to_string(), awake.held()));
+            #[cfg(target_os = "macos")]
+            if o["type"] == "event" {   // what the system sees while the run goes on
+                assert!(crate::awake::tests::listed(&reason, true), "not listed during the run:\n{}", crate::awake::tests::assertions());
+            }
+        }).unwrap();
+        // from the object that names the run (before it, the CLI has started no node) to the run's last
+        assert_eq!(during, [("run.created".to_string(), true), ("event".into(), true), ("run.finished".into(), true)]);
+        drop(awake);   // as run_and_import does when the run ends, however it ended
+        #[cfg(target_os = "macos")]
+        assert!(!crate::awake::tests::listed(&reason, false), "still listed after the run:\n{}", crate::awake::tests::assertions());
+
+        // a run on this Mac alone holds nothing
+        let mut awake = AwakeForRun::new(vec![]);
+        p.run_to_end(&["run"], |o| awake.see(o)).unwrap();
+        assert!(!awake.held());
     }
 
     #[test]
