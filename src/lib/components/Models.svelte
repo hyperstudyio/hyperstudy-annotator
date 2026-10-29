@@ -4,7 +4,8 @@
   // defaults: Extract can still change them for one run, stepDefaults.ts), and what it needs from you: a provider's key
   // (with a Test), or access to a gated model on Hugging Face, set up at the top (HfAccess). A key saved that
   // no step uses (0.0.2 listed every key) is shown so it can be removed. A pipeline from before steps were listed gives
-  // only the models: they are listed by step ref, and the keys the app keeps are shown below them.
+  // only the models: they are listed by step ref, and the keys the app keeps are shown below them. A feature in several
+  // steps (objects: its names, its tracks, itself; the pipeline says, perception #45) is one row, each model and key once.
   import KeyRow from './KeyRow.svelte';
   import HfAccess from './HfAccess.svelte';
   import { accessOf, gatedModels, repoOf } from '../hfAccess';
@@ -12,7 +13,7 @@
   import { LICENCE_TEXT } from '../library';
   import { downloadSize, modelNote } from '../models';
   import { loadDefaults, saveDefault } from '../stepDefaults';
-  import { choiceLabel, choiceName, keyRows, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
+  import { choiceLabel, choiceName, keyRows, oncePerModel, stepGroups, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
   import type { LicenceMode } from '../types';
   let { api, keys, cli, models, problem = null, onkeys, onbusy }: {
     api: PipelineApi; keys: KeyStatus[]; cli: CliKeys | null;
@@ -25,6 +26,7 @@
   // the steps, or (an older pipeline) one per step ref the models name
   const steps = $derived<StepInfo[]>(models?.nodes ?? [...new Set((models?.models ?? []).map((m) => m.node))]
     .map((node) => ({ node, title: node.replace(/@.*/, ''), service: null, secrets: [], settings: [] })));
+  const groups = $derived(stepGroups(steps));
   // a step whose model is a choice shows the one chosen, not every model it could use
   const modelsOf = (s: StepInfo) => {
     const all = (models?.models ?? []).filter((m) => m.node === s.node), pick = s.settings.find((x) => x.key === 'model');
@@ -36,9 +38,17 @@
   // the Hugging Face token is set up with the access it gives, above the steps, not on each step that downloads with it
   const hfShown = $derived(!!(gated.length && hf));
   let hfCheck = $state<CheckResult | null>(null);
-  const stepTitle = (node: string) => steps.find((s) => s.node === node)?.title ?? node.replace(/@.*/, '');
-  // a step waits on Hugging Face while one of its gated models is not known to be granted
-  const needsAccess = (s: StepInfo) => modelsOf(s).some((m) => m.gated && accessOf(hfCheck, repoOf(m))?.access !== 'granted');
+  // a step by its feature's name (the objects tracks are Objects')
+  const stepTitle = (node: string) => groups.find((g) => g.parts.some((s) => s.node === node))?.step.title ?? node.replace(/@.*/, '');
+  // a feature's models, each once (where a step only records one another downloads, the download's)
+  const featureModels = (parts: StepInfo[]) => oncePerModel(parts.flatMap(modelsOf));
+  // a feature waits on Hugging Face while one of its gated models is not known to be granted
+  const needsAccess = (parts: StepInfo[]) => featureModels(parts).some((m) => m.gated && accessOf(hfCheck, repoOf(m))?.access !== 'granted');
+  // where it runs: your computers, its API, or both for a feature with steps in each
+  const where = (parts: StepInfo[]) => {
+    const at = [...(parts.some((p) => !p.service) ? ['your computers'] : []), ...new Set(parts.filter((p) => p.service).map((p) => `the ${p.service}`))];
+    return `Runs on ${at.join(' and ')}`;
+  };
   const toAccess = () => {
     const at = document.getElementById('hf-access');
     at?.scrollIntoView({ block: 'start' });
@@ -69,7 +79,8 @@
   };
   // only a licence that limits use is said; the rest is the common case
   const limits = (m: ModelInfo) => m.licence_mode === 'academic-only' || m.licence_mode === 'needs-review';
-  const size = (m: ModelInfo) => downloadSize(m.size_gb);
+  // only a model with a source is downloaded (one recorded without, as the objects layer records SAM 3, is not)
+  const size = (m: ModelInfo) => m.source ? downloadSize(m.size_gb) : null;
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 </script>
 
@@ -83,11 +94,12 @@
   {#if problem}<p class="error">Could not list the models: {problem}</p>{/if}
   {#if models}
     <ul class="set-rows steps">
-      {#each steps as s (s.node)}
+      {#each groups as { step: s, parts } (s.node)}
+        {@const ms = featureModels(parts)}
         <li class="step" aria-label={s.title}>
           <span class="title">{s.title}</span>
           <div class="body">
-            {#each modelsOf(s) as m (m.id)}
+            {#each ms as m (m.id)}
               {@const n = note(m)}
               <div class="model">
                 {#if n.link}<button class="link name" onclick={() => openExternal(n.link!)} title={m.source ?? m.id}>{n.name}</button>{:else}<span class="name" title={m.source ?? m.id}>{n.name}</span>{/if}
@@ -95,24 +107,24 @@
                 {#if limits(m)}<span class="licence">{LICENCE_TEXT[m.licence_mode as LicenceMode]}</span>{/if}
               </div>
             {/each}
-            <div class="where muted">{[s.service ? `Runs on the ${s.service}` : 'Runs on your computers', ...modelsOf(s).map(size).filter(Boolean)].join(' · ')}</div>
-            {#if s.settings.length}
+            <div class="where muted">{[where(parts), ...ms.map(size).filter(Boolean)].join(' · ')}</div>
+            {#if parts.some((p) => p.settings.length)}
               {#if unsaved}<p class="error">{unsaved}</p>{/if}
               <div class="choices">
-                {#each s.settings as st (st.key)}
+                {#each parts.flatMap((p) => p.settings.map((st) => ({ p, st }))) as { p, st } (`${p.node}.${st.key}`)}
                   <label class="choice">{capital(st.key)}
-                    <select value={valueOf(s, st.key, st.value)} onchange={(e) => choose(s, st.key, e.currentTarget.value)} aria-label={`${s.title}: ${st.key}`}>
+                    <select value={valueOf(p, st.key, st.value)} onchange={(e) => choose(p, st.key, e.currentTarget.value)} aria-label={`${s.title}: ${st.key}`}>
                       {#each st.choices as c (c)}<option value={c}>{choiceLabel(st, c)}</option>{/each}
                     </select>
                   </label>
                 {/each}
               </div>
             {/if}
-            {#each s.secrets.filter((n) => !(hfShown && n === 'HF_TOKEN')) as name (name)}
+            {#each [...new Set(parts.flatMap((p) => p.secrets))].filter((n) => !(hfShown && n === 'HF_TOKEN')) as name (name)}
               {@const k = key(name)}
               {#if k}<ul class="set-rows keys"><KeyRow {api} {k} elsewhere={k.elsewhere} label={`${k.label} key`} onchange={onkeys} {onbusy} /></ul>{/if}
             {/each}
-            {#if hfShown && needsAccess(s)}<button class="link gated" onclick={toAccess}>Needs Hugging Face access</button>{/if}
+            {#if hfShown && needsAccess(parts)}<button class="link gated" onclick={toAccess}>Needs Hugging Face access</button>{/if}
           </div>
         </li>
       {/each}

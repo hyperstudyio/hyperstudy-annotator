@@ -9,8 +9,8 @@
   import type { RunStatus } from './Rail.svelte';
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
-  import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, tick, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
+  import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
+    featureOf, featureRows, featureState, oncePerModel, stepsOf, tickFeature, settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -69,9 +69,10 @@
     const next = new Set(wanted ?? (plan ? defaultFeatures(plan) : []));
     if (on) next.add(id); else next.delete(id);   // what it needs comes along, and goes when nothing else needs it
     wanted = next;
-    const n = plan?.nodes.find((x) => x.id === id);
-    const { [id]: _, ...rest } = ticked;
-    ticked = on && n ? { ...rest, [id]: tick(n) } : rest;
+    // a feature in several steps (objects: its names, its tracks, itself) is turned on, and agreed to, as one
+    const own = plan ? stepsOf(plan, id) : [id];
+    const rest = Object.fromEntries(Object.entries(ticked).filter(([s]) => !own.includes(s)));
+    ticked = on && plan ? { ...rest, ...tickFeature(plan, id) } : rest;
   }
   const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
@@ -79,9 +80,12 @@
   // a plan of the choices failed: the plan on screen stays, with its menus to choose again, but it is not of what is
   // chosen now, so Start run waits for one that is. Nothing chosen is put back: the menus show what is chosen
   let stale = $state(false);
+  // a step as people know it: by its feature, when it is one of a feature's steps
+  const titleOf = (id: string) => { const n = plan?.nodes.find((x) => x.id === (plan ? featureOf(plan, id) : id)); return n ? title(n) : id; };
+  const titlesOf = (ids: string[]) => [...new Set(ids.map(titleOf))];
   // what blocks a run: the plan's own problems, and a step that would send data off beyond what the user agreed to
-  const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? unagreed(active, ticked).map((id) =>
-    `${titleOf(id)} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
+  const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? titlesOf(unagreed(active, ticked)).map((t) =>
+    `${t} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
   const settingUp = $derived(setup?.state === 'installing' || setup?.state === 'running');   // Start run waits for it
   const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !stale && !configBusy && !settingUp);
@@ -159,7 +163,7 @@
   });
   const retrySetup = () => step('Setting up the pipeline…', () => api.retrySetup());
   // the step a setup.step names, as the plan calls it (`uses` is the node's ref)
-  const stepTitle = (s: SetupStep) => plan?.nodes.find((n) => n.uses === s.node)?.title ?? s.node ?? 'this machine';
+  const stepTitle = (s: SetupStep) => { const n = plan?.nodes.find((x) => x.uses === s.node); return n ? titleOf(n.id) : s.node ?? 'this machine'; };
 
 
   // a pipeline from before other machines does not know the commands (argparse: invalid choice): the row says so; any
@@ -268,7 +272,7 @@
   const STATE_LABEL = { waiting: 'Waiting', cached: 'Cached', running: 'Running', retrying: 'Retrying', succeeded: 'Done', failed: 'Failed', canceled: 'Canceled' };
   // the run in one line: how far it got, or how it ended
   const headline = $derived.by(() => {
-    const states = Object.values(view.nodes).map((n) => n.state);
+    const states = rows.map((n) => stateOf(n).state);
     const finished = states.filter((x) => x === 'succeeded' || x === 'cached').length;
     if (view.status === 'succeeded') return `Finished all ${states.length} steps`;
     if (view.status === 'failed') return 'The run failed';
@@ -277,12 +281,24 @@
     return `Running, ${finished} of ${states.length} steps done`;
   });
   const chosenGraph = $derived(graphs.find((g) => g.file === graph));
-  const stepCount = $derived(active?.nodes.filter((n) => !n.cached).length ?? 0);
+  // the rows: a feature each, its steps in its row (the plan's, or once started what runs)
+  const rows = $derived((started ? active : plan) ? featureRows((started ? active : plan)!, pick.chosen) : []);
+  const stepsIn = (n: PlanNode) => { const p = (started ? active : plan)!; return stepsOf(p, n.id).map((id) => p.nodes.find((x) => x.id === id)!); };
+  const stateOf = (n: PlanNode) => featureState(stepsIn(n).map((p) => view.nodes[p.id] ?? { state: 'waiting', message: '' }));
+  const stepCount = $derived(active ? featureRows(active, pick.chosen).filter((n) => stepsOf(active, n.id).some((id) => !active.nodes.find((x) => x.id === id)!.cached)).length : 0);
   // a range only when running side by side could save real time (within a tenth, one number says it)
   const timeText = $derived(!total || total.seconds === 0 ? '' : total.fastest >= total.seconds * 0.9
     ? `about ${duration(total.seconds)}` : `${duration(total.fastest)} to ${duration(total.seconds)}`);
   const title = (n: PlanNode) => n.title || n.id;
-  const titleOf = (id: string) => { const n = plan?.nodes.find((x) => x.id === id); return n ? title(n) : id; };
+  // a feature's steps run one after another (each takes the last one's output): its time is theirs added up, when each has one
+  const timeOf = (steps: PlanNode[]) => { const left = steps.filter((p) => !p.cached); return left.every((p) => p.estimate_s != null) ? left.reduce((a, p) => a + p.estimate_s!, 0) : null; };
+  /** How far along a feature is: its steps' progress, weighed by their estimates when each has one. */
+  function featureProgress(steps: PlanNode[]): number | null {
+    const f = steps.map((p) => progress(p, view.nodes[p.id]?.state ?? 'waiting'));
+    if (f.some((x) => x == null)) return null;
+    const est = steps.map((p) => p.cached ? 0 : p.estimate_s ?? null), all = est.reduce<number>((a, e) => a + (e ?? 0), 0);
+    return est.every((e) => e != null) && all > 0 ? f.reduce<number>((a, x, i) => a + x! * est[i]!, 0) / all : f.reduce<number>((a, x) => a + x!, 0) / f.length;
+  }
   const LICENCE: Record<string, string> = { 'academic-only': 'academic use only', 'commercial-ok': 'commercial use allowed', 'needs-review': 'licence under review', 'api-terms': "the API provider's terms" };
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ');
   const here = $derived(doctor?.platform.startsWith('darwin') ? 'this Mac' : 'this machine');
@@ -351,71 +367,83 @@
         {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
       </h3>
       {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('compute')}>Add a remote server or cloud GPU</button></p>{/if}
-      {#if total?.unknown.length && !started}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(total.unknown.map(titleOf))}, which {total.unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
+      {#if total?.unknown.length && !started}{@const unknown = titlesOf(total.unknown)}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(unknown)}, which {unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
       <ol class="steps">
-        {#each started ? active?.nodes ?? [] : plan.nodes as n (n.id)}
-          {@const s = view.nodes[n.id]}
+        {#each rows as n (n.id)}
+          <!-- a feature in several steps is one row: its state, time, cost and details are its steps' together -->
+          {@const steps = stepsIn(n)}
+          {@const s = stateOf(n)}
+          {@const done = steps.every((p) => p.cached)}
           {@const on = pick.chosen.includes(n.id)}
-          {@const needers = pick.neededBy[n.id]}
-          {@const before = on || !canPick(plan) ? [] : mustTurnOnFirst(plan, wanted ?? defaultFeatures(plan), n.id, ticked)}   <!-- steps to turn on first -->
+          {@const needers = [...new Set(steps.flatMap((p) => pick.neededBy[p.id] ?? []))].filter((x) => !steps.some((p) => p.id === x))}
+          {@const needed = needers.length ? needers : undefined}
+          {@const before = on || !canPick(plan) ? [] : titlesOf(mustTurnOnFirst(plan, wanted ?? defaultFeatures(plan), n.id, ticked))}   <!-- steps to turn on first -->
+          <!-- where it runs: the steps that run on a machine (a feature's API steps run at their API, as its details say) -->
+          {@const placed = steps.length > 1 && steps.some((p) => !p.service) ? steps.filter((p) => !p.service) : [n]}
+          {@const time = timeOf(steps)}
+          {@const cost = steps.reduce((a, p) => a + p.cost_usd, 0)}
           <li class="step {started ? s.state : ''}" class:off={!on} aria-label={n.id}>
-            <span class="pick">{#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${title(n)}`} checked={on} disabled={!!needers || before.length > 0}
-              aria-describedby={needers ? `needed-${n.id}` : before.length ? `before-${n.id}` : undefined}
-              title={needers ? `Needed by ${list(needers.map(titleOf))}` : undefined} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}</span>
+            <span class="pick">{#if !started && canPick(plan)}<input type="checkbox" aria-label={`Run ${title(n)}`} checked={on} disabled={!!needed || before.length > 0}
+              aria-describedby={needed ? `needed-${n.id}` : before.length ? `before-${n.id}` : undefined}
+              title={needed ? `Needed by ${list(needed.map(titleOf))}` : undefined} onchange={(e) => toggle(n.id, e.currentTarget.checked)} />{/if}</span>
             <button class="name" aria-expanded={open === n.id} aria-controls={`details-${n.id}`} onclick={() => (open = open === n.id ? null : n.id)}>
               <span class="chev" aria-hidden="true"></span>{title(n)}
             </button>
             <span class="where">
-              {#if n.cached}<span class="muted">Already done</span>
-              {:else if n.service}{n.service}
-              {:else if n.place && !started && on && (n.options?.length ?? 0) > 1}
-                <select aria-label={`Where ${title(n)} runs`} value={places[n.id] ?? n.place} onchange={(e) => choosePlace(n.id, e.currentTarget.value)}>
-                  {#each n.options ?? [] as o (o)}<option value={o}>{placeLabel(n, o, plan.places)}</option>{/each}
-                </select>
-              {:else if n.place}{placeName(n.place, plan.places)}
-              {:else if n.where}{n.where}   <!-- a CLI from before plans named places -->
-              {:else}<span class="error">Cannot run here</span>{/if}
+              {#if done}<span class="muted">Already done</span>
+              {:else}{#each placed as p (p.id)}
+                {#if p.service}{p.service}
+                {:else if p.place && !started && on && (p.options?.length ?? 0) > 1}
+                  <select aria-label={`Where ${title(placed.length === 1 ? n : p)} runs`} value={places[p.id] ?? p.place} onchange={(e) => choosePlace(p.id, e.currentTarget.value)}>
+                    {#each p.options ?? [] as o (o)}<option value={o}>{placeLabel(p, o, plan.places)}</option>{/each}
+                  </select>
+                {:else if p.place}{placeName(p.place, plan.places)}
+                {:else if p.where}{p.where}   <!-- a CLI from before plans named places -->
+                {:else}<span class="error">Cannot run here</span>{/if}
+              {/each}{/if}
             </span>
             <span class="track" aria-hidden="true">
-              {#if on && (n.cached || started)}
-                {@const f = progress(n, s.state)}
+              {#if on && (done || started)}
+                {@const f = featureProgress(steps)}
                 {#if f == null}<span class="bar busy"></span>{:else if f > 0}<span class="bar" style:width="{f * 100}%"></span>{/if}
               {/if}
             </span>
-            <span class="time" title={n.estimate_basis}>
+            <span class="time" title={steps.map((p) => p.estimate_basis).filter(Boolean).join('; ') || undefined}>
               {#if started}<span class="state">{STATE_LABEL[s.state]}</span>
-              {:else if on && !n.cached && n.estimate_s != null}{duration(n.estimate_s)}
-              {:else if on && !n.cached && 'estimate_s' in n}<span class="muted">No estimate</span>{/if}
+              {:else if on && !done && time != null}{duration(time)}
+              {:else if on && !done && steps.some((p) => 'estimate_s' in p)}<span class="muted">No estimate</span>{/if}
             </span>
             <div class="notes">
               {#if started}{#if s.message}<span class="muted">{s.message}</span>{/if}
               {:else if on}
-                {#if needers}<span class="muted" id={`needed-${n.id}`}>Needed by {list(needers.map(titleOf))}</span>{/if}
+                {#if needed}<span class="muted" id={`needed-${n.id}`}>Needed by {list(titlesOf(needed))}</span>{/if}
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
-                {#if n.cost_usd}<span>{machineCost(plan, n) ? 'Up to ' : ''}${n.cost_usd.toFixed(2)}</span>{/if}
-                {#if n.why_not}<span class="error">{n.why_not}</span>{/if}
-                {#each n.missing_secrets as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
+                {#if cost}<span>{steps.some((p) => machineCost(plan!, p)) ? 'Up to ' : ''}${cost.toFixed(2)}</span>{/if}
+                {#each steps.filter((p) => p.why_not) as p (p.id)}<span class="error">{p.why_not}</span>{/each}
+                {#each [...new Set(steps.flatMap((p) => p.missing_secrets))] as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
-                <span class="muted" id={`before-${n.id}`}>Turn on {list(before.map(titleOf))} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
+                <span class="muted" id={`before-${n.id}`}>Turn on {list(before)} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
               {/if}
             </div>
             {#if open === n.id}
-              <!-- a model a setting picks shows as that setting, not as a fixed one -->
-              {@const fixed = (n.models ?? []).filter((m) => !(n.settings ?? []).some((st) => st.choices.includes(m.id)))}
+              <!-- a model a setting picks shows as that setting, not as a fixed one; a model two steps name, once -->
+              {@const fixed = oncePerModel(steps.flatMap((p) => (p.models ?? []).filter((m) => !(p.settings ?? []).some((st) => st.choices.includes(m.id)))))}
+              {@const downloads = oncePerModel(steps.flatMap((p) => p.downloads))}
+              {@const sent = [...new Set(steps.map(leaves).filter((x) => x !== 'Nothing'))]}
               <div class="details" id={`details-${n.id}`}>
                 {#if n.description}<p>{n.description}.</p>{/if}
                 <dl>
                   {#if n.outputs}<dt>Makes</dt><dd>{list(Object.keys(n.outputs))}</dd>{/if}
                   {#if fixed.length}<dt>Uses</dt>
                     <dd>{#each fixed as m (m.id)}<span title={m.source ?? undefined}>{m.id}</span> <span class="muted">({LICENCE[m.licence_mode] ?? m.licence_mode}{m.size_gb ? `, ${m.size_gb} GB` : ''})</span><br />{/each}</dd>{/if}
-                  {#if n.downloads.length}<dt>Downloads first</dt>
-                    <dd>{#each n.downloads as d (d.id)}<span title={d.source ?? undefined}>{d.id}</span> <span class="muted">({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}, {LICENCE[d.licence_mode] ?? d.licence_mode}{d.gated ? ', gated: needs access granted on Hugging Face' : ''})</span><br />{/each}</dd>{/if}
-                  <dt>Leaves this machine</dt><dd>{leaves(n)}</dd>
-                  {#if n.service}<dt>Runs on</dt><dd>The {n.service}, in the cloud</dd>{/if}
-                  {#each n.settings ?? [] as st (st.key)}
-                    <dt><label for={`set-${n.id}-${st.key}`}>{capital(st.key)}</label></dt>
+                  {#if downloads.length}<dt>Downloads first</dt>
+                    <dd>{#each downloads as d (d.id)}<span title={d.source ?? undefined}>{d.id}</span> <span class="muted">({d.size_gb ? `${d.size_gb} GB` : 'size unknown'}, {LICENCE[d.licence_mode] ?? d.licence_mode}{d.gated ? ', gated: needs access granted on Hugging Face' : ''})</span><br />{/each}</dd>{/if}
+                  <dt>Leaves this machine</dt><dd>{sent.join('; ') || 'Nothing'}</dd>
+                  {#if steps.every((p) => p.service) && n.service}<dt>Runs on</dt><dd>The {n.service}, in the cloud</dd>{/if}
+                  {#each steps.flatMap((p) => (p.settings ?? []).map((st) => ({ p, st }))) as { p, st } (`${p.id}.${st.key}`)}
+                    <dt><label for={`set-${p.id}-${st.key}`}>{capital(st.key)}</label></dt>
                     <dd class="setting">
-                      <select id={`set-${n.id}-${st.key}`} value={settings[n.id]?.[st.key] ?? st.value} disabled={started} onchange={(e) => chooseSetting(n.id, st.key, e.currentTarget.value)}>
+                      <select id={`set-${p.id}-${st.key}`} value={settings[p.id]?.[st.key] ?? st.value} disabled={started} onchange={(e) => chooseSetting(p.id, st.key, e.currentTarget.value)}>
                         {#each st.choices as c (c)}<option value={c}>{choiceLabel(st, c)}</option>{/each}
                       </select>
                       {#if st.description}<span class="muted">{st.description}</span>{/if}

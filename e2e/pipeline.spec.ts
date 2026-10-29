@@ -591,6 +591,55 @@ test('in a narrow window Settings fits without scrolling sideways', async ({ pag
   expect(await page_.evaluate((d) => d.scrollWidth - d.clientWidth)).toBeLessThanOrEqual(0);
 });
 
+// --- a feature in several steps: objects is its names, its tracks and itself (perception #43), one feature (#45) -------
+
+test('objects is one feature: one row to tick, which runs and agrees to its three steps', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=objects');
+  const objects = dialog.getByRole('listitem', { name: 'objects', exact: true });
+  await expect(dialog.getByRole('checkbox', { name: /^Run Object (names|tracks)$/ })).toHaveCount(0);
+  await expect(dialog.getByRole('listitem', { name: /^objects_(names|track)$/ })).toHaveCount(0);
+  const box = dialog.getByRole('checkbox', { name: 'Run Objects' });
+  await expect(box).not.toBeChecked();                                                    // it sends data off: off at first
+  await expect(box).toBeEnabled();                                                        // not "turn on Object names first"
+  await expect(objects).not.toContainText('first');
+  await box.check();
+  await expect(objects).toContainText('Apple GPU');                                        // where its GPU step runs
+  await expect(objects).toContainText('19 min 51 s');                                      // its three steps, one after another
+  await expect(objects).toContainText('$0.10');
+  await objects.getByRole('button', { name: 'Objects' }).click();
+  const details = objects.locator('.details');
+  await expect(details.getByText('facebook/sam3', { exact: true })).toHaveCount(2);         // once used, once downloaded
+  await expect(details.getByText('claude-haiku-5-5', { exact: true })).toHaveCount(1);
+  await expect(details).toContainText('frames and faces, sent to the Anthropic API');
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page) as unknown as { only: string[]; allow: { uploads: Record<string, unknown> } }[];
+  expect(ran.only).toEqual(expect.arrayContaining(['objects_names', 'objects_track', 'objects']));
+  expect(Object.keys(ran.allow.uploads).sort()).toEqual(['objects', 'objects_names']);
+  await expect(objects).toContainText('Done', { timeout: 20_000 });                      // the demo's pace: a step every 0.4 s
+  await expect(dialog.getByRole('listitem', { name: /^objects_(names|track)$/ })).toHaveCount(0);   // one row in the run too
+});
+
+test('the GPU step of objects is placed from its row', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=objects-remote');
+  await dialog.getByRole('checkbox', { name: 'Run Objects' }).check();
+  const menu = placeMenu(dialog, 'objects', 'Objects');
+  await menu.selectOption('ssh-lab:cuda');
+  await expect(menu).toHaveValue('ssh-lab:cuda');
+  await dialog.getByRole('button', { name: 'Start run' }).click();
+  const [ran] = await runs(page);
+  expect(ran.places).toEqual({ objects_track: 'ssh-lab:cuda' });
+  expect(ran.allow.uploads.objects_track).toEqual({ kinds: ['video', 'faces', 'embeddings'], service: 'lab (SSH)' });
+});
+
+test('a pipeline that does not say which steps are part of objects shows each step, as before', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=objects-old');
+  await expect(dialog.getByRole('checkbox', { name: 'Run Object names' })).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: 'Run Objects' })).toBeDisabled();
+  await expect(dialog.getByRole('listitem', { name: 'objects', exact: true })).toContainText('Turn on Object names first');
+  const settings = await settingsAt(page, /^Models$/);
+  await expect(settings.getByRole('listitem', { name: 'Object tracks' })).toBeVisible();
+});
+
 // --- keys, set in Settings where they are used: Models (shot captions, gated models), Machines (a cloud provider) -----
 
 test('a key is saved to the keychain where its step is listed, leaves the page at once, and can be removed', async ({ page }) => {
@@ -659,6 +708,20 @@ async function hfAccessAt(page: Page, demo: string) {
 }
 const opened = (page: Page) => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened);
 const model = (hf: Locator, name: string) => hf.getByRole('listitem', { name: 'Ask for access' }).getByRole('listitem', { name });
+
+test('Models lists objects once: each of its models and its key once, a download only where it has a source', async ({ page }) => {
+  const { settings, hf } = await hfAccessAt(page, 'gated');
+  const objects = settings.getByRole('listitem', { name: 'Objects' });
+  await expect(settings.getByRole('listitem', { name: /^Object (names|tracks)$/ })).toHaveCount(0);
+  await expect(objects.getByRole('button', { name: 'Claude Haiku 5.5' })).toHaveCount(1);
+  await expect(objects.getByRole('button', { name: 'facebook/sam3' })).toHaveCount(1);
+  await expect(objects.getByRole('button', { name: 'facebook/dinov3-vitl16-pretrain-lvd1689m' })).toHaveCount(1);
+  await expect(objects).toContainText('Runs on your computers and the Anthropic API · 3.4 GB, downloaded once · 1.2 GB, downloaded once');
+  await expect(objects.getByRole('listitem', { name: 'Anthropic key' })).toHaveCount(1);
+  await expect(model(hf, 'SAM 3')).toContainText('Objects');
+  await expect(model(hf, 'DINOv3')).toContainText('Objects');
+  await expect(hf).not.toContainText('Object tracks');
+});
 
 test('gated models: the steps to set up Hugging Face, each model with how it is granted and where to ask', async ({ page }) => {
   const { settings, hf } = await hfAccessAt(page, 'gated');

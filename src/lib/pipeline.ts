@@ -27,6 +27,9 @@ export interface PlanNode {
   title?: string; service?: string | null; description?: string; outputs?: Record<string, string>;
   models?: { id: string; source: string | null; licence_mode: string; size_gb: number | null }[];
   settings?: Setting[];
+  /** The feature it is a step of (the graph node: objects, for objects_names and objects_track), shown and turned on
+   *  as one with it; null for a feature of its own. Absent from pipelines before perception #45. */
+  part_of?: string | null;
 }
 
 /** A node setting with a fixed list of choices (a model, an effort), and each choice's price when the cost depends on it. */
@@ -60,9 +63,24 @@ export const provider = (c: CloudStatus, name: CloudProviderName): CloudProvider
 export interface ModelInfo { node: string; id: string; source: string | null; size_gb: number | null; gated: boolean; licence_mode: string }
 /** A step the pipeline has (`perception models list`'s `nodes`): what it is called, the hosted API it calls (or null),
  *  the keys it needs, and its fixed choices at their defaults, with prices. */
-export interface StepInfo { node: string; title: string; service: string | null; secrets: string[]; settings: Setting[] }
+export interface StepInfo { node: string; title: string; service: string | null; secrets: string[]; settings: Setting[];
+  /** the id of the step whose feature it is a step of (vision.objects); null or absent (before perception #45): its own */
+  part_of?: string | null }
 /** The models, and the steps (null from a pipeline before them: then only the models are known). */
 export interface ModelsListing { models: ModelInfo[]; nodes: StepInfo[] | null }
+/** The steps as Settings > Models lists them: a feature each, with the steps part of it (part_of: perception #45) after
+ *  it; a step part of one the pipeline does not list, or a pipeline that does not say, is a feature of its own. */
+export function stepGroups(steps: StepInfo[]): { step: StepInfo; parts: StepInfo[] }[] {
+  const id = (s: StepInfo) => s.node.replace(/@.*/, '');
+  const head = (s: StepInfo) => (s.part_of && s.part_of !== id(s) && steps.find((x) => id(x) === s.part_of)) || s;
+  return steps.filter((s) => head(s) === s).map((s) => ({ step: s, parts: [s, ...steps.filter((x) => x !== s && head(x) === s)] }));
+}
+/** Each model once, where it first appears: the entry with a source when there is one, as a step that only records a
+ *  model another step downloads (the objects layer's SAM 3) declares none. */
+export function oncePerModel<M extends { id: string; source: string | null }>(models: M[]): M[] {
+  const ids = [...new Set(models.map((m) => m.id))];
+  return ids.map((i) => models.find((m) => m.id === i && m.source) ?? models.find((m) => m.id === i)!);
+}
 /** A gated model's access with a Hugging Face token (`keys check HF_TOKEN`'s `models`): granted; not granted (asked
  *  for and pending, or never asked: Hugging Face answers both alike); or unknown (no token it accepts, or no answer:
  *  `reason`). `gating`: how it is granted, by the owner (`manual`) or on accepting the terms (`auto`). */
@@ -201,6 +219,39 @@ export const sends = (n: PlanNode) => dest(n) !== null || !!n.uploads?.length;
 /** What ticking `n` agrees to: what the plan on screen shows it sends, and where. */
 export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: dest(n) });
 
+/** The feature a step is part of (the pipeline says, perception #45: objects_names is a step of objects), when the
+ *  plan has that feature; else the step itself, a feature of its own. */
+export function featureOf(plan: Plan, id: string): string {
+  const f = plan.nodes.find((n) => n.id === id)?.part_of;
+  return f && f !== id && plan.nodes.some((n) => n.id === f) ? f : id;
+}
+
+/** A feature's steps, in the plan's order: itself and the steps part of it. */
+export const stepsOf = (plan: Plan, id: string): string[] =>
+  plan.nodes.filter((n) => n.id === id || featureOf(plan, n.id) === id).map((n) => n.id);
+
+/** The picker's rows: a feature each, with its steps in its row; a step whose feature is off but that runs for another
+ *  (`chosen`) has its own row, where it says what needs it. A pipeline that does not say what steps are part of has a
+ *  row for each step. */
+export const featureRows = (plan: Plan, chosen: string[]): PlanNode[] =>
+  plan.nodes.filter((n) => featureOf(plan, n.id) === n.id || (chosen.includes(n.id) && !chosen.includes(featureOf(plan, n.id))));
+
+/** What turning on feature `id` agrees to: what each of its steps sends, as the plan on screen shows it. */
+export const tickFeature = (plan: Plan, id: string): Ticked =>
+  Object.fromEntries(stepsOf(plan, id).map((s) => [s, tick(plan.nodes.find((n) => n.id === s)!)]));
+
+/** A feature's state in a run, from its steps' (in order): failed or canceled if one is, else running while one runs or
+ *  some are done and the rest wait, done when all are. */
+export function featureState(states: NodeState[]): NodeState {
+  const one = (s: NodeStateName) => states.find((x) => x.state === s);
+  const done = (x: NodeState) => x.state === 'succeeded' || x.state === 'cached';
+  const now = one('failed') ?? one('canceled') ?? states.find((x) => x.state === 'running' || x.state === 'retrying');
+  if (now) return now;
+  if (states.every((x) => x.state === 'cached')) return { state: 'cached', message: '' };
+  if (states.every(done)) return [...states].reverse().find((x) => x.state === 'succeeded')!;
+  return states.some(done) ? { state: 'running', message: '' } : { state: 'waiting', message: '' };
+}
+
 /** What choosing `place` for `n` agrees to: what the plan says it would send from there, and where (choosing another
  *  machine is the choice to send it its inputs). Null when the plan does not say (then nothing is agreed). */
 export function placeTick(n: PlanNode, place: string): { kinds: string[]; service: string | null } | null {
@@ -238,15 +289,15 @@ export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Ticked, pla
   // held on for another feature cannot be turned on by itself, so the feature that brings it goes off instead
   const byId = new Map(plan.nodes.map((n) => [n.id, n]));
   const keep = new Set([...wanted].filter((id) => picked(plan, new Set([id])).chosen.every((c) => covered(byId.get(c)!, ticked))));
-  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(id) || placed.includes(id))) };
+  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(featureOf(plan, id)) || placed.includes(id))) };
 }
 
 /** The steps that send data off which turning on `id` would bring along although the user has not agreed to it (by
  *  turning them on, or by choosing the other machine they run on): `id` waits until they do (sending is chosen, never
  *  brought along). */
 export function mustTurnOnFirst(plan: Plan, wanted: Set<string>, id: string, ticked: Ticked = {}): string[] {
-  const { chosen } = picked(plan, new Set([...wanted, id]));
-  return chosen.filter((c) => { const n = plan.nodes.find((x) => x.id === c); return c !== id && !wanted.has(c) && !!n && !covered(n, ticked); });
+  const { chosen } = picked(plan, new Set([...wanted, id])), own = stepsOf(plan, id);   // its own steps are turned on with it
+  return chosen.filter((c) => { const n = plan.nodes.find((x) => x.id === c); return !own.includes(c) && !wanted.has(c) && !!n && !covered(n, ticked); });
 }
 
 /** Why a run cannot start, one line per problem; empty when it can: every node needs a place to run here (cached ones
@@ -282,7 +333,7 @@ export function picked(plan: Plan, wanted: Set<string>): { chosen: string[]; nee
   const byId = new Map(plan.nodes.map((n) => [n.id, n]));
   const on = new Set<string>();
   const add = (id: string) => { if (on.has(id) || !byId.has(id)) return; on.add(id); (byId.get(id)!.needs ?? []).forEach(add); };
-  wanted.forEach(add);
+  wanted.forEach((id) => stepsOf(plan, id).forEach(add));
   const chosen = plan.nodes.filter((n) => on.has(n.id)).map((n) => n.id);
   const neededBy = Object.fromEntries(chosen.map((id) => [id, chosen.filter((c) => (byId.get(c)!.needs ?? []).includes(id))]).filter(([, by]) => by.length));
   return { chosen, neededBy, only: chosen.length === plan.nodes.length ? null : chosen };
@@ -299,7 +350,8 @@ export function defaultFeatures(plan: Plan): Set<string> {
     seen.add(n.id);
     return !sends(n) && !n.cost_usd && !n.cost_note && (n.needs ?? []).every((u) => !byId.has(u) || free(byId.get(u)!, seen));
   };
-  return new Set(plan.nodes.filter((n) => free(n)).map((n) => n.id));
+  // a feature with all of its steps; a step of a feature is never on by itself
+  return new Set(featureRows(plan, []).filter((n) => stepsOf(plan, n.id).every((s) => free(byId.get(s)!))).map((n) => n.id));
 }
 
 /** A choice as people say it: a Claude model by its name ("claude-haiku-5-5" is "Claude Haiku 5.5"), else as it is. */

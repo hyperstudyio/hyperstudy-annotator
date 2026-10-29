@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysText, type Plan, type PlanNode, type PipelineMessage, type Setting, type Ticked } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysText, featureOf, featureRows, featureState, oncePerModel, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -290,4 +290,83 @@ test('a Claude model is called by its name; other choices stay as they are', asy
   expect(choiceName('claude-opus-5')).toBe('Claude Opus 5');
   expect(choiceName('medium')).toBe('medium');
   expect(choiceLabel({ key: 'model', description: '', value: null, choices: [], prices: { 'claude-opus-5-5': 0.12 }, per: 'shot' }, 'claude-opus-5-5')).toBe('Claude Opus 5.5, $0.12 per shot');
+});
+
+// --- a feature in several steps (perception #45: part_of): objects is its names, its tracks and itself ---------------
+
+const step = (id: string, needs: string[], extra: Partial<PlanNode> = {}): PlanNode => ({ id, uses: `x.${id}@1`, where: 'native (cpu)', why_not: '',
+  cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], needs, settings: [], ...extra });
+const api = { uploads: ['frames', 'faces'], service: 'Anthropic API', upload_to: 'Anthropic API' };
+const objectsPlan: Plan = { ok: true, estimated_usd: 0, nodes: [step('decode', []), step('faces', ['decode']),
+  step('objects_names', ['decode'], { ...api, part_of: 'objects', cost_usd: 0.02 }),
+  step('objects_track', ['decode', 'faces', 'objects_names'], { part_of: 'objects', place: 'native:mps', options: ['native:mps'] }),
+  step('objects', ['decode', 'faces', 'objects_track'], { ...api, cost_usd: 0.08 }), step('gaze', ['faces'], { optional_needs: ['objects'] } as Partial<PlanNode>)] };
+
+test("a step part of a feature is in that feature's row, and a pipeline that does not say so has a row for each step", () => {
+  expect(featureOf(objectsPlan, 'objects_track')).toBe('objects');
+  expect(featureOf(objectsPlan, 'objects')).toBe('objects');
+  expect(featureOf(objectsPlan, 'faces')).toBe('faces');
+  expect(stepsOf(objectsPlan, 'objects')).toEqual(['objects_names', 'objects_track', 'objects']);
+  expect(stepsOf(objectsPlan, 'faces')).toEqual(['faces']);
+  expect(featureRows(objectsPlan, []).map((n) => n.id)).toEqual(['decode', 'faces', 'objects', 'gaze']);
+  // a feature the plan lacks (a graph without it): its steps are rows of their own
+  const alone = { ...objectsPlan, nodes: objectsPlan.nodes.filter((n) => n.id !== 'objects') };
+  expect(featureOf(alone, 'objects_track')).toBe('objects_track');
+  expect(featureRows(alone, []).map((n) => n.id)).toEqual(['decode', 'faces', 'objects_names', 'objects_track', 'gaze']);
+  // a step another feature needs while its own is off runs, so it has its row (and so do the steps it needs), where it
+  // says what needs it
+  const needed = { ...objectsPlan, nodes: [...objectsPlan.nodes, step('summary', ['objects_track'])] };
+  expect(featureRows(needed, picked(needed, new Set(['summary'])).chosen).map((n) => n.id))
+    .toEqual(['decode', 'faces', 'objects_names', 'objects_track', 'objects', 'gaze', 'summary']);
+  const older = { ...objectsPlan, nodes: objectsPlan.nodes.map(({ part_of: _, ...n }) => n) };
+  expect(featureRows(older, []).map((n) => n.id)).toEqual(['decode', 'faces', 'objects_names', 'objects_track', 'objects', 'gaze']);
+});
+
+test('turning on a feature in several steps turns them all on, agrees to what each sends, and none is asked for first', () => {
+  expect(picked(objectsPlan, new Set(['objects'])).chosen).toEqual(['decode', 'faces', 'objects_names', 'objects_track', 'objects']);
+  // its names send frames: before, Objects waited for Object names to be turned on first
+  expect(mustTurnOnFirst(objectsPlan, new Set(), 'objects')).toEqual([]);
+  const older = { ...objectsPlan, nodes: objectsPlan.nodes.map(({ part_of: _, ...n }) => n) };
+  expect(mustTurnOnFirst(older, new Set(), 'objects')).toEqual(['objects_names']);
+  const ticked = tickFeature(objectsPlan, 'objects');
+  expect(ticked).toEqual({ objects_names: { kinds: ['frames', 'faces'], service: 'Anthropic API' }, objects_track: { kinds: [], service: null },
+    objects: { kinds: ['frames', 'faces'], service: 'Anthropic API' } });
+  const active = { ...objectsPlan, nodes: objectsPlan.nodes.filter((n) => picked(objectsPlan, new Set(['objects'])).chosen.includes(n.id)) };
+  expect(unagreed(active, ticked)).toEqual([]);
+  expect(Object.keys(consentFor(active, ticked).uploads)).toEqual(['objects_names', 'objects']);
+  // the feature is off by default (it sends data off), and its steps are never on by themselves
+  expect([...defaultFeatures(objectsPlan)]).toEqual(['decode', 'faces', 'gaze']);
+  const freeTrack = { ...objectsPlan, nodes: objectsPlan.nodes.map((n) => n.id === 'objects_track' ? { ...n, needs: ['decode'] } : n) };
+  expect(defaultFeatures(freeTrack).has('objects_track')).toBe(false);
+  // a new plan keeps the feature, and its steps' ticks with it
+  expect(keepChoices(objectsPlan, new Set(['objects']), ticked)).toEqual({ wanted: new Set(['objects']), ticked });
+  const more = { ...objectsPlan, nodes: objectsPlan.nodes.map((n) => n.id === 'objects_names' ? { ...n, uploads: ['frames', 'faces', 'transcript'] } : n) };
+  expect(keepChoices(more, new Set(['objects']), ticked)).toEqual({ wanted: new Set(), ticked: {} });   // a step sends more: off
+});
+
+test("a feature's row is in the state of its steps: running between them, failed if one failed, done when all are", () => {
+  const s = (state: NodeState['state'], message = ''): NodeState => ({ state, message });
+  expect(featureState([s('waiting'), s('waiting')])).toEqual(s('waiting'));
+  expect(featureState([s('succeeded', '3 s'), s('running', 'attempt 1 on native (mps)'), s('waiting')])).toEqual(s('running', 'attempt 1 on native (mps)'));
+  expect(featureState([s('succeeded', '3 s'), s('waiting')])).toEqual(s('running'));
+  expect(featureState([s('cached'), s('retrying', 'retry in 2 s')])).toEqual(s('retrying', 'retry in 2 s'));
+  expect(featureState([s('succeeded'), s('failed', 'HF_TOKEN not granted'), s('canceled')])).toEqual(s('failed', 'HF_TOKEN not granted'));
+  expect(featureState([s('succeeded'), s('canceled')])).toEqual(s('canceled'));
+  expect(featureState([s('cached'), s('succeeded', '9 s')])).toEqual(s('succeeded', '9 s'));
+  expect(featureState([s('cached'), s('cached')])).toEqual(s('cached'));
+});
+
+test("Settings lists a feature's steps in its row, each model once, a download only where it has a source", () => {
+  const info = (node: string, title: string, extra: Partial<StepInfo> = {}): StepInfo => ({ node, title, service: null, secrets: [], settings: [], ...extra });
+  const steps = [info('vision.faces@1.0.0', 'Face tracks'), info('vision.objects@2.0.0', 'Objects', { service: 'Anthropic API' }),
+    info('vision.objects-names@1.0.0', 'Object names', { part_of: 'vision.objects' }), info('vision.objects-track@1.0.0', 'Object tracks', { part_of: 'vision.objects' })];
+  expect(stepGroups(steps).map((g) => [g.step.title, g.parts.map((p) => p.title)])).toEqual([['Face tracks', ['Face tracks']],
+    ['Objects', ['Objects', 'Object names', 'Object tracks']]]);
+  // a part of a step the pipeline does not list, or a pipeline that does not say: a row each
+  expect(stepGroups(steps.slice(2)).map((g) => g.step.title)).toEqual(['Object names', 'Object tracks']);
+  const m = (node: string, id: string, extra: Partial<ModelInfo> = {}): ModelInfo => ({ node, id, source: null, size_gb: null, gated: false, licence_mode: 'commercial-ok', ...extra });
+  const sam = m('vision.objects-track@1.0.0', 'facebook/sam3', { source: 'hf://facebook/sam3@3c87', size_gb: 3.44, gated: true });
+  expect(oncePerModel([m('vision.objects@2.0.0', 'claude-haiku-5-5'), m('vision.objects@2.0.0', 'facebook/sam3', { size_gb: 9 }),
+    m('vision.objects-names@1.0.0', 'claude-haiku-5-5'), sam])).toEqual([m('vision.objects@2.0.0', 'claude-haiku-5-5'), sam]);
+  expect(oncePerModel([m('a@1', 'x', { size_gb: 2 })])).toEqual([m('a@1', 'x', { size_gb: 2 })]);   // kept, though no download (Models: downloadSize)
 });
