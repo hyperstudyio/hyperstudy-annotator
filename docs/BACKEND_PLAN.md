@@ -261,6 +261,13 @@ Checked:
   destinations and folders are checked in Rust before the CLI sees them (`host_args`, positional words after `--`). A
   pipeline from before these says so on the row.
 
+- **Awake during remote steps** (run-anywhere plan A1): a step on another machine is driven from the Mac, and one out of
+  touch with it for 600 s is ended (perception's `lost_after_s`). While a run's plan puts a step on a lab server or a
+  cloud GPU, the app holds a macOS power assertion against idle sleep (`awake.rs`, IOKit; `pmset -g assertions` lists
+  it, named with the run), from when the CLI names the run until it ends, however it ends; the system drops it with the
+  app's process. It does not stop a closed lid's sleep (plan phase 7: runs coordinated off the Mac). A run on the Mac
+  alone holds none: none of its steps is watched from another machine. Elsewhere than macOS it does nothing.
+
 Not yet:
 - the native window checked by hand.
 

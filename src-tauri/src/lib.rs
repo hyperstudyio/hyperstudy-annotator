@@ -1,3 +1,4 @@
+mod awake;
 mod bundle;
 mod commands;
 mod db;
