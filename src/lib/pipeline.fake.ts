@@ -1,6 +1,6 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
-import type { CheckResult, CloudStatus, Doctor, GraphPreset, Host, KeyStatus, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep, SshOverrides } from './pipeline';
+import type { CheckResult, CloudStatus, Doctor, GraphPreset, Host, KeyStatus, ModelInfo, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep, SshOverrides, StepInfo } from './pipeline';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,
@@ -50,6 +50,32 @@ const plan: Plan = {
       uploads: ['frames', 'faces', 'transcript'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 176.1, estimate_basis: 'median of 2 runs of vlm.shot-captions@1.0.0 on native:cpu here' },
   ],
 };
+/** For `objects`: the objects feature's steps in the plan, as the full graph has them (perception #43): the names (its
+ *  API), the tracks (the GPU, its gated models a download) and the layer (its API); the names and the tracks are part of
+ *  objects (#45). */
+const objectsNodes: Plan['nodes'] = [
+  { id: 'objects_names', needs: ['decode'], part_of: 'objects', title: 'Object names', service: 'Anthropic API', settings: [],
+    description: "The things on screen named by Claude Haiku 5.5 from each shot's keyframes (up to 8 a shot, in generic detector nouns), and each name's family, kind and whether it is worn, for the object tracks",
+    outputs: { vocabulary: 'vocabulary.v1' }, models: [{ id: 'claude-haiku-5-5', source: null, licence_mode: 'api-terms', size_gb: null }],
+    uses: 'vision.objects-names@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.02, cost_note: '',
+    uploads: ['frames', 'faces'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 31, estimate_basis: 'median of 2 runs of vision.objects-names@1.0.0 on native:cpu here' },
+  { id: 'objects_track', needs: ['decode', 'faces', 'objects_names'], part_of: 'objects', title: 'Object tracks', service: null, settings: [],
+    description: 'The named things and the clothing on every posed person, outlined and tracked within shots by SAM 3, and embedded by DINOv3, for the objects layer',
+    outputs: { tracks: 'object_tracks.v1' },
+    models: [{ id: 'facebook/sam3', source: 'hf://facebook/sam3@3c879f39826c281e95690f02c7821c4de09afae7', licence_mode: 'commercial-ok', size_gb: 3.44 },
+      { id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: 'hf://facebook/dinov3-vitl16-pretrain-lvd1689m@ea8dc2863c51be0a264bab82070e3e8836b02d51', licence_mode: 'commercial-ok', size_gb: 1.21 }],
+    uses: 'vision.objects-track@1.0.0', where: 'native (mps)', why_not: '', cached: false, missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [],
+    downloads: [{ id: 'facebook/sam3', source: 'hf://facebook/sam3@3c879f39826c281e95690f02c7821c4de09afae7', size_gb: 3.44, gated: true, licence_mode: 'commercial-ok' },
+      { id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: 'hf://facebook/dinov3-vitl16-pretrain-lvd1689m@ea8dc2863c51be0a264bab82070e3e8836b02d51', size_gb: 1.21, gated: true, licence_mode: 'commercial-ok' }],
+    place: 'native:mps', options: ['native:mps'], estimate_s: 1100, estimate_basis: 'median of 2 runs of vision.objects-track@1.0.0 on native:mps here' },
+  { id: 'objects', needs: ['decode', 'faces', 'objects_track'], part_of: null, title: 'Objects', service: 'Anthropic API', settings: [],
+    description: "Things on screen as the objects layer, from the object tracks; each track checked by Claude Haiku 5.5 on crops of three moments, worn things given their wearer, and tracks linked across shots into objects by their DINOv3 embeddings",
+    outputs: { objects: 'bundle.objects@0.1', crops: 'assets.v1', masks: 'bundle.objects_masks@0.1' },
+    models: [{ id: 'claude-haiku-5-5', source: null, licence_mode: 'api-terms', size_gb: null }, { id: 'facebook/sam3', source: null, licence_mode: 'commercial-ok', size_gb: null },
+      { id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: null, licence_mode: 'commercial-ok', size_gb: null }],
+    uses: 'vision.objects@2.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.08, cost_note: '',
+    uploads: ['frames', 'faces'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 60, estimate_basis: 'median of 2 runs of vision.objects@2.0.0 on native:cpu here' },
+];
 /** For `twoPlaces`: faces on a machine where it has two places to choose from (an NVIDIA GPU, measured, or the CPU, not yet). */
 const twoPlaces = (faces: Plan['nodes'][number], cpu: boolean) => ({ ...faces, options: ['native:cuda', 'native:cpu'], place: cpu ? 'native:cpu' : 'native:cuda',
   where: cpu ? 'native (cpu)' : 'native (cuda)', estimate_s: cpu ? null : 96,
@@ -66,6 +92,7 @@ const remotePlaces = { 'native:mps': { title: 'This machine', remote: false, acc
 const labHost = (name: string, dest: string): Host => ({ name, dest, root: `/home/you/.cache/hyperstudy-perception`, probed_at: 1792800000,
   caps: { platform: 'linux/amd64', cpu_cores: 32, memory_gb: 251.6, accelerators: ['cpu', 'cuda'], vram_gb: 47.5, tools: { uv: '/home/you/.local/bin/uv', ffmpeg: '/usr/bin/ffmpeg', ffprobe: '/usr/bin/ffprobe' } } });
 function remote(n: Plan['nodes'][number], place: string | undefined, hosts: Host[] = [labHost('lab', 'you@lab')], cloudOn = true, runpodOn = false): Plan['nodes'][number] {
+  if (n.id === 'objects_track') return gpuElsewhere(n, place, hosts);
   if (n.id !== 'faces') return { ...n, upload_to: n.service ?? null, estimates: n.estimates ?? Object.fromEntries((n.options ?? []).map((o) => [o, { estimate_s: n.estimate_s ?? null, estimate_basis: n.estimate_basis ?? '', cost_usd: 0, uploads: n.uploads, upload_to: n.service ?? null }])) };
   const sent = ['faces', 'transcript', 'video'];
   const estimates: Record<string, { estimate_s: number | null; estimate_basis: string; cost_usd: number; uploads: string[]; upload_to: string | null }> = {
@@ -81,16 +108,34 @@ function remote(n: Plan['nodes'][number], place: string | undefined, hosts: Host
   return { ...n, options: Object.keys(estimates), place: at, where: at.replace(':', ' (') + ')', estimates, estimate_s: e.estimate_s, estimate_basis: e.estimate_basis,
     cost_usd: e.cost_usd, uploads: e.uploads, upload_to: e.upload_to };
 }
+/** The objects tracks on the Apple GPU here or a lab server's NVIDIA GPU (when its token is download-only, perception
+ *  phase 5): there it is sent its inputs, the video and the faces and bodies layers. */
+function gpuElsewhere(n: Plan['nodes'][number], place: string | undefined, hosts: Host[]): Plan['nodes'][number] {
+  const estimates: NonNullable<Plan['nodes'][number]['estimates']> = {
+    'native:mps': { estimate_s: n.estimate_s ?? null, estimate_basis: n.estimate_basis ?? '', cost_usd: 0, uploads: [], upload_to: null },
+    ...Object.fromEntries(hosts.map((h) => [`ssh-${h.name}:cuda`, { estimate_s: null, estimate_basis: `no runs of ${n.uses} on ssh-${h.name}:cuda here yet`, cost_usd: 0,
+      uploads: ['video', 'faces', 'embeddings'], upload_to: `${h.name} (SSH)` }])) };
+  if (place && !(place in estimates)) throw new Error(`the pipeline cannot plan this: ${place} is not one of the places objects_track can run`);
+  const e = estimates[place ?? 'native:mps'];
+  return { ...n, options: Object.keys(estimates), place: place ?? 'native:mps', estimates, estimate_s: e.estimate_s, estimate_basis: e.estimate_basis,
+    uploads: e.uploads, upload_to: e.upload_to ?? null };
+}
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'demo-run', node, kind, message, at: null });
 const script: PipelineMessage[] = [
   { v: 1, type: 'run.created', run: 'demo-run', store: '~/.hyperstudy-perception' },
   ev('decode', 'task.cached', '5ccfe2d78fac'),
+  ev('objects_names', 'task.started', 'attempt 1 on native (cpu)'),
   ev('asr', 'task.started', 'attempt 1 on native (mps)'),
   ev('faces', 'task.started', 'attempt 1 on native (mps)'),
   ev('asr', 'task.succeeded', '5.2 s'),
   ev('faces', 'task.retry', 'attempt 1 failed (the node exited without a response); retry in 2 s'),
   ev('faces', 'task.started', 'attempt 2 on native (mps)'),
+  ev('objects_names', 'task.succeeded', '31.0 s'),
   ev('faces', 'task.succeeded', '96.1 s'),
+  ev('objects_track', 'task.started', 'attempt 1 on native (mps)'),
+  ev('objects_track', 'task.succeeded', '1100.4 s'),
+  ev('objects', 'task.started', 'attempt 1 on native (cpu)'),
+  ev('objects', 'task.succeeded', '60.2 s'),
   ev('captions', 'task.started', 'attempt 1 on native (cpu)'),
   ev('captions', 'task.succeeded', '149.4 s'),
   ev(null, 'run.succeeded'),
@@ -104,19 +149,29 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `objects`: the objects feature's three steps (perception #43), with `noPartOf` from a pipeline before they said they are one feature (#45); the gated demos have them too. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-// the steps with gated models, as hyperstudy-perception's manifests declare them (vision.objects, audio.diarize)
-const GATED = [
-  { node: 'vision.objects@1.0.0', title: 'Objects', service: null, secrets: ['ANTHROPIC_API_KEY', 'HF_TOKEN'], settings: [], models: [
-    { node: 'vision.objects@1.0.0', id: 'facebook/sam3', source: 'hf://facebook/sam3@3c879f39826c281e95690f02c7821c4de09afae7', size_gb: 3.44, gated: true, licence_mode: 'commercial-ok' },
-    { node: 'vision.objects@1.0.0', id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: 'hf://facebook/dinov3-vitl16-pretrain-lvd1689m@ea8dc2863c51be0a264bab82070e3e8836b02d51', size_gb: 1.21, gated: true, licence_mode: 'commercial-ok' },
-    { node: 'vision.objects@1.0.0', id: 'claude-haiku-5-5', source: null, size_gb: null, gated: false, licence_mode: 'api-terms' }] },
+// the objects feature in its three steps (perception #43), as `models list` lists them: the layer's step records SAM 3
+// and DINOv3 without a source (the track step downloads them), and the names and track steps are part of it (#45)
+const OBJECTS: (StepInfo & { models: ModelInfo[] })[] = [
+  { node: 'vision.objects@2.0.0', title: 'Objects', service: 'Anthropic API', part_of: null, secrets: ['ANTHROPIC_API_KEY'], settings: [], models: [
+    { node: 'vision.objects@2.0.0', id: 'claude-haiku-5-5', source: null, size_gb: null, gated: false, licence_mode: 'api-terms' },
+    { node: 'vision.objects@2.0.0', id: 'facebook/sam3', source: null, size_gb: null, gated: false, licence_mode: 'commercial-ok' },
+    { node: 'vision.objects@2.0.0', id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: null, size_gb: null, gated: false, licence_mode: 'commercial-ok' }] },
+  { node: 'vision.objects-names@1.0.0', title: 'Object names', service: 'Anthropic API', part_of: 'vision.objects', secrets: ['ANTHROPIC_API_KEY'], settings: [], models: [
+    { node: 'vision.objects-names@1.0.0', id: 'claude-haiku-5-5', source: null, size_gb: null, gated: false, licence_mode: 'api-terms' }] },
+  { node: 'vision.objects-track@1.0.0', title: 'Object tracks', service: null, part_of: 'vision.objects', secrets: ['HF_TOKEN'], settings: [], models: [
+    { node: 'vision.objects-track@1.0.0', id: 'facebook/sam3', source: 'hf://facebook/sam3@3c879f39826c281e95690f02c7821c4de09afae7', size_gb: 3.44, gated: true, licence_mode: 'commercial-ok' },
+    { node: 'vision.objects-track@1.0.0', id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: 'hf://facebook/dinov3-vitl16-pretrain-lvd1689m@ea8dc2863c51be0a264bab82070e3e8836b02d51', size_gb: 1.21, gated: true, licence_mode: 'commercial-ok' }] },
+];
+// the steps with gated models, as hyperstudy-perception's manifests declare them (the objects steps, audio.diarize)
+const GATED: (StepInfo & { models: ModelInfo[] })[] = [
+  ...OBJECTS,
   { node: 'audio.diarize@1.1.0', title: 'Speaker diarization', service: null, secrets: ['HF_TOKEN'], settings: [], models: [
     { node: 'audio.diarize@1.1.0', id: 'pyannote/speaker-diarization-community-1', source: 'hf://pyannote/speaker-diarization-community-1@3533c8cf8e369892e6b79ff1bf80f7b0286a54ee', size_gb: 0.03, gated: true, licence_mode: 'commercial-ok' }] },
 ];
@@ -135,8 +190,8 @@ function hfCheck(token: string | undefined): CheckResult {
     models: models.map((m) => ({ ...m, access: pending && m.id.includes('dinov3') ? 'not-granted' as const : 'granted' as const, reason: null })) };
 }
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hf = 'none' as 'none' | 'granted' | 'pending' | 'refused' | 'file' | 'old', hfStored = false, oldChecks = false, runpodKeyGone = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
-                             runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown }[] = [],
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hf = 'none' as 'none' | 'granted' | 'pending' | 'refused' | 'file' | 'old', hfStored = false, oldChecks = false, runpodKeyGone = false, objects = false, noPartOf = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
+                             runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown; only?: string[] | null }[] = [],
                              added: { name: string; dest: string; overrides?: SshOverrides }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
   let installed = setup !== 'installing' && setup !== 'install-failed';   // a first launch offline has none
@@ -179,18 +234,22 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
         .map((n) => remote_ ? remote(n, places[n.id], hosts, cloud.enabled, cloud.runpod!.enabled) : n)
         // missingKey: the captions step has no Anthropic key until one is saved
         .map((n) => missingKey && n.id === 'captions' && !stored.has('ANTHROPIC_API_KEY') ? { ...n, missing_secrets: ['ANTHROPIC_API_KEY'] } : n);
-      const all = summary ? [...nodes, { id: 'summary', needs: ['captions'], title: 'Summary', uses: 'test.summary@1.0.0', where: 'native (cpu)', why_not: '', cached: false,
-        downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:cpu', options: ['native:cpu'], estimate_s: 3, estimate_basis: '' }] : nodes;
+      // `objects` (and the gated demos): the objects feature's three steps; `noPartOf`, from a pipeline before part_of
+      const withObjects = objects || gated ? [...nodes, ...objectsNodes.map((n) => remote_ ? remote(n, places[n.id], hosts) : n)
+        .map(({ part_of, ...n }) => noPartOf ? n : { ...n, part_of })] : nodes;
+      const all = summary ? [...withObjects, { id: 'summary', needs: ['captions'], title: 'Summary', uses: 'test.summary@1.0.0', where: 'native (cpu)', why_not: '', cached: false,
+        downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], place: 'native:cpu', options: ['native:cpu'], estimate_s: 3, estimate_basis: '' }] : withObjects;
       const extra = remote_ ? { places: { ...remotePlaces, ...Object.fromEntries(hosts.map((h) => [`ssh-${h.name}:cuda`, { title: `${h.name} (SSH)`, remote: true, accelerator: 'cuda' }])) }, max_cost_usd: 0.5, estimated_usd: all.reduce((a, n) => a + (n.cached ? 0 : n.cost_usd), 0) } : {};
       return { ...plan, ...extra, nodes: noNeeds ? all.map(({ needs: _, ...n }) => n) : all };
     },
     async run(_graph, _video, allow, places, only, settings, maxCostUsd, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       if (status.state === 'running') throw new Error('the pipeline is still being set up: the run can start when it is done');
-      runs.push({ allow, places, maxCostUsd, settings });
+      runs.push({ allow, places, maxCostUsd, settings, only });
       listener = on;
       const first = slowStart ? 60_000 : 0;
-      const ran = script.filter((m) => m.type !== 'event' || !m.node || !only || only.includes(m.node));   // as --only does
+      const here = new Set([...plan.nodes, ...(objects || gated ? objectsNodes : [])].map((n) => n.id));   // the steps this demo's graph has
+      const ran = script.filter((m) => m.type !== 'event' || !m.node || (here.has(m.node) && (!only || only.includes(m.node))));   // as --only does
       timers = ran.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
       return () => timers.forEach(clearTimeout);
     },
@@ -258,9 +317,10 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       // the steps, as the pipeline describes them (an older one gives only the models)
       const nodes = oldChecks ? null : plan.nodes.map((n) => ({ node: n.uses, title: n.title ?? n.id, service: n.service ?? null,
         secrets: n.id === 'captions' ? ['ANTHROPIC_API_KEY'] : [], settings: n.settings ?? [] }));
-      // `gated`: the steps whose models are gated, as the pipeline's manifests declare them
-      return { models: gated ? [...all, ...GATED.flatMap((s) => s.models)] : all,
-               nodes: nodes && gated ? [...nodes, ...GATED.map(({ models: _, ...s }) => s)] : nodes };
+      // `gated`: the steps whose models are gated, as the pipeline's manifests declare them (`objects`: its steps alone)
+      const extra = gated ? GATED : objects ? OBJECTS : [];
+      return { models: [...all, ...extra.flatMap((s) => s.models)],
+               nodes: nodes && [...nodes, ...extra.map(({ models: _, ...s }) => noPartOf ? { ...s, part_of: undefined } : s)] };
     },
     // the app's keychain: names and whether stored (values are kept here only to check none reaches the page)
     async keys() { return keyStatus(); },

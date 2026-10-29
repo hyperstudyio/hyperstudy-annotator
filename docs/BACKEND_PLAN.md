@@ -237,7 +237,10 @@ Checked:
   settings (a model, with its price), sent as `--set`. Nothing asks for approval: a step's models download as part
   of running, and turning on a feature that sends data to a cloud API (it starts off) is the choice to send it; a
   feature that would bring such a step along waits until the user turns that step on ("Turn on Shot captions first"),
-  so sending is never chosen by bringing a step along. The app passes `--allow-uploads` then, after holding a fresh
+  so sending is never chosen by bringing a step along. A feature in several steps (objects: its names, its tracks and
+  itself; the pipeline's `part_of`) is one row, and turning it on turns on its steps: that agrees to what a step sends
+  only when the feature itself sends it (the same kinds, to the same place), or when it is the step's inputs going to
+  another machine the user chose for it. A step that would send more is a row of its own, turned on by itself. The app passes `--allow-uploads` then, after holding a fresh
   plan to exactly what the steps the user turned on send (`upload_gate`, per node and kind). A step that runs on a hosted
   API shows it ("Anthropic API (cloud)"). Progress is one colour: a running step fills against its estimate, a
   finished one is full. A pipeline with no full graph offers its graphs instead.
