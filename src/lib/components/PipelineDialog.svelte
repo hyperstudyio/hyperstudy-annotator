@@ -285,7 +285,7 @@
   // the rows: a feature each, its steps in its row (the plan's, or once started what runs)
   const rows = $derived((started ? active : plan) ? featureRows((started ? active : plan)!, pick.chosen) : []);
   const stepsIn = (n: PlanNode) => { const p = (started ? active : plan)!; return stepsOf(p, n.id).map((id) => p.nodes.find((x) => x.id === id)!); };
-  const stateOf = (n: PlanNode) => featureState(stepsIn(n).map((p) => view.nodes[p.id] ?? { state: 'waiting', message: '' }));
+  const stateOf = (n: PlanNode) => featureState(stepsIn(n).map((p) => view.nodes[p.id] ?? { state: 'waiting', message: '' }), done);
   const stepCount = $derived(active ? featureRows(active, pick.chosen).filter((n) => stepsOf(active, n.id).some((id) => !active.nodes.find((x) => x.id === id)!.cached)).length : 0);
   // a range only when running side by side could save real time (within a tenth, one number says it)
   const timeText = $derived(!total || total.seconds === 0 ? '' : total.fastest >= total.seconds * 0.9

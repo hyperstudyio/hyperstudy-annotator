@@ -423,3 +423,9 @@ test("turning a feature off keeps the agreement a machine chosen for one of its 
   expect(untickFeature(objectsPlan, ticked, 'objects', ['objects_track'])).toEqual({ objects_track: ticked.objects_track, faces: ticked.faces });
   expect(untickFeature(objectsPlan, ticked, 'objects', [])).toEqual({ faces: ticked.faces });
 });
+
+test("a feature whose run ended between its steps is not still running", () => {
+  const s = (state: NodeState['state']): NodeState => ({ state, message: '' });
+  expect(featureState([s('succeeded'), s('waiting')], true)).toEqual(s('waiting'));
+  expect(featureState([s('succeeded'), s('succeeded')], true)).toEqual(s('succeeded'));
+});

@@ -264,15 +264,15 @@ export const tickFeature = (plan: Plan, id: string): Ticked =>
   Object.fromEntries(stepsOf(plan, id).map((s) => [s, tick(plan.nodes.find((n) => n.id === s)!)]));
 
 /** A feature's state in a run, from its steps' (in order): failed or canceled if one is, else running while one runs or
- *  some are done and the rest wait, done when all are. */
-export function featureState(states: NodeState[]): NodeState {
+ *  some are done and the rest wait (waiting once the run has `ended` there), done when all are. */
+export function featureState(states: NodeState[], ended = false): NodeState {
   const one = (s: NodeStateName) => states.find((x) => x.state === s);
   const done = (x: NodeState) => x.state === 'succeeded' || x.state === 'cached';
   const now = one('failed') ?? one('canceled') ?? states.find((x) => x.state === 'running' || x.state === 'retrying');
   if (now) return now;
   if (states.every((x) => x.state === 'cached')) return { state: 'cached', message: '' };
   if (states.every(done)) return [...states].reverse().find((x) => x.state === 'succeeded')!;
-  return states.some(done) ? { state: 'running', message: '' } : { state: 'waiting', message: '' };
+  return states.some(done) && !ended ? { state: 'running', message: '' } : { state: 'waiting', message: '' };
 }
 
 /** What choosing `place` for `n` agrees to: what the plan says it would send from there, and where (choosing another
