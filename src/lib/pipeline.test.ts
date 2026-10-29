@@ -397,3 +397,21 @@ test("a step that sends beyond what its feature sends is not agreed to with it: 
     nodes: objectsPlan.nodes.map((n) => n.id === 'objects_track' ? { ...n, place: 'ssh-lab:cuda', uploads: ['video'], upload_to: 'lab (SSH)' } : n) };
   expect(featureOf(lab, 'objects_track')).toBe('objects');
 });
+
+test("a step the plan puts on another machine by default is not agreed to with its feature: only a machine chosen for it is", () => {
+  const places = { 'native:mps': { title: 'This machine', remote: false, accelerator: 'mps' }, 'ssh-lab:cuda': { title: 'lab (SSH)', remote: true, accelerator: 'cuda' } };
+  const at = (place: string, options: string[]): Plan => ({ ...objectsPlan, places,
+    nodes: objectsPlan.nodes.map((n) => n.id === 'objects_track' ? { ...n, place, options, uploads: ['video'], upload_to: 'lab (SSH)' } : n) });
+  expect(featureOf(at('ssh-lab:cuda', ['ssh-lab:cuda']), 'objects_track')).toBe('objects_track');            // the CLI's default
+  expect(featureOf(at('ssh-lab:cuda', ['native:mps', 'ssh-lab:cuda']), 'objects_track')).toBe('objects');   // chosen
+});
+
+test("a step turned on by itself keeps its tick when a new plan makes it part of a feature", () => {
+  const other = { ...objectsPlan, nodes: objectsPlan.nodes.map((n) => n.id === 'objects_names'
+    ? { ...n, uploads: ['frames', 'transcript'], service: 'Other API', upload_to: 'Other API' } : n) };
+  const names = { objects_names: tick(other.nodes.find((n) => n.id === 'objects_names')!) };
+  expect(keepChoices(other, new Set(['objects_names']), names).ticked).toEqual(names);
+  // now it sends only what objects does (its feature's again); it was turned on by itself, and stays so, with its tick
+  const sameKinds = { objects_names: { kinds: ['frames', 'faces'], service: 'Anthropic API' } };
+  expect(keepChoices(objectsPlan, new Set(['objects_names']), sameKinds)).toEqual({ wanted: new Set(['objects_names']), ticked: sameKinds });
+});

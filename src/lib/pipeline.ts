@@ -221,12 +221,14 @@ export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: 
 
 /** The feature a step is part of (the pipeline says, perception #45: objects_names is a step of objects), when the
  *  plan has that feature and turning it on agrees to what the step sends: nothing, only kinds the feature itself sends
- *  to the same place, or its inputs to the other machine the user chose for it (another machine is never a default).
+ *  to the same place, or its inputs to the other machine the user chose for it (not the plan's first option for it).
  *  Else the step itself, a feature of its own: a step that sends more is turned on by itself (BACKEND_PLAN.md). */
 export function featureOf(plan: Plan, id: string): string {
   const n = plan.nodes.find((x) => x.id === id), head = n?.part_of && n.part_of !== id ? plan.nodes.find((x) => x.id === n.part_of) : undefined;
   if (!n || !head) return id;
-  const within = !sends(n) || (!!n.place && plan.places?.[n.place]?.remote === true)
+  // another machine is never a step's default (its first option): one it is on that is not its first was chosen for it
+  const chosen = !!n.place && plan.places?.[n.place]?.remote === true && n.place !== n.options?.[0];
+  const within = !sends(n) || chosen
     || (dest(n) === dest(head) && (n.uploads ?? []).every((k) => (head.uploads ?? []).includes(k)));
   return within ? head.id : id;
 }
@@ -299,7 +301,7 @@ export function keepChoices(plan: Plan, wanted: Set<string>, ticked: Ticked, pla
   // held on for another feature cannot be turned on by itself, so the feature that brings it goes off instead
   const byId = new Map(plan.nodes.map((n) => [n.id, n]));
   const keep = new Set([...wanted].filter((id) => picked(plan, new Set([id])).chosen.every((c) => covered(byId.get(c)!, ticked))));
-  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(featureOf(plan, id)) || placed.includes(id))) };
+  return { wanted: keep, ticked: Object.fromEntries(Object.entries(ticked).filter(([id]) => keep.has(id) || keep.has(featureOf(plan, id)) || placed.includes(id))) };
 }
 
 /** The steps that send data off which turning on `id` would bring along although the user has not agreed to it (by
