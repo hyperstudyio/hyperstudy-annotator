@@ -30,6 +30,8 @@ export interface PlanNode {
   /** The feature it is a step of (the graph node: objects, for objects_names and objects_track), shown and turned on
    *  as one with it; null for a feature of its own. Absent from pipelines before perception #45. */
   part_of?: string | null;
+  /** Set by the app (withMoves), not the pipeline: the user chose where it runs, and the plan was asked for with that place. */
+  moved?: boolean;
 }
 
 /** A node setting with a fixed list of choices (a model, an effort), and each choice's price when the cost depends on it. */
@@ -221,17 +223,26 @@ export const tick = (n: PlanNode) => ({ kinds: [...(n.uploads ?? [])], service: 
 
 /** The feature a step is part of (the pipeline says, perception #45: objects_names is a step of objects), when the
  *  plan has that feature and turning it on agrees to what the step sends: nothing, only kinds the feature itself sends
- *  to the same place, or its inputs to the other machine the user chose for it (not the plan's first option for it).
+ *  to the same place, or its inputs to the other machine the user chose for it (`moved`: never one the plan put it on).
  *  Else the step itself, a feature of its own: a step that sends more is turned on by itself (BACKEND_PLAN.md). */
 export function featureOf(plan: Plan, id: string): string {
   const n = plan.nodes.find((x) => x.id === id), head = n?.part_of && n.part_of !== id ? plan.nodes.find((x) => x.id === n.part_of) : undefined;
   if (!n || !head) return id;
-  // another machine is never a step's default (its first option): one it is on that is not its first was chosen for it
-  const chosen = !!n.place && plan.places?.[n.place]?.remote === true && n.place !== n.options?.[0];
+  const chosen = !!n.moved && !!n.place && plan.places?.[n.place]?.remote === true;
   const within = !sends(n) || chosen
     || (dest(n) === dest(head) && (n.uploads ?? []).every((k) => (head.uploads ?? []).includes(k)));
   return within ? head.id : id;
 }
+
+/** A plan as the user's choices asked for it: each step whose place they chose (`places`, sent as --place) and that the
+ *  plan put there is `moved`. */
+export const withMoves = (plan: Plan, places: Places): Plan =>
+  ({ ...plan, nodes: plan.nodes.map((n) => ({ ...n, moved: !!places[n.id] && places[n.id] === n.place })) });
+
+/** The ticks left when feature `id` is turned off: its steps' go, but the agreement a machine chosen for one of them
+ *  gave (`placed`) stands while the place does, as keepChoices keeps it (the step may still run for another feature). */
+export const untickFeature = (plan: Plan, ticked: Ticked, id: string, placed: string[]): Ticked =>
+  Object.fromEntries(Object.entries(ticked).filter(([s]) => !stepsOf(plan, id).includes(s) || placed.includes(s)));
 
 /** The features that hold feature `id` on (they need it), not counting its own steps: a feature another needs only one
  *  of its steps from is not held, on or off (turned off, the step stays for the other, the feature goes). */

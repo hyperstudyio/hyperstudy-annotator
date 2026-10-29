@@ -113,7 +113,7 @@
               <div class="choices">
                 {#each parts.flatMap((p) => p.settings.map((st) => ({ p, st }))) as { p, st } (`${p.node}.${st.key}`)}
                   <label class="choice">{capital(st.key)}
-                    <select value={valueOf(p, st.key, st.value)} onchange={(e) => choose(p, st.key, e.currentTarget.value)} aria-label={`${s.title}: ${st.key}`}>
+                    <select value={valueOf(p, st.key, st.value)} onchange={(e) => choose(p, st.key, e.currentTarget.value)} aria-label={`${p === s ? s.title : `${s.title}, ${p.title}`}: ${st.key}`}>
                       {#each st.choices as c (c)}<option value={c}>{choiceLabel(st, c)}</option>{/each}
                     </select>
                   </label>

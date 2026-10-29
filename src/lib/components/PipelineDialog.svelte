@@ -10,7 +10,7 @@
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
+    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -70,9 +70,9 @@
     if (on) next.add(id); else next.delete(id);   // what it needs comes along, and goes when nothing else needs it
     wanted = next;
     // a feature in several steps (objects: its names, its tracks, itself) is turned on, and agreed to, as one
-    const own = plan ? stepsOf(plan, id) : [id];
-    const rest = Object.fromEntries(Object.entries(ticked).filter(([s]) => !own.includes(s)));
-    ticked = on && plan ? { ...rest, ...tickFeature(plan, id) } : rest;
+    if (!plan) return;
+    const rest = untickFeature(plan, ticked, id, on ? [] : Object.keys(places));
+    ticked = on ? { ...rest, ...tickFeature(plan, id) } : rest;
   }
   const view = $derived(foldRun(active?.nodes.map((n) => n.id) ?? [], msgs));
   const done = $derived(!!view.imported || !!view.problems.length || (view.status !== null && view.status !== 'succeeded'));
@@ -245,7 +245,8 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    newestPlan(api.plan(graph, video, places, withDefaults(fromDefaults, settings)), (p) => {
+    const asked = places;   // the places this plan is asked for: a step the user moved there is theirs to have agreed to
+    newestPlan(api.plan(graph, video, places, withDefaults(fromDefaults, settings)).then((p) => withMoves(p, asked)), (p) => {
         // the defaults chosen in Settings > Models, where this run has not chosen otherwise: planned again when they are
         // not the ones this plan had (the first plan, or a default changed in Settings since)
         const now = defaultsFor(p, settings, loadDefaults());
