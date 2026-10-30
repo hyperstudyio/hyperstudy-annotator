@@ -8,6 +8,7 @@ mod library;
 #[cfg(target_os = "macos")]
 mod menu;
 mod pipeline;
+mod remote_runs;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -27,7 +28,7 @@ pub fn run() {
             let uv_dirs = pipeline::UvDirs { python: data_dir.join("python"), cache: app.path().app_cache_dir()?.join("uv"),
                                              tools: data_dir.join("tools"), bin: data_dir.join("bin") };
             let setup = Mutex::new(commands::SetupStatus::at_start(&uv_dirs));
-            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), control: Default::default(),
+            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), running_on: Mutex::new(None), control: Default::default(),
                                             keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))),
                                             uv_dirs, setup });
             commands::start_setup(app.handle().clone())?;   // install or upgrade the pipeline, set a new version up: in the background
@@ -70,6 +71,11 @@ pub fn run() {
             commands::pipeline_plan,
             commands::pipeline_run,
             commands::pipeline_cancel,
+            commands::pipeline_remote_plan,
+            commands::pipeline_remote_run,
+            commands::pipeline_remote_attach,
+            commands::pipeline_remote_runs,
+            commands::pipeline_remote_dismiss,
             commands::keys_status,
             commands::key_set,
             commands::key_remove,

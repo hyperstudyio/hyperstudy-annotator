@@ -1,6 +1,7 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
-import type { CheckResult, CloudStatus, Doctor, GraphPreset, Host, KeyStatus, ModelInfo, Plan, PipelineApi, PipelineMessage, SetupStatus, SetupStep, SshOverrides, StepInfo } from './pipeline';
+import type { CheckResult, CloudStatus, Doctor, GraphPreset, Host, KeyStatus, ModelInfo, Plan, PipelineApi, PipelineMessage, RemoteRun, SetupStatus, SetupStep, SshOverrides, StepInfo } from './pipeline';
+import type { BundleSummary } from './types';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,
@@ -190,8 +191,8 @@ function hfCheck(token: string | undefined): CheckResult {
     models: models.map((m) => ({ ...m, access: pending && m.id.includes('dinov3') ? 'not-granted' as const : 'granted' as const, reason: null })) };
 }
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hf = 'none' as 'none' | 'granted' | 'pending' | 'refused' | 'file' | 'old', hfStored = false, oldChecks = false, runpodKeyGone = false, objects = false, noPartOf = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
-                             runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown; only?: string[] | null }[] = [],
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hf = 'none' as 'none' | 'granted' | 'pending' | 'refused' | 'file' | 'old', hfStored = false, oldChecks = false, runpodKeyGone = false, objects = false, noPartOf = false, labRuns = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
+                             runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown; only?: string[] | null; host?: string; agreed?: string[] }[] = [],
                              added: { name: string; dest: string; overrides?: SshOverrides }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
   let installed = setup !== 'installing' && setup !== 'install-failed';   // a first launch offline has none
@@ -216,6 +217,27 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   const older = (cmd = 'hosts') => { if (oldCli || (cmd === 'cloud' && noCloud)) throw new Error(`the pipeline failed: perception: error: argument cmd: invalid choice: '${cmd}'`); };
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
+  // the script, as --only runs it, under the run's id: from its start, or (`from`) a run already part way through
+  const play = (on: (m: PipelineMessage) => void, only: string[] | null, run = 'demo-run', first = 0) => {
+    listener = on;
+    const here = new Set([...plan.nodes, ...(objects || gated ? objectsNodes : [])].map((n) => n.id));   // the steps this demo's graph has
+    const ran = script.filter((m) => m.type !== 'event' || !m.node || (here.has(m.node) && (!only || only.includes(m.node))))   // as --only does
+      .map((m) => 'run' in m ? { ...m, run } as PipelineMessage : m);
+    timers = ran.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
+    return () => timers.forEach(clearTimeout);
+  };
+  // `labRuns`: runs this app started on the lab server before the page opened: one still going there, one that failed.
+  // A test sets `__labRunFinished` to have the one going end there, so the next listing fetches and imports it
+  const labVideo = (n: number) => `/Users/you/Videos/ooo_clip${n}.mp4`;
+  const choices = { graph: 'full.yaml', only: [], settings: {}, max_cost_usd: null };
+  let labList: RemoteRun[] = labRuns ? [
+    { run: '20261029-090000-aaaaaa', host: 'lab', video: labVideo(2), state: 'running', problem: null, started_at: '2026-10-29T09:00:00Z', choices, done: 4, total: 9 },
+    { run: '20261029-080000-bbbbbb', host: 'lab', video: labVideo(3), state: 'failed', problem: 'The run failed on lab', started_at: '2026-10-29T08:00:00Z', choices },
+  ] : [];
+  let following: string | null = null;
+  const importedListeners = new Set<(m: { run: string; bundle: BundleSummary }) => void>();
+  // the keys each step declares, as `remote run --dry-run` says which go with the run
+  const DECLARES: Record<string, string> = { captions: 'ANTHROPIC_API_KEY', objects_names: 'ANTHROPIC_API_KEY', objects: 'ANTHROPIC_API_KEY', objects_track: 'HF_TOKEN' };
   return {
     setupStatus: async () => status,
     async onSetup(on) { setupListeners.add(on); return () => setupListeners.delete(on); },
@@ -246,15 +268,43 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       if (status.state === 'running') throw new Error('the pipeline is still being set up: the run can start when it is done');
       runs.push({ allow, places, maxCostUsd, settings, only });
-      listener = on;
-      const first = slowStart ? 60_000 : 0;
-      const here = new Set([...plan.nodes, ...(objects || gated ? objectsNodes : [])].map((n) => n.id));   // the steps this demo's graph has
-      const ran = script.filter((m) => m.type !== 'event' || !m.node || (here.has(m.node) && (!only || only.includes(m.node))));   // as --only does
-      timers = ran.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
-      return () => timers.forEach(clearTimeout);
+      return play(on, only, 'demo-run', slowStart ? 60_000 : 0);
     },
+    async remotePlan(_graph, _video, host, only, _settings, _cap) {
+      const h = hosts.find((x) => x.name === host);
+      if (!h) throw new Error(`the pipeline failed: no host '${host}' (perception hosts add)`);
+      const chosen = only ?? [...plan.nodes, ...(objects || gated ? objectsNodes : [])].map((n) => n.id);
+      const keys: Record<string, string[]> = {};
+      for (const id of chosen) if (DECLARES[id]) (keys[DECLARES[id]] ??= []).push(id);
+      const problems = Object.keys(keys).length && !h.keys ? [`${Object.values(keys).flat().join(', ')} need ${Object.keys(keys).join(', ')}, and ${host} may not hold your keys for its runs: \`perception hosts keys ${host} on\` lets it (or leave those steps out with --only)`] : [];
+      return { host, ok: !problems.length, problems, uploads: ['video', 'audio', 'frames', 'faces', 'transcript'], upload_to: `${host} (SSH)`, keys, keys_allowed: !!h.keys };
+    },
+    async remoteRun(_graph, _video, host, agreed, only, settings, maxCostUsd, on) {
+      if (rejectRun) throw new Error('a pipeline run is already in progress');
+      runs.push({ allow: null, places: null, maxCostUsd, settings, only, host, agreed });
+      following = '20261029-120000-cccccc';
+      return play(on, only, following);
+    },
+    async remoteAttach(run, on) {
+      const r = labList.find((x) => x.run === run);
+      if (!r) throw new Error(`run ${run} was not started from this app`);
+      following = run;
+      return play(on, r.choices.only.length ? r.choices.only : null, run);
+    },
+    async remoteRuns() {
+      if ((globalThis as { __labRunFinished?: boolean }).__labRunFinished) {   // it ended there: fetched and imported
+        for (const r of labList.filter((x) => x.state === 'running' && x.run !== following)) {
+          importedListeners.forEach((on) => on({ run: r.run, bundle: { ...(script[script.length - 1] as { bundle: BundleSummary }).bundle, id: `bundle-${r.run}`, title: 'ooo_clip2' } }));
+          labList = labList.filter((x) => x !== r);
+        }
+      }
+      return labList.map((r) => ({ ...r, ...(r.run === following ? { followed: true } : {}) }));
+    },
+    async onRemoteImported(on) { importedListeners.add(on); return () => importedListeners.delete(on); },
+    async remoteDismiss(run) { labList = labList.filter((r) => !(r.run === run && r.state === 'failed')); },
     async cancel(run) {
       timers.forEach(clearTimeout);
+      following = null;
       listener?.(run ? { v: 1, type: 'run.finished', run, status: 'canceled' }
         : { v: 1, type: 'error', problems: ['the pipeline ended without finishing the run (stopped)'] });
     },

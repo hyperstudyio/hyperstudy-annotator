@@ -522,6 +522,35 @@ pub struct SshOverrides {
     pub identity: Option<String>,
 }
 
+/// A lab server's name as the CLI keeps it (hosts.py): lower-case letters, digits and `-`, and not a word it keeps for
+/// itself.
+pub fn host_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !["native", "self", "cloud", "runpod", "local"].contains(&name)
+}
+
+/// The app's own check, against `remote run --dry-run`'s answer (`remote_plan`) just before the run starts there, that
+/// it is what Extract showed when Start run was pressed: it would start (`ok`), on that host, and the host would hold no
+/// kind of data beyond those shown (the video and what every step makes: `uploads`). Keys are the host's own consent
+/// (`hosts keys`), which the CLI checks: a run whose steps need keys is refused without it.
+pub fn remote_gate(rp: &Value, host: &str, agreed: &[String]) -> Result<()> {
+    if rp["host"].as_str() != Some(host) {
+        return Err(Error::Bundle(format!("the pipeline answered for another server than {host}")));
+    }
+    if rp["ok"] != Value::Bool(true) {
+        return Err(Error::Bundle(problems(rp)));
+    }
+    let kinds = rp["uploads"].as_array().ok_or_else(|| Error::Bundle(format!("the pipeline does not say what {host} would hold; update hyperstudy-perception")))?;
+    for k in kinds {
+        let k = k.as_str().unwrap_or_default();
+        if !agreed.iter().any(|a| a == k) {
+            return Err(Error::Bundle(format!("{host} would hold {k}, which was not shown when the run was started: plan again")));
+        }
+    }
+    Ok(())
+}
+
 /// An ssh destination that cannot be read as an option: user@host, a host, or a name from ~/.ssh/config.
 fn ssh_dest_ok(dest: &str) -> bool {
     dest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
@@ -534,9 +563,7 @@ fn ssh_dest_ok(dest: &str) -> bool {
 /// `probe` takes the destination for `name`: it reaches it and says what it has, adding nothing (a connection test).
 /// `keys` takes `on` or `off` for `dest`: whether whole runs coordinated there may hold the keys their steps declare.
 pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str>, ov: &SshOverrides) -> Result<Vec<String>> {
-    let name_ok = !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !["native", "self", "cloud", "runpod", "local"].contains(&name);
+    let name_ok = host_name_ok(name);
     if !["add", "check", "remove", "clean", "probe", "keys"].contains(&action) {
         return Err(Error::Bundle(format!("not something to do with a host: {action:?}")));
     }
@@ -784,6 +811,7 @@ impl Pipeline {
                 Some("run.finished") => finished = o["status"].as_str().map(String::from),
                 Some("error") => refused = true,
                 Some("plan") if o["ok"] == false => refused = true,
+                Some("remote_plan") if o["ok"] == false => refused = true,   // `remote run` that would not start there
                 _ => {}
             }
             on(&o);
@@ -1264,6 +1292,22 @@ esac
         let mut awake = AwakeForRun::new(vec![]);
         p.run_to_end(&["run"], |o| awake.see(o)).unwrap();
         assert!(!awake.held());
+    }
+
+    #[test]
+    fn a_run_on_a_lab_server_starts_only_as_extract_showed_it() {
+        let rp = |ok: bool, uploads: &[&str]| serde_json::json!({"type": "remote_plan", "host": "lab", "ok": ok,
+            "problems": if ok { vec![] } else { vec!["captions need ANTHROPIC_API_KEY, and lab may not hold your keys"] },
+            "uploads": uploads, "keys": {}});
+        let agreed = ["video".to_string(), "frames".to_string(), "faces".to_string()];
+        assert!(remote_gate(&rp(true, &["video", "faces"]), "lab", &agreed).is_ok());
+        // more than was shown: planned again first
+        let e = remote_gate(&rp(true, &["video", "faces", "transcript"]), "lab", &agreed).unwrap_err().to_string();
+        assert!(e.contains("lab would hold transcript"), "{e}");
+        assert!(remote_gate(&rp(false, &["video"]), "lab", &agreed).unwrap_err().to_string().contains("may not hold your keys"));
+        assert!(remote_gate(&rp(true, &["video"]), "gpu2", &agreed).is_err());   // another server's answer
+        assert!(remote_gate(&serde_json::json!({"host": "lab", "ok": true}), "lab", &agreed).is_err());   // says nothing of what it holds
+        assert!(host_name_ok("lab-2") && !host_name_ok("Lab") && !host_name_ok("runpod") && !host_name_ok("-x") && !host_name_ok(""));
     }
 
     #[test]

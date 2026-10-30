@@ -123,6 +123,7 @@ export type PipelineMessage = { v: 1 } & (
   | { type: 'run.finished'; run: string; status: string }
   | ({ type: 'plan' } & Plan)
   | { type: 'imported'; run: string; bundle: BundleSummary }
+  | { type: 'remote_started'; run: string; host: string; started: boolean; resumed: boolean; status: string }
   | { type: 'error'; problems: string[] }
 );
 
@@ -171,10 +172,36 @@ export interface PipelineApi {
   /** `only`: just these nodes (and what they need); null runs the whole graph. */
   /** `maxCostUsd`: the run's spending cap (spendingCap), or null for the graph's own. */
   run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, settings: Settings, maxCostUsd: number | null, on: (m: PipelineMessage) => void): Promise<() => void>;
-  /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. */
+  /** What a run of the features chosen, coordinated on a lab server, would send it, and why it would not start. */
+  remotePlan(graph: string, video: string, host: string, only: string[] | null, settings: Settings, maxCostUsd: number | null): Promise<RemotePlan>;
+  /** Start a run coordinated on a lab server (`agreed`: the kinds of data Extract showed it would hold); `on` receives
+   *  its messages, as `run`'s, until `imported` (fetched and imported once it succeeds there) or `error`. */
+  remoteRun(graph: string, video: string, host: string, agreed: string[], only: string[] | null, settings: Settings,
+            maxCostUsd: number | null, on: (m: PipelineMessage) => void): Promise<() => void>;
+  /** Follow again a run this app started on a lab server, as `remoteRun` follows one. */
+  remoteAttach(run: string, on: (m: PipelineMessage) => void): Promise<() => void>;
+  /** The runs this app started on lab servers and has not imported, as they are there now: one that has ended is
+   *  fetched and imported first (`onRemoteImported` hears each). */
+  remoteRuns(): Promise<RemoteRun[]>;
+  onRemoteImported(on: (m: { run: string; bundle: BundleSummary }) => void): Promise<() => void>;
+  /** Put away a run that failed on a lab server. */
+  remoteDismiss(run: string): Promise<void>;
+  /** Cancel the run in progress: by its id once the CLI has named it, else (null) by stopping the CLI's process. A run
+   *  on a lab server is canceled there. */
   cancel(run: string | null): Promise<void>;
   pickVideo(): Promise<string | null>;
 }
+
+/** What a run coordinated on a lab server would send it, and why it would not start (`remote run --dry-run`'s
+ *  `remote_plan`): the kinds of data it would hold, and each key that would go with it -> the steps that declare it. */
+export interface RemotePlan { host: string; ok: boolean; problems: string[]; uploads: string[]; upload_to: string;
+  keys: Record<string, string[]>; keys_allowed: boolean }
+/** A run this app started on a lab server and has not imported (the app's `remote_runs`), as it is there now: still
+ *  running (`done` of `total` steps, or `unreachable` saying why it could not be asked), or failed (`problem`).
+ *  `followed`: the run this page shows. `choices`: what Extract started it with, to show it again. */
+export interface RemoteRun { run: string; host: string; video: string; state: 'running' | 'failed'; problem: string | null; started_at: string;
+  choices: { graph: string; only: string[]; settings: Settings; max_cost_usd: number | null };
+  done?: number; total?: number; unreachable?: string; followed?: boolean }
 
 export type NodeStateName = 'waiting' | 'cached' | 'running' | 'retrying' | 'succeeded' | 'failed' | 'canceled';
 export interface NodeState { state: NodeStateName; message: string }
@@ -552,6 +579,22 @@ export async function tauriPipeline(): Promise<PipelineApi> {
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },
+    remotePlan: (graph, video, host, only, settings, maxCostUsd) => invoke<RemotePlan>('pipeline_remote_plan', { graph, video, host, only, settings, maxCostUsd }),
+    async remoteRun(graph, video, host, agreed, only, settings, maxCostUsd, on) {
+      const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
+      try { await invoke('pipeline_remote_run', { graph, video, host, agreed, only, settings, maxCostUsd }); }
+      catch (e) { unlisten(); throw e; }
+      return unlisten;
+    },
+    async remoteAttach(run, on) {
+      const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));
+      try { await invoke('pipeline_remote_attach', { run }); }
+      catch (e) { unlisten(); throw e; }
+      return unlisten;
+    },
+    remoteRuns: () => invoke<RemoteRun[]>('pipeline_remote_runs'),
+    onRemoteImported: (on) => listen<{ run: string; bundle: BundleSummary }>('remote', (e) => on(e.payload)),
+    remoteDismiss: (run) => invoke<void>('pipeline_remote_dismiss', { run }),
     cancel: (run) => invoke<void>('pipeline_cancel', { run }),
     async pickVideo() {
       const file = await open({ title: 'Choose a video', filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'webm', 'mkv'] }] });

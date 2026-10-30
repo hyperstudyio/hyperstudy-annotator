@@ -70,6 +70,22 @@ const MIGRATIONS: &[Migration] = &[Migration {
             value TEXT NOT NULL
         );
     "#,
+}, Migration {
+    version: 4,
+    name: "remote runs",
+    sql: r#"
+        -- Runs coordinated on a lab server (`perception remote run`) that this app started: each kept until it is
+        -- imported into the library, so one that went on there while the app was closed is fetched when it is opened.
+        CREATE TABLE remote_runs (
+            run        TEXT PRIMARY KEY,           -- the pipeline's id for it
+            host       TEXT NOT NULL,              -- the lab server it runs on, as `perception hosts` names it
+            video      TEXT NOT NULL,              -- the video's path here
+            choices    TEXT NOT NULL,              -- JSON {graph, only, settings, max_cost_usd}: as Extract started it
+            state      TEXT NOT NULL CHECK (state IN ('running', 'imported', 'failed', 'canceled', 'dismissed')),
+            problem    TEXT,                       -- why it failed, or could not be fetched or imported
+            started_at TEXT NOT NULL
+        );
+    "#,
 }];
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
