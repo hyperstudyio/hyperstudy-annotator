@@ -89,7 +89,7 @@ const LAB = 'lab (SSH)', CLOUD = 'Cloud GPU (AWS L4)', RUNPOD = 'Cloud GPU (RunP
 const remotePlaces = { 'native:mps': { title: 'This machine', remote: false, accelerator: 'mps' }, 'native:cpu': { title: 'This machine', remote: false, accelerator: 'cpu' },
   'ssh-lab:cuda': { title: LAB, remote: true, accelerator: 'cuda' }, 'cloud:cuda': { title: CLOUD, remote: true, accelerator: 'cuda' },
   'runpod:cuda': { title: RUNPOD, remote: true, accelerator: 'cuda' } };
-const labHost = (name: string, dest: string): Host => ({ name, dest, root: `/home/you/.cache/hyperstudy-perception`, probed_at: 1792800000,
+const labHost = (name: string, dest: string): Host => ({ name, dest, root: `/home/you/.cache/hyperstudy-perception`, probed_at: 1792800000, keys: false,
   caps: { platform: 'linux/amd64', cpu_cores: 32, memory_gb: 251.6, accelerators: ['cpu', 'cuda'], vram_gb: 47.5, tools: { uv: '/home/you/.local/bin/uv', ffmpeg: '/usr/bin/ffmpeg', ffprobe: '/usr/bin/ffprobe' } } });
 function remote(n: Plan['nodes'][number], place: string | undefined, hosts: Host[] = [labHost('lab', 'you@lab')], cloudOn = true, runpodOn = false): Plan['nodes'][number] {
   if (n.id === 'objects_track') return gpuElsewhere(n, place, hosts);
@@ -268,6 +268,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
         added.push({ name, dest, overrides });
         hosts = [...hosts.filter((h) => h.name !== name), labHost(name, dest)];   // as the CLI does: an existing name is replaced
       } else if (action === 'remove') hosts = hosts.filter((h) => h.name !== name);
+      else if (action === 'keys') hosts = hosts.map((h) => h.name === name ? { ...h, keys: dest === 'on' } : h);
       // a test can have the host re-added elsewhere under the same name (with the CLI), which a check then finds
       else if (action === 'check' && (globalThis as { __gpuGone?: boolean }).__gpuGone)
         hosts = hosts.map((h) => h.name === name ? { ...h, caps: { ...h.caps, accelerators: ['cpu'], vram_gb: 0 } } : h);

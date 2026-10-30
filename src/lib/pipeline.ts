@@ -52,6 +52,9 @@ export interface Host {
   /** overrides of ~/.ssh/config (a pipeline from before them has none) */
   user?: string | null; port?: number | null; identity?: string | null;
   caps: { platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number; tools: Record<string, string | null> };
+  /** Whether whole runs coordinated there may hold the keys their steps declare, and a step placed there the token its
+   *  prepare downloads gated weights with (`hosts keys NAME on|off`); absent from a pipeline before it (perception #46). */
+  keys?: boolean;
 }
 /** A cloud GPU provider (`perception cloud`): whether it is offered to nodes that can use one, its machine and price. */
 export interface CloudProvider { enabled: boolean; machine: string; region: string; hourly_usd: number }
@@ -105,7 +108,8 @@ export interface KeyStatus { name: string; label: string; purpose: string; url: 
 /** Where the CLI finds keys without the app's (`perception keys list`: names and sources, never values), and the key
  *  files it refused. */
 export interface CliKeys { keys: { name: string; source: string }[]; problems: string[] }
-export type HostAction = 'add' | 'check' | 'remove' | 'clean';
+/** `keys`: whether its runs may hold your keys, `dest` saying `on` or `off`. */
+export type HostAction = 'add' | 'check' | 'remove' | 'clean' | 'keys';
 export interface Doctor {
   platform: string; cpu_cores: number; memory_gb: number; accelerators: string[]; vram_gb: number;
   nodes: { ref: string; stage: string; description: string; where: string | null; why_not: string }[];
@@ -140,7 +144,8 @@ export interface PipelineApi {
   graphs(): Promise<GraphPreset[]>;
   /** Lab servers (perception #15); a pipeline from before them rejects these. */
   hosts(): Promise<Host[]>;
-  /** Add (`dest`, optional `root` and overrides), check, clean or remove a lab server; the hosts after it. */
+  /** Add (`dest`, optional `root` and overrides), check, clean or remove a lab server, or say whether its runs may hold
+   *  your keys (`keys`, `dest` on or off); the hosts after it. */
   host(action: HostAction, name: string, dest?: string, root?: string, overrides?: SshOverrides): Promise<Host[]>;
   /** Reach a destination as adding it would and say what it has, adding nothing (a connection test). */
   probeHost(dest: string, overrides?: SshOverrides): Promise<HostProbe>;
@@ -498,6 +503,17 @@ export function totalEstimate(plan: Plan): { seconds: number; fastest: number; u
  *  entry) when the app holds none: a key already set up for the command line need not be entered again. */
 export function keyRows(keys: KeyStatus[], cli: CliKeys | null): (KeyStatus & { elsewhere: string | null })[] {
   return keys.map((k) => ({ ...k, elsewhere: k.stored ? null : cli?.keys.find((c) => c.name === k.name)?.source ?? null }));
+}
+
+/** Keys the pipeline reads that the app does not keep, by the name a person knows them by. */
+const OTHER_KEYS: Record<string, string> = { OPENAI_API_KEY: 'OpenAI' };
+/** The keys a run coordinated on a lab server would take with it (remote_run: those its steps declare, at run time or
+ *  to download gated weights), among those set here (in the keychain, or found by the CLI), by their labels. */
+export function keysSent(steps: StepInfo[] | null, keys: KeyStatus[], cli: CliKeys | null): string[] {
+  const declared = new Set((steps ?? []).flatMap((s) => s.secrets));
+  const set = new Set([...keys.filter((k) => k.stored).map((k) => k.name), ...(cli?.keys ?? []).map((k) => k.name)]);
+  return [...declared].filter((k) => set.has(k)).map((k) => keys.find((x) => x.name === k)?.label ?? OTHER_KEYS[k] ?? k)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /** The Keys row's line: which keys the pipeline has (from the app or elsewhere), and which it has none of. */

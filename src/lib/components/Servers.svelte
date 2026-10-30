@@ -5,10 +5,15 @@
   // (ssh runs in batch mode). The form to add one opens only when asked for: a host from ~/.ssh/config (or user@host),
   // the name steps know it by, and, under Advanced, what overrides ~/.ssh/config for it (user, port, key file) and its
   // folder there. Test connection reaches it as adding would and says what it has, adding nothing (`hosts probe`); a
-  // server's Test reaches it again (`hosts check`).
+  // server's Test reaches it again (`hosts check`). Each server says whether whole runs started there may take your keys
+  // (`hosts keys`), naming the ones they would get and who can read them there, whether it is on or off: it is what is
+  // agreed to.
+  import { openExternal } from '../links';
   import { hostSummary, tooOld, type Host, type HostAction, type HostProbe, type PipelineApi, type SshOverrides } from '../pipeline';
-  let { api, hosts, onchange, onbusy }: {
+  let { api, hosts, sent, onchange, onbusy }: {
     api: PipelineApi; hosts: Host[];
+    /** the keys a whole run there would get (keysSent), by their labels */
+    sent: string[];
     /** what is under way, then null (Start run on Extract waits: a server being cleared or removed must not take a step) */
     onbusy: (busy: string | null) => void;
     /** the servers after an action, as the CLI answered it (no second listing that could fail or be stale) */
@@ -32,6 +37,14 @@
   };
   const host = (action: HostAction, n: string) => act(`${action === 'check' ? 'Testing' : action === 'clean' ? 'Clearing the cache on' : 'Removing'} ${n}…`,
     () => api.host(action, n));
+  // a change that fails leaves the box as the pipeline still has it: the box is set back (Svelte does not write a
+  // `checked` it last wrote again, so the server's unchanged `keys` would not)
+  const keysOn = async (box: HTMLInputElement, h: Host) => {
+    if (!await act(box.checked ? `Letting ${h.name} hold your keys…` : `Taking your keys off ${h.name}…`,
+                   () => api.host('keys', h.name, box.checked ? 'on' : 'off'))) box.checked = !!h.keys;
+  };
+  const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+  const gets = $derived(sent.length ? `Its runs get your ${list(sent)} ${sent.length === 1 ? 'key' : 'keys'} when their steps need ${sent.length === 1 ? 'it' : 'them'}.` : 'Its runs get the keys their steps need.');
   // the name steps know it by, from the host: lower-case letters, digits and - (what the pipeline takes)
   const nameFrom = (d: string) => d.replace(/^.*@/, '').split('.')[0].toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 31);
   $effect(() => { if (!named) name = nameFrom(dest.trim()); });
@@ -65,6 +78,8 @@
   const via = (h: Host) => `${h.user ? `${h.user}@` : ''}${h.dest}${h.port ? `:${h.port}` : ''}${h.identity ? `, key ${h.identity.replace(/^.*\//, '')}` : ''}`;
   const when = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const focus = (el: HTMLElement) => { el.focus(); };
+  // where a workspace (its own keys, its own monthly spend limit) is made
+  const ANTHROPIC_WORKSPACES = 'https://console.anthropic.com/settings/workspaces';
 </script>
 
 <section class="set-part" aria-labelledby="servers-heading">
@@ -78,6 +93,15 @@
         <li aria-label={h.name}>
           <div class="host"><strong>{h.name}</strong><span class="muted">{via(h)}</span></div>
           <div class="caps">{hostSummary(h)}. <span class="muted">Reached {when(h.probed_at)}.</span></div>
+          {#if h.keys !== undefined}
+            <div class="keys">
+              <label><input type="checkbox" checked={h.keys} disabled={!!busy} aria-describedby={`keys-${h.name}`}
+                onchange={(e) => keysOn(e.currentTarget, h)} />Run whole pipelines here, with my keys</label>
+              <p class="muted" id={`keys-${h.name}`}>{gets} While a run goes, root and your own processes on {h.name} can read them.
+                {#if sent.includes('Anthropic')}Safer with keys made for this:
+                  <button class="link" onclick={() => openExternal(ANTHROPIC_WORKSPACES)}>an Anthropic workspace with a monthly limit</button>.{/if}</p>
+            </div>
+          {/if}
           <div class="actions">
             <button class="plain" onclick={() => host('check', h.name)} disabled={!!busy} aria-label={`Test ${h.name}`} title="Reach it again and see what it has">Test</button>
             <button class="plain" onclick={() => host('clean', h.name)} disabled={!!busy} aria-label={`Clear the cache on ${h.name}`} title="Remove the videos and code kept on it between runs">Clear cache</button>
@@ -139,6 +163,11 @@
   li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; }
   .host { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }   /* a long destination wraps */
   .caps { grid-column: 1; font-size: 12px; color: var(--color-text-secondary); min-width: 0; }
+  /* the keys under what it has, across the row: the checkbox and its words, then who gets what, under the words */
+  .keys { grid-column: 1 / -1; margin-top: 8px; display: grid; gap: 3px; min-width: 0; }
+  .keys label { display: flex; gap: 8px; align-items: center; width: fit-content; cursor: pointer; }
+  .keys input { margin: 0; accent-color: var(--color-primary); }
+  .keys p { font-size: 12px; padding-left: 21px; max-width: 68ch; }
   .actions { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 4px; align-items: center; }
   /* one field to a row, its label beside it and what it is for under it */
   .add, .grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 16px; align-items: baseline; }

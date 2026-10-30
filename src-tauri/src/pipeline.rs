@@ -532,11 +532,12 @@ fn ssh_dest_ok(dest: &str) -> bool {
 /// letters, digits and `-` (and not a word the CLI keeps for itself), an ssh destination that cannot be an option, a
 /// plain folder, and overrides ssh cannot misread. The positional words follow `--`, so none can be read as a flag.
 /// `probe` takes the destination for `name`: it reaches it and says what it has, adding nothing (a connection test).
+/// `keys` takes `on` or `off` for `dest`: whether whole runs coordinated there may hold the keys their steps declare.
 pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str>, ov: &SshOverrides) -> Result<Vec<String>> {
     let name_ok = !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !["native", "self", "cloud", "runpod", "local"].contains(&name);
-    if !["add", "check", "remove", "clean", "probe"].contains(&action) {
+    if !["add", "check", "remove", "clean", "probe", "keys"].contains(&action) {
         return Err(Error::Bundle(format!("not something to do with a host: {action:?}")));
     }
     if action == "probe" && !ssh_dest_ok(name) {
@@ -587,6 +588,10 @@ pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str
             return Err(Error::Bundle(format!("not an ssh destination: {dest:?} (user@host, or a name from ~/.ssh/config)")));
         }
         out.push(dest.to_string());
+    }
+    if action == "keys" {
+        let on = dest.filter(|d| ["on", "off"].contains(d)).ok_or_else(|| Error::Bundle(format!("keys on a host: on or off, not {dest:?}")))?;
+        out.push(on.to_string());
     }
     Ok(out)
 }
@@ -1268,6 +1273,10 @@ esac
         assert_eq!(host_args("add", "gpu-2", Some("gpu2"), Some("scratch/perception"), &SshOverrides::default()).unwrap(),
                    vec!["hosts", "add", "--root", "scratch/perception", "--", "gpu-2", "gpu2"]);
         assert_eq!(host_args("remove", "lab", None, None, &SshOverrides::default()).unwrap(), vec!["hosts", "remove", "--", "lab"]);
+        assert_eq!(host_args("keys", "lab", Some("on"), None, &SshOverrides::default()).unwrap(), vec!["hosts", "keys", "--", "lab", "on"]);
+        assert_eq!(host_args("keys", "lab", Some("off"), None, &SshOverrides::default()).unwrap(), vec!["hosts", "keys", "--", "lab", "off"]);
+        assert!(host_args("keys", "lab", Some("--yes"), None, &SshOverrides::default()).is_err());
+        assert!(host_args("keys", "lab", None, None, &SshOverrides::default()).is_err());
         assert!(host_args("add", "lab", Some("lab"), Some("~/scratch/perception"), &SshOverrides::default()).is_ok());
         assert!(host_args("add", "lab", Some("lab"), Some("/scratch/me/perception"), &SshOverrides::default()).is_ok());   // its marker guards what clean empties
         for (name, dest, root) in [("Lab", "lab", ""), ("cloud", "lab", ""), ("-x", "lab", ""), ("lab", "-oProxyCommand=x", ""),

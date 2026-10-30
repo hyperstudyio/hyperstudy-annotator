@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysSent, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -428,4 +428,19 @@ test("a feature whose run ended between its steps is not still running", () => {
   const s = (state: NodeState['state']): NodeState => ({ state, message: '' });
   expect(featureState([s('succeeded'), s('waiting')], true)).toEqual(s('waiting'));
   expect(featureState([s('succeeded'), s('succeeded')], true)).toEqual(s('succeeded'));
+});
+
+const stepInfo = (node: string, secrets: string[]) => ({ node, title: node, service: null, secrets, settings: [] });
+const kept = (name: string, label: string, stored: boolean) => ({ name, label, purpose: '', url: '', stored });
+const keptKeys = [kept('RUNPOD_API_KEY', 'RunPod', true), kept('ANTHROPIC_API_KEY', 'Anthropic', true), kept('HF_TOKEN', 'Hugging Face', false)];
+test('keysSent names the keys the steps declare that are set here, in the keychain or found by the pipeline', () => {
+  const steps = [stepInfo('vlm.shot-captions@1.0.0', ['ANTHROPIC_API_KEY']), stepInfo('audio.diarize@1.1.0', ['HF_TOKEN']),
+                 stepInfo('audio.prosody-captions@1.0.0', ['OPENAI_API_KEY'])];
+  expect(keysSent(steps, keptKeys, null)).toEqual(['Anthropic']);                    // RunPod's is no step's: never sent
+  expect(keysSent(steps, keptKeys, { keys: [{ name: 'HF_TOKEN', source: '~/.cache/huggingface/token' }, { name: 'OPENAI_API_KEY', source: 'environment' }],
+    problems: [] })).toEqual(['Anthropic', 'Hugging Face', 'OpenAI']);
+});
+test('keysSent names none when no step is known or none of their keys is set', () => {
+  expect(keysSent(null, keptKeys, null)).toEqual([]);
+  expect(keysSent([stepInfo('audio.diarize@1.1.0', ['HF_TOKEN'])], keptKeys, null)).toEqual([]);
 });
