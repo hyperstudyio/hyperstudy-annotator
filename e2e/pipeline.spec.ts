@@ -8,7 +8,8 @@ async function planned(page: Page, url: string) {
   await page.goto(url);
   const dialog = page.getByRole('region', { name: 'Extract' });
   await dialog.getByRole('button', { name: 'Choose a video…' }).click();     // the video
-  if (await dialog.getByRole('radio').count()) await dialog.getByRole('radio').nth(1).check();
+  const graphs = dialog.getByRole('radiogroup', { name: 'Graph' }).getByRole('radio');   // a pipeline with no full graph
+  if (await graphs.count()) await graphs.nth(1).check();
   await expect(dialog.getByRole('heading', { name: /steps? to run/ })).toBeVisible();
   return dialog;
 }
@@ -1260,4 +1261,89 @@ test("a Test that fails leaves no earlier ✓ beside its error", async ({ page }
   await aws.getByRole('button', { name: 'Test AWS' }).click();
   await expect(settings.getByText(/network is unreachable/)).toBeVisible();
   await expect(aws.locator('p.tested')).toHaveCount(0);
+});
+
+// --- Run on: a whole run coordinated on a lab server (perception remote run) -----------------------------------------
+
+const runOn = (dialog: Locator, where: string) => dialog.getByRole('radiogroup', { name: 'Run on' }).getByRole('radio', { name: where, exact: true });
+
+test('a run on a lab server runs every step there, says what the server receives, and needs its yes for your keys', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await expect(runOn(dialog, 'This Mac')).toBeChecked();
+  await runOn(dialog, 'lab').check();
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('lab');
+  await expect(dialog.getByRole('listitem', { name: 'faces' }).getByRole('combobox')).toHaveCount(0);   // no place to choose per step
+  await expect(dialog.getByText('lab receives the video and what every step makes.')).toBeVisible();
+  const start = dialog.getByRole('button', { name: 'Start run on lab' });
+  await expect(start).toBeEnabled();
+  // captions need the Anthropic key, which lab may not hold until you say so in Settings
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
+  await expect(dialog.getByText('Shot captions needs your keys on lab:')).toBeVisible();
+  await expect(start).toBeDisabled();
+  await dialog.getByRole('button', { name: 'allow it in Settings' }).click();
+  const settings = page.getByRole('region', { name: 'Settings' });
+  await settings.getByRole('listitem', { name: 'lab' }).getByRole('checkbox', { name: 'Run whole pipelines here, with my keys' }).check();
+  await toExtract(page);
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(dialog.getByRole('heading', { name: /^Running on lab/ })).toBeVisible();
+  await expect(dialog.getByText('It keeps going on lab if this Mac sleeps or the app is closed.')).toBeVisible();
+  const r = (await runs(page)).at(-1) as unknown as { host: string; agreed: string[]; only: string[] };
+  expect(r.host).toBe('lab');
+  expect(r.agreed).toEqual(['video', 'audio', 'frames', 'faces', 'transcript']);   // what the page said lab would hold
+  expect(r.only).toBeNull();                                                      // every feature on: the whole graph
+  // what captions was turned on to send from there, to its API, checked against the dry run before it starts
+  expect((r as unknown as { allow: { uploads: Record<string, { service: string }> } }).allow.uploads.captions.service).toBe('Anthropic API');
+  await expect(dialog.getByText('Imported into the library.')).toBeVisible({ timeout: 15_000 });
+});
+
+test('a run on a lab server can be canceled there', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await runOn(dialog, 'lab').check();
+  await dialog.getByRole('button', { name: 'Start run on lab' }).click();
+  await expect(dialog.getByRole('listitem', { name: 'decode' })).toContainText('Cached');   // named and under way there
+  await page.getByRole('button', { name: 'Cancel run' }).click();
+  await expect(dialog.getByRole('heading', { name: 'The run was canceled' })).toBeVisible();
+});
+
+test('runs started on a lab server are listed: one still going is shown again and followed, one that failed is put away', async ({ page }) => {
+  await page.goto('/?pipeline-demo=lab-runs');
+  const dialog = page.getByRole('region', { name: 'Extract' });
+  const list = dialog.getByRole('region', { name: 'Runs on other machines' });
+  await expect(list.getByRole('listitem', { name: 'ooo_clip2.mp4' })).toContainText('Running, 4 of 9 steps done');
+  await expect(list.getByRole('listitem', { name: 'ooo_clip3.mp4' })).toContainText('The run failed on lab');
+  await list.getByRole('listitem', { name: 'ooo_clip3.mp4' }).getByRole('button', { name: 'Dismiss' }).click();
+  await expect(list.getByRole('listitem', { name: 'ooo_clip3.mp4' })).toHaveCount(0);
+  await list.getByRole('listitem', { name: 'ooo_clip2.mp4' }).getByRole('button', { name: 'Show' }).click();
+  await expect(dialog.getByRole('heading', { name: /^Running on lab/ })).toBeVisible();
+  await expect(dialog.getByText('ooo_clip2.mp4', { exact: true }).first()).toBeVisible();   // the run's own video
+  await expect(runOn(dialog, 'lab')).toBeChecked();
+  await expect(list).toHaveCount(0);                                              // shown, so no longer listed
+  await expect(dialog.getByText('Imported into the library.')).toBeVisible({ timeout: 15_000 });
+});
+
+test('a run that ended on a lab server while no one followed it is imported, and offered to open', async ({ page }) => {
+  await page.goto('/?pipeline-demo=lab-runs');
+  const dialog = page.getByRole('region', { name: 'Extract' });
+  const list = dialog.getByRole('region', { name: 'Runs on other machines' });
+  await expect(list.getByRole('listitem', { name: 'ooo_clip2.mp4' })).toContainText('Running');
+  await page.evaluate(() => { (globalThis as { __labRunFinished?: boolean }).__labRunFinished = true; });
+  await settingsAt(page, /^Compute$/);
+  await toExtract(page);                                                          // looked at again: it has ended there
+  const done = list.getByRole('listitem', { name: 'ooo_clip2.mp4' });
+  await expect(done).toContainText('In the library');
+  await done.getByRole('button', { name: 'Open in Annotator' }).click();
+  await expect(page.getByRole('region', { name: 'Extract' })).toBeHidden();
+});
+
+test('a lab server whose name now leads to another machine is no longer where the run goes', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await runOn(dialog, 'lab').check();
+  await expect(dialog.getByRole('button', { name: 'Start run on lab' })).toBeVisible();
+  const settings = await settingsAt(page, /^Compute$/);
+  await page.evaluate(() => { (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere = true; });
+  await settings.getByRole('button', { name: 'Test lab' }).click();             // the name now reaches another machine
+  await toExtract(page);
+  await expect(runOn(dialog, 'This Mac')).toBeChecked();                        // choosing it again is a new choice
+  await expect(dialog.getByRole('button', { name: 'Start run', exact: true })).toBeVisible();
 });

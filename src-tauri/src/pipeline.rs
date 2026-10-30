@@ -522,6 +522,47 @@ pub struct SshOverrides {
     pub identity: Option<String>,
 }
 
+/// A lab server's name as the CLI keeps it (hosts.py): lower-case letters, digits and `-`, and not a word it keeps for
+/// itself.
+pub fn host_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !["native", "self", "cloud", "runpod", "local"].contains(&name)
+}
+
+/// The app's own check, against `remote run --dry-run`'s answer (`remote_plan`) just before the run starts there, that
+/// it is what Extract showed when Start run was pressed: it would start (`ok`), on that host, and the host would hold no
+/// kind of data beyond those shown (the video and what every step makes: `uploads`), and each of its steps that calls
+/// an API sends it only what that step was turned on to send (`api`, as `upload_gate` holds a run here to it: the
+/// coordinator there is given `--allow-uploads`). Keys are the host's own consent (`hosts keys`), which the CLI checks:
+/// a run whose steps need keys is refused without it.
+pub fn remote_gate(rp: &Value, host: &str, agreed: &[String], api: &Uploads) -> Result<()> {
+    if rp["host"].as_str() != Some(host) {
+        return Err(Error::Bundle(format!("the pipeline answered for another server than {host}")));
+    }
+    if rp["ok"] != Value::Bool(true) {
+        return Err(Error::Bundle(problems(rp)));
+    }
+    let kinds = rp["uploads"].as_array().ok_or_else(|| Error::Bundle(format!("the pipeline does not say what {host} would hold; update hyperstudy-perception")))?;
+    for k in kinds {
+        let k = k.as_str().unwrap_or_default();
+        if !agreed.iter().any(|a| a == k) {
+            return Err(Error::Bundle(format!("{host} would hold {k}, which was not shown when the run was started: plan again")));
+        }
+    }
+    let nodes = rp["nodes"].as_array().ok_or_else(|| Error::Bundle(format!("the pipeline does not say which steps would run on {host}; update hyperstudy-perception")))?;
+    for n in nodes {
+        let (id, kinds) = (n["id"].as_str().unwrap_or_default(), n["uploads"].as_array().cloned().unwrap_or_default());
+        let Some(service) = n["service"].as_str().filter(|_| !kinds.is_empty()) else { continue };   // sends nothing to an API
+        let ok = api.get(id).is_some_and(|a| a.service.as_deref() == Some(service)
+            && kinds.iter().all(|k| a.kinds.iter().any(|x| Some(x.as_str()) == k.as_str())));
+        if !ok {
+            return Err(Error::Bundle(format!("{id} would send data to the {service} that it was not turned on to send: turn it on yourself")));
+        }
+    }
+    Ok(())
+}
+
 /// An ssh destination that cannot be read as an option: user@host, a host, or a name from ~/.ssh/config.
 fn ssh_dest_ok(dest: &str) -> bool {
     dest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
@@ -534,9 +575,7 @@ fn ssh_dest_ok(dest: &str) -> bool {
 /// `probe` takes the destination for `name`: it reaches it and says what it has, adding nothing (a connection test).
 /// `keys` takes `on` or `off` for `dest`: whether whole runs coordinated there may hold the keys their steps declare.
 pub fn host_args(action: &str, name: &str, dest: Option<&str>, root: Option<&str>, ov: &SshOverrides) -> Result<Vec<String>> {
-    let name_ok = !name.is_empty() && name.len() <= 31 && name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !["native", "self", "cloud", "runpod", "local"].contains(&name);
+    let name_ok = host_name_ok(name);
     if !["add", "check", "remove", "clean", "probe", "keys"].contains(&action) {
         return Err(Error::Bundle(format!("not something to do with a host: {action:?}")));
     }
@@ -784,6 +823,7 @@ impl Pipeline {
                 Some("run.finished") => finished = o["status"].as_str().map(String::from),
                 Some("error") => refused = true,
                 Some("plan") if o["ok"] == false => refused = true,
+                Some("remote_plan") if o["ok"] == false => refused = true,   // `remote run` that would not start there
                 _ => {}
             }
             on(&o);
@@ -1264,6 +1304,34 @@ esac
         let mut awake = AwakeForRun::new(vec![]);
         p.run_to_end(&["run"], |o| awake.see(o)).unwrap();
         assert!(!awake.held());
+    }
+
+    #[test]
+    fn a_run_on_a_lab_server_starts_only_as_extract_showed_it() {
+        let captions = serde_json::json!({"id": "captions", "service": "Anthropic API", "uploads": ["frames", "faces", "transcript"]});
+        let faces = serde_json::json!({"id": "faces", "service": null, "uploads": []});
+        let rp = |ok: bool, uploads: &[&str]| serde_json::json!({"type": "remote_plan", "host": "lab", "ok": ok,
+            "problems": if ok { vec![] } else { vec!["captions need ANTHROPIC_API_KEY, and lab may not hold your keys"] },
+            "uploads": uploads, "keys": {}, "nodes": [faces.clone()]});
+        let agreed = ["video".to_string(), "frames".to_string(), "faces".to_string()];
+        let none = Uploads::new();
+        assert!(remote_gate(&rp(true, &["video", "faces"]), "lab", &agreed, &none).is_ok());
+        // more than was shown: planned again first
+        let e = remote_gate(&rp(true, &["video", "faces", "transcript"]), "lab", &agreed, &none).unwrap_err().to_string();
+        assert!(e.contains("lab would hold transcript"), "{e}");
+        assert!(remote_gate(&rp(false, &["video"]), "lab", &agreed, &none).unwrap_err().to_string().contains("may not hold your keys"));
+        assert!(remote_gate(&rp(true, &["video"]), "gpu2", &agreed, &none).is_err());   // another server's answer
+        assert!(remote_gate(&serde_json::json!({"host": "lab", "ok": true, "nodes": []}), "lab", &agreed, &none).is_err());   // says nothing of what it holds
+        // an API step sends from there only what it was turned on to send, to its own API
+        let with_captions = { let mut v = rp(true, &["video"]); v["nodes"] = serde_json::json!([faces, captions]); v };
+        let e = remote_gate(&with_captions, "lab", &agreed, &none).unwrap_err().to_string();
+        assert!(e.contains("captions would send data to the Anthropic API"), "{e}");
+        let turned_on = |kinds: &[&str], service: &str| Uploads::from([("captions".to_string(), Agreed {
+            kinds: kinds.iter().map(|k| k.to_string()).collect(), service: Some(service.to_string()) })]);
+        assert!(remote_gate(&with_captions, "lab", &agreed, &turned_on(&["frames", "faces", "transcript"], "Anthropic API")).is_ok());
+        assert!(remote_gate(&with_captions, "lab", &agreed, &turned_on(&["frames", "faces"], "Anthropic API")).is_err());
+        assert!(remote_gate(&with_captions, "lab", &agreed, &turned_on(&["frames", "faces", "transcript"], "OpenAI API")).is_err());
+        assert!(host_name_ok("lab-2") && !host_name_ok("Lab") && !host_name_ok("runpod") && !host_name_ok("-x") && !host_name_ok(""));
     }
 
     #[test]

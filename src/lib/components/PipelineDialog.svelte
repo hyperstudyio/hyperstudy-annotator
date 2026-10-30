@@ -4,13 +4,18 @@
   // the plan (where each step runs, what is cached, what it costs, each step's details and settings: what it downloads
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline with no full graph offers its graphs instead.
+  // Run on: this Mac (each step's place chosen on its row), or a lab server that coordinates the whole run (`perception
+  // remote run`): every step there, so it goes on with this Mac asleep or the app closed; starting it is the consent for
+  // the server to hold the video and what every step makes, said beside Start run. The runs started there that are not
+  // in the library yet are listed under the video: one still running can be shown again, one that has ended is fetched
+  // and imported (Rust: remote_runs), and one that failed says why until put away.
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
   import type { RunStatus } from './Rail.svelte';
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, type CliKeys, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
+    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, tooOld, type CliKeys, type RemotePlan, type RemoteRun, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -61,6 +66,13 @@
   let error = $state<string | null>(null);
   let busy = $state<string | null>(null);
   let stop: (() => void) | null = null;
+  // the lab server a whole run is coordinated on (null: this Mac), what it would hold and why it would not start there
+  let runOn = $state<string | null>(null);
+  let remote = $state<RemotePlan | null>(null);
+  let remoteError = $state<string | null>(null);
+  // the runs started on lab servers that are not in the library, and those imported since this page was opened
+  let remoteRuns = $state<RemoteRun[]>([]);
+  let imported = $state<{ run: string; host: string; video: string; bundle: string }[]>([]);
 
   const pick = $derived(plan ? picked(plan, wanted ?? defaultFeatures(plan)) : { chosen: [], neededBy: {}, only: null });
   // the plan of what will run: the features on and what they need (time, cost, consent and blockers count only these)
@@ -83,12 +95,28 @@
   // a step as people know it: by its feature, when it is one of a feature's steps
   const titleOf = (id: string) => { const n = plan?.nodes.find((x) => x.id === (plan ? featureOf(plan, id) : id)); return n ? title(n) : id; };
   const titlesOf = (ids: string[]) => [...new Set(ids.map(titleOf))];
+  // On a lab server: what it would hold and why it would not start there, asked again with each change of what would
+  // run. A run whose steps need keys the server may not hold says so with the way to allow it (keysHeld); the rest of
+  // its reasons as the pipeline gives them (the local plan's are this Mac's, and do not apply)
+  const newestRemote = latestOnly();
+  $effect(() => {
+    const host = runOn, g = graph, v = video, only = pick.only, cap = active ? spendingCap(active, pick.chosen) : null;
+    const set = settingsFor(withDefaults(fromDefaults, settings), pick.chosen);
+    remote = null; remoteError = null;
+    if (!host || !g || !v || !plan || started || planning) return;
+    untrack(() => newestRemote(api.remotePlan(g, v, host, only, set, cap), (r) => (remote = r), (e) => (remoteError = tooOld(e, 'run on a lab server'))));
+  });
+  const keysHeld = $derived(!!remote && !remote.keys_allowed && Object.keys(remote.keys).length > 0);
+  const keyNeeders = $derived(remote ? titlesOf([...new Set(Object.values(remote.keys).flat())].filter((id) => pick.chosen.includes(id))) : []);
+  const remoteWhy = $derived(remoteError ? [`could not check ${runOn}: ${remoteError}`]
+    : (remote?.problems ?? []).filter((p) => !(keysHeld && /may not hold your keys/.test(p))));
   // what blocks a run: the plan's own problems, and a step that would send data off beyond what the user agreed to
-  const why = $derived(active && !started ? [...blockers(active), ...(canPick(active) ? titlesOf(unagreed(active, ticked)).map((t) =>
+  const why = $derived(active && !started ? runOn ? remoteWhy : [...blockers(active), ...(canPick(active) ? titlesOf(unagreed(active, ticked)).map((t) =>
     `${t} would send data off this machine that it was not turned on to send: turn it on yourself`) : [])] : []);
   // Start run is held for exactly the reasons the footer gives (and while there is nothing yet to run)
   const settingUp = $derived(setup?.state === 'installing' || setup?.state === 'running');   // Start run waits for it
-  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !stale && !configBusy && !settingUp);
+  const canRun = $derived(!!active && active.nodes.length > 0 && !!graph && !!video && !why.length && !started && !planning && !stale && !configBusy && !settingUp
+    && (!runOn || (!!remote?.ok && !keysHeld)));
   // when each step started (its latest attempt) and finished, by the clock here
   const ran = $derived.by(() => {
     const out: Record<string, { from: number; to: number | null }> = {};
@@ -133,6 +161,7 @@
     if (waited && untrack(() => visible)) { waited = false; untrack(() => { revisit(); }); }
   });
   const revisit = async () => {
+    loadRemoteRuns();
     const [h, c] = await Promise.allSettled([api.hosts(), api.cloud()]);
     await loadKeys();
     await machinesChanged({ hosts: h.status === 'fulfilled' ? h.value : undefined, cloud: c.status === 'fulfilled' ? c.value : undefined });
@@ -144,6 +173,7 @@
   }
   const loadPipeline = () => step('Checking the pipeline…', async () => {
     [doctor, graphs] = await Promise.all([api.doctor(), api.graphs()]);
+    loadRemoteRuns();
     await Promise.all([loadMachines(), loadKeys()]);
     if (graphs.some((g) => g.file === FULL_GRAPH)) graph = FULL_GRAPH;   // features are picked from it
   });
@@ -202,6 +232,8 @@
     if (now.hosts) hosts = now.hosts;
     if (now.cloud) cloud = now.cloud;
     if (started) return;   // a run has its places already
+    // Run on goes back to this Mac when its server is gone, or its name now leads to another machine (a new choice)
+    if (runOn && !(hosts ?? []).some((h) => h.name === runOn && h.keys !== undefined && before.get(`ssh-${h.name}`) === machineId(h))) runOn = null;
     // each place still offered: the same machine, with that accelerator (a check may find a GPU gone)
     const offered = (place: string) => {
       const [backend, accelerator] = place.split(':');
@@ -245,8 +277,10 @@
     error = null;
     if (!graph || !video) return;
     busy = 'Planning…'; planning = true;
-    const asked = places;   // the places this plan is asked for: a step the user moved there is theirs to have agreed to
-    newestPlan(api.plan(graph, video, places, withDefaults(fromDefaults, settings)).then((p) => withMoves(p, asked)), (p) => {
+    // the places this plan is asked for: a step the user moved there is theirs to have agreed to. A run on a lab server
+    // has every step there: its plan is this Mac's, shown as on the server (onHost)
+    const asked = runOn ? {} : places;
+    newestPlan(api.plan(graph, video, asked, withDefaults(fromDefaults, settings)).then((p) => withMoves(p, asked)), (p) => {
         // the defaults chosen in Settings > Models, where this run has not chosen otherwise: planned again when they are
         // not the ones this plan had (the first plan, or a default changed in Settings since)
         const now = defaultsFor(p, settings, loadDefaults());
@@ -255,17 +289,70 @@
           makePlan(true);
           return;
         }
-        plan = p; stale = false; ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places))); busy = null; planning = false;
+        plan = runOn ? onHost(p, runOn) : p; stale = false; busy = null; planning = false;
+        if (!started) ({ wanted, ticked } = keepChoices(p, wanted ?? defaultFeatures(p), ticked, Object.keys(places)));   // a run shown again keeps what it ran
       },
       (e) => { if (keep && plan) stale = true; else { plan = null; stale = false; } error = String(e); busy = null; planning = false; });
   };
   const run = () => step('Starting…', async () => {
     started = true; msgs = []; arrived = []; now = Date.now();
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
-    try { stop = await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, settingsFor(withDefaults(fromDefaults, settings), pick.chosen), spendingCap(active!, pick.chosen), on); }
+    const set = settingsFor(withDefaults(fromDefaults, settings), pick.chosen), cap = spendingCap(active!, pick.chosen);
+    try {
+      stop = runOn ? await api.remoteRun(graph!, video!, runOn, remote!.uploads, consentFor(active!, ticked), pick.only, set, cap, on)
+        : await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, set, cap, on);
+    }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
+
+  // Run on: this Mac, or a lab server (one whose pipeline coordinates runs there: perception #46 lists its `keys`)
+  const servers = $derived((hosts ?? []).filter((h) => h.keys !== undefined));
+  const chooseRunOn = async (host: string | null) => { runOn = host; await makePlan(true); };
+  /** The plan as a run on `host` would go: every step there (the API steps call their API from there), none already
+   *  done (the server keeps its own results), each with its time there when one is known. */
+  const onHost = (p: Plan, host: string): Plan => ({ ...p, nodes: p.nodes.map((n) => {
+    if (n.service) return { ...n, cached: false };
+    const there = (n.options ?? []).find((o) => o.startsWith(`ssh-${host}:`)), est = there ? n.estimates?.[there] : undefined;
+    return { ...n, cached: false, where: host, why_not: '', place: null, options: [], estimate_s: est?.estimate_s ?? null,
+             estimate_basis: est?.estimate_basis ?? `no runs on ${host} yet` };
+  }) });
+
+  const loadRemoteRuns = async () => { try { remoteRuns = await api.remoteRuns(); } catch { /* an older app's database: none */ } };
+  $effect(() => {   // checked again while the page is on screen: a run there may have ended
+    if (!visible) return;
+    const t = setInterval(loadRemoteRuns, 5 * 60_000);
+    return () => clearInterval(t);
+  });
+  $effect(() => { if (done) untrack(() => { loadRemoteRuns(); }); });
+  $effect(() => {   // a run that ended there while no one followed it, fetched and imported: offered to open
+    let off: (() => void) | null = null, gone = false;
+    api.onRemoteImported((m) => {
+      // the run on screen, imported by the listing of runs as its follower finished: it is done
+      if (m.run === view.run) { msgs = [...msgs, { v: 1, type: 'imported', run: m.run, bundle: m.bundle }]; arrived = [...arrived, Date.now()]; return; }
+      if (imported.some((x) => x.run === m.run)) return;
+      const r = remoteRuns.find((x) => x.run === m.run);
+      imported = [...imported, { run: m.run, host: r?.host ?? '', video: r?.video ?? m.bundle.title, bundle: m.bundle.id }];
+    }).then((f) => { if (gone) f(); else off = f; });
+    return () => { gone = true; off?.(); };
+  });
+  const listed = $derived(remoteRuns.filter((r) => !r.followed && r.run !== view.run));
+  // the server has the run (until then its code and video are on their way, and closing the app stops it)
+  let reattached = $state(false);
+  const startedThere = $derived(reattached || msgs.some((m) => m.type === 'remote_started'));
+  const runText = (r: RemoteRun) => r.state === 'failed' ? r.problem || `It failed on ${r.host}`
+    : r.state === 'importing' ? 'Importing into the library…' : r.problem ? r.problem
+    : r.unreachable ? `Running; ${r.host} cannot be reached now` : r.total ? `Running, ${r.done} of ${r.total} steps done` : 'Running';
+  // a run still going there, shown again as it was started, and followed to its end
+  const show = (r: RemoteRun) => step('Reaching the run…', async () => {
+    video = r.video; runOn = r.host; graph = r.choices.graph; settings = r.choices.settings ?? {};
+    wanted = r.choices.only?.length ? new Set(r.choices.only) : null; ticked = {};
+    started = true; reattached = true; msgs = []; arrived = []; now = Date.now();
+    makePlan();
+    const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
+    try { stop = await api.remoteAttach(r.run, on); } catch (e) { started = false; throw e; }
+  });
+  const dismiss = (run: string) => step('Putting it away…', async () => { await api.remoteDismiss(run); await loadRemoteRuns(); });
 
   const name = (p: string | null) => p?.split('/').pop() ?? '';
   const stem = (file: string) => file.replace(/\.ya?ml$/, '');
@@ -279,7 +366,7 @@
     if (view.status === 'failed') return 'The run failed';
     if (view.status === 'canceled') return 'The run was canceled';
     if (view.problems.length) return 'The run stopped';
-    return `Running, ${finished} of ${states.length} steps done`;
+    return `Running${runOn ? ` on ${runOn}` : ''}, ${finished} of ${states.length} steps done`;
   });
   const chosenGraph = $derived(graphs.find((g) => g.file === graph));
   // the rows: a feature each, its steps in its row (the plan's, or once started what runs)
@@ -307,6 +394,7 @@
   const elsewhere = $derived(!!hosts?.length || !!cloud?.enabled || !!cloud?.runpod?.enabled);
   // what leaves this machine, and where to: the API it calls, or the other machine it runs on (its inputs, whatever they hold)
   const leaves = (n: PlanNode) => {
+    if (runOn) return `What it reads and makes, kept on ${runOn}${n.service && n.uploads?.length ? `; ${list(n.uploads)}, sent to the ${n.service}` : ''}`;
     const to = dest(n);
     if (!to && !n.uploads?.length) return 'Nothing';
     const what = n.uploads?.length ? list(n.uploads) : 'Its inputs';
@@ -344,6 +432,17 @@
           {#if video}<span class="file" title={video}>{name(video)}</span><button onclick={chooseVideo} disabled={started}>Change…</button>
           {:else}<button class="primary" onclick={chooseVideo}>Choose a video…</button>{/if}
         </div>
+      {#if servers.length}
+        <span class="label" id="runon-label">Run on</span>
+        <div class="value">
+          <div class="segments" role="radiogroup" aria-labelledby="runon-label">
+            <label class="segment" class:on={!runOn}><input type="radio" name="runon" checked={!runOn} disabled={started} onchange={() => chooseRunOn(null)} />{here === 'this Mac' ? 'This Mac' : 'This machine'}</label>
+            {#each servers as h (h.name)}
+              <label class="segment" class:on={runOn === h.name}><input type="radio" name="runon" checked={runOn === h.name} disabled={started} onchange={() => chooseRunOn(h.name)} />{h.name}</label>
+            {/each}
+          </div>
+        </div>
+      {/if}
       {#if graph !== FULL_GRAPH}
       <span class="label" id="graph-label">Graph</span>
       <div class="value graphs">
@@ -361,14 +460,34 @@
     </div>
   {/if}
 
+  {#if listed.length || imported.length}
+    <!-- runs on lab servers not in the library: one running can be shown again; one that failed, put away -->
+    <section class="elsewhere" aria-labelledby="elsewhere-heading">
+      <h2 id="elsewhere-heading">Runs on other machines</h2>
+      <ul>
+        {#each imported as r (r.run)}
+          <li aria-label={name(r.video)}><span class="file" title={r.video}>{name(r.video)}</span><span class="muted">{r.host}</span>
+            <span>In the library</span><button onclick={() => onopen(r.bundle)}>Open in Annotator</button></li>
+        {/each}
+        {#each listed as r (r.run)}
+          <li aria-label={name(r.video)}><span class="file" title={r.video}>{name(r.video)}</span><span class="muted">{r.host}</span>
+            <span class:error={r.state === 'failed' || !!r.problem}>{runText(r)}</span>
+            {#if r.state === 'failed' || r.problem}<button onclick={() => dismiss(r.run)} disabled={!!busy}>Dismiss</button>
+            {:else if r.state === 'running'}<button onclick={() => show(r)} disabled={started || !!busy}>Show</button>{/if}</li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
   {#if plan}
     <section class="plan" aria-label={started ? 'Run' : 'Plan'}>
       <h3>
         {#if started}{headline}
         {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
       </h3>
+      {#if runOn && started && !done && startedThere}<p class="muted">It keeps going on {runOn} if this Mac sleeps or the app is closed.</p>{/if}
       {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('compute')}>Add a remote server or cloud GPU</button></p>{/if}
-      {#if total?.unknown.length && !started}{@const unknown = titlesOf(total.unknown)}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(unknown)}, which {unknown.length === 1 ? 'has' : 'have'} not run here before.</p>{/if}
+      {#if total?.unknown.length && !started}{@const unknown = titlesOf(total.unknown)}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(unknown)}, which {unknown.length === 1 ? 'has' : 'have'} not run {runOn ? `on ${runOn}` : 'here'} before.</p>{/if}
       <ol class="steps">
         {#each rows as n (n.id)}
           <!-- a feature in several steps is one row: its state, time, cost and details are its steps' together -->
@@ -472,7 +591,11 @@
       {/if}
       {#each view.problems as p (p)}<p class="error">{p}</p>{/each}
       {#if view.status && view.status !== 'succeeded'}<p class="error">The run {view.status}. The step marked failed says why.</p>{/if}
-      {#each why as b (b)}<p class="error">{b[0].toUpperCase() + b.slice(1)}.</p>{/each}
+      {#each why as b (b)}<p class="error">{b[0].toUpperCase() + b.slice(1).replace(/\.$/, '')}.</p>{/each}
+      {#if runOn && !started && keysHeld}<p class="error">{list(keyNeeders)} {keyNeeders.length === 1 ? 'needs' : 'need'} your keys on {runOn}:
+        <button class="link" onclick={() => onsettings?.('compute')}>allow it in Settings</button>, or turn {keyNeeders.length === 1 ? 'it' : 'them'} off.</p>{/if}
+      {#if runOn && !started && plan && remote?.ok}<p class="muted">{runOn} receives the video and what every step makes.</p>{/if}
+      {#if runOn && !started && plan && !remote && !remoteError}<p class="muted">Checking {runOn}…</p>{/if}
       {#if busy}<p class="muted">{busy}</p>{/if}
       {#if machinesError && !started}<p class="error">Could not list the remote servers or the cloud GPU: {machinesError}</p>{/if}
       {#if keysError && !started}<p class="error">Could not read {keysError}</p>{/if}
@@ -496,7 +619,7 @@
     {:else if started && !done}
       <button onclick={cancel}>Cancel run</button>
     {:else if !started && plan}
-      <button class="primary" onclick={run} disabled={!canRun}>Start run</button>
+      <button class="primary" onclick={run} disabled={!canRun}>{runOn ? `Start run on ${runOn}` : 'Start run'}</button>
     {/if}
   </footer>
 </section>
@@ -577,12 +700,24 @@
   @media (prefers-reduced-motion: reduce) { .bar { transition: none; } .bar.busy { animation: none; } }
 
 
+  /* runs on lab servers: one line each, under the video */
+  .elsewhere { margin: 0 20px 20px; }
+  .elsewhere h2 { font-size: 13px; font-weight: 600; color: var(--color-text-secondary); margin: 0 0 6px; }
+  .elsewhere ul { list-style: none; margin: 0; padding: 0; }
+  .elsewhere li { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .6fr) minmax(0, 2fr) auto; gap: 12px; align-items: center;
+                  padding: 6px 0; border-top: 1px solid var(--color-border-default); font-size: 13px; }
+  .elsewhere li:first-child { border-top: 0; }
+  .elsewhere li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .elsewhere button { padding: 3px 12px; }
+  @media (max-width: 560px) { .elsewhere li { grid-template-columns: 1fr auto; } .elsewhere li > span:nth-child(3) { grid-column: 1 / -1; grid-row: 2; white-space: normal; } }
+
   .empty { padding: 28px 20px 32px; color: var(--color-text-secondary); max-width: 60ch; }
   footer { display: flex; align-items: center; gap: 12px; padding: 14px 20px 18px; margin-top: auto; position: sticky; bottom: 0;
            background: var(--color-bg-base); }
   footer:has(button, p) { border-top: 1px solid var(--color-border-default); }   /* no rule under an empty page */
   .status { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 0; }
   footer button { flex: none; padding: 6px 16px; }
+  footer .status button.link { padding: 0; }   /* a link in a sentence, not a button beside it */
 
   @media (max-width: 560px) {   /* name and time on top; where, the bar and notes under the name */
     .step { grid-template-columns: 20px 1fr auto; row-gap: 5px; }
