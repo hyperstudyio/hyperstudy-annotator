@@ -37,10 +37,14 @@
   };
   const host = (action: HostAction, n: string) => act(`${action === 'check' ? 'Testing' : action === 'clean' ? 'Clearing the cache on' : 'Removing'} ${n}…`,
     () => api.host(action, n));
-  const keysOn = (n: string, on: boolean) => act(on ? `Letting ${n} hold your keys…` : `Taking your keys off ${n}…`,
-    () => api.host('keys', n, on ? 'on' : 'off'));
+  // a change that fails leaves the box as the pipeline still has it: the box is set back (Svelte does not write a
+  // `checked` it last wrote again, so the server's unchanged `keys` would not)
+  const keysOn = async (box: HTMLInputElement, h: Host) => {
+    if (!await act(box.checked ? `Letting ${h.name} hold your keys…` : `Taking your keys off ${h.name}…`,
+                   () => api.host('keys', h.name, box.checked ? 'on' : 'off'))) box.checked = !!h.keys;
+  };
   const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
-  const gets = $derived(sent.length ? `Its runs get your ${list(sent)} ${sent.length === 1 ? 'key' : 'keys'}.` : 'Its runs get the keys their steps need.');
+  const gets = $derived(sent.length ? `Its runs get your ${list(sent)} ${sent.length === 1 ? 'key' : 'keys'} when their steps need ${sent.length === 1 ? 'it' : 'them'}.` : 'Its runs get the keys their steps need.');
   // the name steps know it by, from the host: lower-case letters, digits and - (what the pipeline takes)
   const nameFrom = (d: string) => d.replace(/^.*@/, '').split('.')[0].toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 31);
   $effect(() => { if (!named) name = nameFrom(dest.trim()); });
@@ -92,7 +96,7 @@
           {#if h.keys !== undefined}
             <div class="keys">
               <label><input type="checkbox" checked={h.keys} disabled={!!busy} aria-describedby={`keys-${h.name}`}
-                onchange={(e) => keysOn(h.name, e.currentTarget.checked)} />Run whole pipelines here, with my keys</label>
+                onchange={(e) => keysOn(e.currentTarget, h)} />Run whole pipelines here, with my keys</label>
               <p class="muted" id={`keys-${h.name}`}>{gets} While a run goes, root and your own processes on {h.name} can read them.
                 {#if sent.includes('Anthropic')}Safer with keys made for this:
                   <button class="link" onclick={() => openExternal(ANTHROPIC_WORKSPACES)}>an Anthropic workspace with a monthly limit</button>.{/if}</p>

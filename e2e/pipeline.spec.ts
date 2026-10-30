@@ -520,7 +520,7 @@ test('a lab server takes your keys to its runs only once you say so, naming them
   // the keys a run there would get are the ones set, by name; with Anthropic's, where to make one with a spending limit
   const said = lab.locator('#keys-lab');   // the checkbox's description (its text: the link's full stop follows it)
   await expect(allow).toHaveAttribute('aria-describedby', 'keys-lab');
-  await expect(said).toHaveText('Its runs get your Anthropic key. While a run goes, root and your own processes on lab can read them. '
+  await expect(said).toHaveText('Its runs get your Anthropic key when their steps need it. While a run goes, root and your own processes on lab can read them. '
     + 'Safer with keys made for this: an Anthropic workspace with a monthly limit.', { useInnerText: true });
   await expect(said.getByRole('button', { name: 'an Anthropic workspace with a monthly limit' })).toBeVisible();
   await allow.check();
@@ -530,6 +530,23 @@ test('a lab server takes your keys to its runs only once you say so, naming them
   await expect(allow).toBeChecked();                                             // as the pipeline keeps it
   await allow.uncheck();
   await expect(allow).not.toBeChecked();
+});
+
+test('a change to whether a lab server may hold your keys that fails shows what the pipeline still has', async ({ page }) => {
+  await planned(page, '/?pipeline-demo=remote');
+  const settings = await settingsAt(page, /^Compute$/);
+  const allow = settings.getByRole('listitem', { name: 'lab' }).getByRole('checkbox', { name: 'Run whole pipelines here, with my keys' });
+  await page.evaluate(() => {   // the next change to a server cannot reach the pipeline's record of it
+    const failed = Promise.reject(new Error('the pipeline failed: PermissionError: hosts.json'));
+    failed.catch(() => {});
+    (globalThis as { __holdHost?: Promise<void> }).__holdHost = failed;
+  });
+  await allow.click();
+  await expect(settings.getByText('PermissionError: hosts.json')).toBeVisible();
+  await expect(allow).not.toBeChecked();                                         // off, as the pipeline still has it
+  await page.evaluate(() => { delete (globalThis as { __holdHost?: Promise<void> }).__holdHost; });
+  await allow.click();
+  await expect(allow).toBeChecked();
 });
 
 test('a step on a remote server whose name now leads to another machine goes back to this machine', async ({ page }) => {
