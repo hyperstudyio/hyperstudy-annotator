@@ -20,6 +20,9 @@ pub struct AppState {
     /// the lab server that run is coordinated on (`perception remote run`), or None for one coordinated here: a cancel
     /// goes there, and quitting the app leaves it running there
     pub running_on: Mutex<Option<String>>,
+    /// that server has said the run is started there (`remote_started`, or a run followed again): before it, the run's
+    /// code and video may still be on their way, and only stopping its launcher here stops it
+    pub remote_started: std::sync::atomic::AtomicBool,
     /// that run's CLI process, and a cancel that came before it started (stops it before it has named the run)
     pub control: pipeline::RunControl,
     /// the user's keys, in the system keychain; the CLI gets them in its environment (shared with the threads that read
@@ -510,6 +513,7 @@ pub fn pipeline_run(app: AppHandle, state: State<'_, AppState>, graph: String, v
 fn clear_run(app: &AppHandle) {
     let state = app.state::<AppState>();
     *state.running_on.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    state.remote_started.store(false, std::sync::atomic::Ordering::SeqCst);
     *state.running.lock().unwrap_or_else(|e| e.into_inner()) = None;
     state.control.clear();
 }
@@ -582,9 +586,13 @@ fn into_library(state: &AppState, run: &str, video: &str, make: impl FnOnce(&std
         std::fs::remove_dir_all(&out)?;   // the library holds its own copy (or the import failed): frames and crops go
     }
     let summary = imported?;
-    library::check_video(&summary.video_sha256, std::path::Path::new(video))?;   // the bundle names the video it was made from
     let conn = state.db.lock().unwrap();
-    library::record_video(&conn, &summary.video_sha256, video)?;
+    // the bundle names the video it was made from: the file there is recorded as its video only if it still is that one
+    // (moved or changed during a long run elsewhere, it is located again when the bundle opens); the import stands
+    match library::check_video(&summary.video_sha256, std::path::Path::new(video)) {
+        Ok(()) => library::record_video(&conn, &summary.video_sha256, video)?,
+        Err(e) => eprintln!("run {run}: {video} not recorded as its video: {e}"),
+    }
     let summary = library::get(&conn, &summary.id)?;
     Ok(serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary}))
 }
@@ -617,14 +625,21 @@ pub async fn pipeline_remote_plan(state: State<'_, AppState>, graph: String, vid
     blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "remote_plan")).await
 }
 
+/// A run's id, as the pipeline makes them (scheduler.RUN_ID): the app names a run on a lab server itself, so it is
+/// recorded before anything is sent and no run there is one the app does not know.
+fn new_run_id() -> String {
+    format!("{}-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"), &uuid::Uuid::new_v4().simple().to_string()[..6])
+}
+
 /// Start a run coordinated on HOST and follow it, as `pipeline_run` does one here: its objects arrive as `pipeline`
-/// events, and once it succeeds there it is fetched and imported (`imported`). It is recorded (`remote_runs`) as soon
-/// as the pipeline names it, so a run that goes on there after the app closes is fetched when it opens again.
-/// `agreed`: the kinds of data Extract showed HOST would hold, checked against a fresh dry run (`remote_gate`).
+/// events, and once it succeeds there it is fetched and imported (`imported`). It is recorded (`remote_runs`) before it
+/// is started, under an id the app gives it, so a run that goes on there after the app closes is fetched when it opens
+/// again. `agreed`: the kinds of data Extract showed HOST would hold; `uploads`: what each API step was turned on to
+/// send (as for a run here). Both are checked against a fresh dry run (`remote_gate`).
 #[tauri::command]
 pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, host: String,
-                           agreed: Vec<String>, only: Option<Vec<String>>, settings: Option<Settings>,
-                           max_cost_usd: Option<f64>) -> Result<()> {
+                           agreed: Vec<String>, uploads: Option<pipeline::Uploads>, only: Option<Vec<String>>,
+                           settings: Option<Settings>, max_cost_usd: Option<f64>) -> Result<()> {
     let p = pipeline(&state)?;
     let (only, settings) = (only.unwrap_or_default(), settings.unwrap_or_default());
     let args = remote_run_args(&p, &host, &graph, &video, &only, &settings, max_cost_usd)?;
@@ -633,7 +648,7 @@ pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: St
     *state.running_on.lock().unwrap() = Some(host.clone());
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };
-        let last = remote_run_and_import(&app, &p, &args, &host, &video, &agreed, &choices)
+        let last = remote_run_and_import(&app, &p, &args, &host, &video, &agreed, &uploads.unwrap_or_default(), &choices)
             .unwrap_or_else(|e| Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})));
         clear_run(&app);
         if let Some(last) = last {
@@ -644,53 +659,66 @@ pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: St
 }
 
 fn remote_run_and_import(app: &AppHandle, p: &Pipeline, args: &[String], host: &str, video: &str, agreed: &[String],
-                         choices: &Value) -> Result<Option<Value>> {
+                         uploads: &pipeline::Uploads, choices: &Value) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     // consent checked again against a fresh dry run of what is about to start there, not only on Extract
     let rp = p.one(&[&args[..], &["--dry-run"]].concat(), "remote_plan")?;
-    pipeline::remote_gate(&rp, host, agreed)?;
+    pipeline::remote_gate(&rp, host, agreed, uploads)?;
     state.control.before_start()?;   // canceled while that ran: nothing starts
-    let mut named = None::<String>;
+    let run = new_run_id();
+    crate::remote_runs::record(&state.db.lock().unwrap(), &run, host, video, choices)?;   // known before anything is sent
+    *state.running.lock().unwrap() = Some(run.clone());
     let mut said = Vec::<String>::new();
-    let outcome = p.run_to_end_with(&[&args[..], &["--allow-downloads"]].concat(), |pid| {
+    let followed = p.run_to_end_with(&[&args[..], &["--allow-downloads", "--run-id", &run]].concat(), |pid| {
         if state.control.spawned(pid) {
             let _ = pipeline::stop_process(pid);
         }
-    }, |o| {
-        if o["type"] == "run.created" {
-            if let Some(id) = o["run"].as_str().and_then(|r| pipeline::run_id(r).ok()) {
-                *state.running.lock().unwrap() = Some(id.to_string());
-                if let Err(e) = crate::remote_runs::record(&state.db.lock().unwrap(), id, host, video, choices) {
-                    eprintln!("could not record run {id} on {host}: {e}");
-                }
-                named = Some(id.to_string());
-            }
-        }
-        if o["type"] == "error" || o["type"] == "remote_plan" {
-            said.push(pipeline::problems(o));
-        }
-        let _ = app.emit("pipeline", o);
-    })?;
-    match outcome {
-        Some((run, status)) => finish_remote(&state, p, &run, host, video, &status),
-        None => {   // refused there after it was named (the host's own plan), or its coordinator there is gone
-            if let Some(run) = named {
-                let why = said.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
-                crate::remote_runs::set_state(&state.db.lock().unwrap(), &run, "failed", Some(&why))?;
-            }
+    }, |o| { follow(&app, &state, o, &mut said); });
+    ended(&state, p, &run, host, video, followed, said)
+}
+
+/// One object of a run being followed there: passed on to the page, and noted (that it has started there; why not).
+fn follow(app: &AppHandle, state: &AppState, o: &Value, said: &mut Vec<String>) {
+    if o["type"] == "remote_started" {
+        state.remote_started.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    if o["type"] == "error" || (o["type"] == "remote_plan" && o["ok"] == false) {
+        said.push(pipeline::problems(o));
+    }
+    let _ = app.emit("pipeline", o);
+}
+
+/// How following a run there ended: fetched and imported once it succeeded (finish_remote); refused there, or its
+/// coordinator gone, recorded failed with why; its follower here stopped (a cancel before it started there, the app
+/// quitting, a crash) canceled if the cancel recorded it so, else left running for the next look there to find.
+fn ended(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &str, followed: Result<Option<(String, String)>>,
+         said: Vec<String>) -> Result<Option<Value>> {
+    match followed {
+        Ok(Some((_, status))) => finish_remote(state, p, run, host, video, &status),
+        Ok(None) => {
+            let why = said.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
+            crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "failed", Some(&why))?;
             Ok(None)
         }
+        Err(e) => match crate::remote_runs::get(&state.db.lock().unwrap(), run)? {
+            Some(r) if r.state == "canceled" => Ok(Some(serde_json::json!({"v": 1, "type": "run.finished", "run": run, "status": "canceled"}))),
+            _ => Err(e),
+        },
     }
 }
 
-/// A run that has ended on HOST: fetched and imported when it succeeded (recorded `imported`), else recorded as it
-/// ended. The `imported` event, if any.
+/// A run that has ended on HOST: fetched and imported when it succeeded, by whichever caller claims it (the page
+/// following it, or the listing of runs: never both), recorded `imported`; a fetch or import that fails is left to be
+/// tried again (`running`, with why). Otherwise recorded as it ended. The `imported` event, if this caller made one.
 fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &str, status: &str) -> Result<Option<Value>> {
     let run = pipeline::run_id(run)?;
     let set = |s: &str, why: Option<&str>| crate::remote_runs::set_state(&state.db.lock().unwrap(), run, s, why);
     match status {
         "succeeded" => {
+            if !crate::remote_runs::claim(&state.db.lock().unwrap(), run)? {
+                return Ok(None);   // being imported already (its `remote` event says when)
+            }
             let imported = into_library(state, run, video, |out| {
                 let got = p.one(&["remote", "fetch", host, run, "--output", &out.to_string_lossy()], "fetched")?;
                 got["path"].as_str().map(String::from).ok_or_else(|| Error::Bundle(format!(
@@ -698,7 +726,7 @@ fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &
             });
             match imported {
                 Ok(v) => { set("imported", None)?; Ok(Some(v)) }
-                Err(e) => { set("failed", Some(&format!("Finished on {host}, but could not be imported: {e}")))?; Err(e) }
+                Err(e) => { set("running", Some(&format!("Finished on {host}; not imported yet: {e}")))?; Err(e) }
             }
         }
         "canceled" => { set("canceled", None)?; Ok(None) }
@@ -712,23 +740,23 @@ fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &
 pub fn pipeline_remote_attach(app: AppHandle, state: State<'_, AppState>, run: String) -> Result<()> {
     let p = pipeline(&state)?;
     let rec = crate::remote_runs::get(&state.db.lock().unwrap(), pipeline::run_id(&run)?)?
-        .ok_or_else(|| Error::Bundle(format!("run {run} was not started from this app")))?;
+        .filter(|r| r.state == "running")
+        .ok_or_else(|| Error::Bundle(format!("run {run} is not one this app started that is still running")))?;
     begin_run(&state.setup, &state.running, || state.control.start())?;
     *state.running.lock().unwrap() = Some(rec.run.clone());   // named already: Cancel reaches it there at once
     *state.running_on.lock().unwrap() = Some(rec.host.clone());
+    state.remote_started.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };
         let state = app.state::<AppState>();
+        let mut said = Vec::<String>::new();
         let followed = p.run_to_end_with(&["remote", "attach", &rec.host, &rec.run], |pid| {
             if state.control.spawned(pid) {
                 let _ = pipeline::stop_process(pid);
             }
-        }, |o| { let _ = app.emit("pipeline", o); });
-        let last = match followed {
-            Ok(Some((_, status))) => finish_remote(&state, &p, &rec.run, &rec.host, &rec.video, &status),
-            Ok(None) => Ok(None),   // its error said why (its coordinator there is gone)
-            Err(e) => Err(e),
-        }.unwrap_or_else(|e| Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})));
+        }, |o| { follow(&app, &state, o, &mut said); });
+        let last = ended(&state, &p, &rec.run, &rec.host, &rec.video, followed, said)
+            .unwrap_or_else(|e| Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})));
         clear_run(&app);
         if let Some(last) = last {
             let _ = app.emit("pipeline", last);
@@ -739,19 +767,20 @@ pub fn pipeline_remote_attach(app: AppHandle, state: State<'_, AppState>, run: S
 
 /// The runs this app started on lab servers that are not imported, each as it is there now: one that has ended is
 /// fetched and imported (each import as a `remote` event: `imported`, with the bundle), one still running says how far
-/// it is (`done` of `total` steps), one that cannot be reached says why (`unreachable`). The run being followed is
-/// left to its follower.
+/// it is (`done` of `total` steps), one that cannot be reached says why (`unreachable`), one the server has no record of
+/// (it never started there, or the server removed it after its keep days) is failed. The run being followed is left to
+/// its follower (and a run both reach is imported once: finish_remote's claim).
 #[tauri::command]
 pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Value>> {
     let p = pipeline(&state)?;
     blocking(move || {
         let state = app.state::<AppState>();
-        let followed = state.running.lock().unwrap().clone();
         let open = crate::remote_runs::open(&state.db.lock().unwrap())?;
         let mut out = Vec::new();
         for r in open {
+            let followed = state.running.lock().unwrap().as_deref() == Some(r.run.as_str());
             let mut row = serde_json::to_value(&r).map_err(|e| Error::Bundle(e.to_string()))?;
-            if r.state == "running" && followed.as_deref() != Some(r.run.as_str()) {
+            if r.state == "running" && !followed {
                 match p.one(&["remote", "status", &r.host, &r.run], "status") {
                     Ok(s) => {
                         let status = s["status"].as_str().unwrap_or("running");
@@ -761,9 +790,10 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
                                 Ok(None) => {}
                                 Err(e) => eprintln!("run {} on {}: {e}", r.run, r.host),
                             }
-                            if let Some(now) = crate::remote_runs::get(&state.db.lock().unwrap(), &r.run)? {
-                                if now.state != "failed" { continue; }   // imported or canceled: no longer listed
-                                row = serde_json::to_value(&now).map_err(|e| Error::Bundle(e.to_string()))?;
+                            match crate::remote_runs::get(&state.db.lock().unwrap(), &r.run)? {
+                                Some(now) if matches!(now.state.as_str(), "failed" | "running" | "importing") =>
+                                    row = serde_json::to_value(&now).map_err(|e| Error::Bundle(e.to_string()))?,
+                                _ => continue,   // imported or canceled: no longer listed
                             }
                         } else if s["coordinator"] == "gone" {
                             let why = format!("It stopped on {} (the server restarted?)", r.host);
@@ -776,10 +806,16 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
                             row["done"] = tasks.iter().filter(|t| matches!(t["state"].as_str(), Some("succeeded" | "cached"))).count().into();
                         }
                     }
+                    Err(e) if e.to_string().contains(&format!("no run {} on this host", r.run)) => {
+                        let why = format!("{} has no record of it: it did not start there, or was removed after the server's keep days", r.host);
+                        crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
+                        row["state"] = "failed".into();
+                        row["problem"] = why.into();
+                    }
                     Err(e) => row["unreachable"] = e.to_string().into(),
                 }
             }
-            if followed.as_deref() == Some(r.run.as_str()) {
+            if followed {
                 row["followed"] = true.into();
             }
             out.push(row);
@@ -788,30 +824,27 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
     }).await
 }
 
-/// Put away a run that failed on a lab server: no longer listed on Extract.
+/// Put away a run that failed on a lab server, or one that finished there and could not be imported: no longer listed
+/// on Extract.
 #[tauri::command]
 pub fn pipeline_remote_dismiss(state: State<'_, AppState>, run: String) -> Result<()> {
     let conn = state.db.lock().unwrap();
     match crate::remote_runs::get(&conn, pipeline::run_id(&run)?)? {
-        Some(r) if r.state == "failed" => crate::remote_runs::set_state(&conn, &r.run, "dismissed", r.problem.as_deref()),
+        Some(r) if r.state == "failed" || (r.state == "running" && r.problem.is_some()) =>
+            crate::remote_runs::set_state(&conn, &r.run, "dismissed", r.problem.as_deref()),
         _ => Err(Error::Bundle(format!("run {run} is not a failed run to put away"))),
     }
 }
 
 /// Cancel the run in progress: through `perception cancel` once the CLI has named it, else by stopping its process
-/// (it has not started a node yet: an environment sync, or the coordinator starting).
+/// (it has not started a node yet: an environment sync, or the coordinator starting). A run on a lab server is canceled
+/// there (`perception remote cancel`) once it has started there; before that (its code and video on their way) its
+/// launcher here is stopped, it is recorded canceled, and whatever of it reached the server is canceled there too.
 #[tauri::command]
 pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) -> Result<()> {
-    let Some(run) = run else {
-        let named = state.running.lock().unwrap().clone().filter(|r| !r.is_empty());
-        if let Some(run) = named {   // the CLI named the run before the window heard it: cancel that run
-            let p = pipeline(&state)?;
-            let on = state.running_on.lock().unwrap().clone();   // the guard is not held across the await
-            if let Some(host) = on {
-                return blocking(move || p.one(&["remote", "cancel", &host, &run], "canceled").map(|_| ())).await;
-            }
-            return blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await;
-        }
+    let named = state.running.lock().unwrap().clone().filter(|r| !r.is_empty());
+    let on = state.running_on.lock().unwrap().clone();   // the guards are not held across an await
+    let Some(run) = run.or(named) else {
         return match state.control.cancel() {
             pipeline::Cancel::Stop(pid) => pipeline::stop_process(pid),
             pipeline::Cancel::WillNotStart => Ok(()),
@@ -820,12 +853,18 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
     };
     check_cancel(state.running.lock().unwrap().as_deref(), &run)?;
     let p = pipeline(&state)?;
-    // a run coordinated on a lab server is canceled there (perception remote cancel)
-    let on = state.running_on.lock().unwrap().clone();   // the guard is not held across the await
-    if let Some(host) = on {
+    let Some(host) = on else {
+        return blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await;
+    };
+    if state.remote_started.load(std::sync::atomic::Ordering::SeqCst) {
         return blocking(move || p.one(&["remote", "cancel", &host, &run], "canceled").map(|_| ())).await;
     }
-    blocking(move || p.one(&["cancel", &run], "canceled").map(|_| ())).await
+    crate::remote_runs::set_state(&state.db.lock().unwrap(), &run, "canceled", None)?;
+    if let pipeline::Cancel::Stop(pid) = state.control.cancel() {
+        pipeline::stop_process(pid)?;
+    }
+    // it may have reached the server just now: canceled there too ("no run" there: nothing reached it)
+    blocking(move || { let _ = p.one(&["remote", "cancel", &host, &run], "canceled"); Ok(()) }).await
 }
 
 /// The app is quitting (RunEvent::Exit): a run canceled as Cancel does, and nothing the app started left running

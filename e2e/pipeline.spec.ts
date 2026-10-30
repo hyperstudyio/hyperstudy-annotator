@@ -1292,6 +1292,8 @@ test('a run on a lab server runs every step there, says what the server receives
   expect(r.host).toBe('lab');
   expect(r.agreed).toEqual(['video', 'audio', 'frames', 'faces', 'transcript']);   // what the page said lab would hold
   expect(r.only).toBeNull();                                                      // every feature on: the whole graph
+  // what captions was turned on to send from there, to its API, checked against the dry run before it starts
+  expect((r as unknown as { allow: { uploads: Record<string, { service: string }> } }).allow.uploads.captions.service).toBe('Anthropic API');
   await expect(dialog.getByText('Imported into the library.')).toBeVisible({ timeout: 15_000 });
 });
 
@@ -1332,4 +1334,16 @@ test('a run that ended on a lab server while no one followed it is imported, and
   await expect(done).toContainText('In the library');
   await done.getByRole('button', { name: 'Open in Annotator' }).click();
   await expect(page.getByRole('region', { name: 'Extract' })).toBeHidden();
+});
+
+test('a lab server whose name now leads to another machine is no longer where the run goes', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await runOn(dialog, 'lab').check();
+  await expect(dialog.getByRole('button', { name: 'Start run on lab' })).toBeVisible();
+  const settings = await settingsAt(page, /^Compute$/);
+  await page.evaluate(() => { (globalThis as { __readdedElsewhere?: boolean }).__readdedElsewhere = true; });
+  await settings.getByRole('button', { name: 'Test lab' }).click();             // the name now reaches another machine
+  await toExtract(page);
+  await expect(runOn(dialog, 'This Mac')).toBeChecked();                        // choosing it again is a new choice
+  await expect(dialog.getByRole('button', { name: 'Start run', exact: true })).toBeVisible();
 });

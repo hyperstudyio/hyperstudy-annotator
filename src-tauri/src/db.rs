@@ -81,8 +81,8 @@ const MIGRATIONS: &[Migration] = &[Migration {
             host       TEXT NOT NULL,              -- the lab server it runs on, as `perception hosts` names it
             video      TEXT NOT NULL,              -- the video's path here
             choices    TEXT NOT NULL,              -- JSON {graph, only, settings, max_cost_usd}: as Extract started it
-            state      TEXT NOT NULL CHECK (state IN ('running', 'imported', 'failed', 'canceled', 'dismissed')),
-            problem    TEXT,                       -- why it failed, or could not be fetched or imported
+            state      TEXT NOT NULL CHECK (state IN ('running', 'importing', 'imported', 'failed', 'canceled', 'dismissed')),
+            problem    TEXT,                       -- why it failed, or could not be fetched or imported (yet)
             started_at TEXT NOT NULL
         );
     "#,

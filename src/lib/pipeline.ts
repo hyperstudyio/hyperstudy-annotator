@@ -174,9 +174,10 @@ export interface PipelineApi {
   run(graph: string, video: string, allow: Consent, places: Places, only: string[] | null, settings: Settings, maxCostUsd: number | null, on: (m: PipelineMessage) => void): Promise<() => void>;
   /** What a run of the features chosen, coordinated on a lab server, would send it, and why it would not start. */
   remotePlan(graph: string, video: string, host: string, only: string[] | null, settings: Settings, maxCostUsd: number | null): Promise<RemotePlan>;
-  /** Start a run coordinated on a lab server (`agreed`: the kinds of data Extract showed it would hold); `on` receives
-   *  its messages, as `run`'s, until `imported` (fetched and imported once it succeeds there) or `error`. */
-  remoteRun(graph: string, video: string, host: string, agreed: string[], only: string[] | null, settings: Settings,
+  /** Start a run coordinated on a lab server (`agreed`: the kinds of data Extract showed it would hold; `allow`: what
+   *  each API step was turned on to send, as for `run`); `on` receives its messages, as `run`'s, until `imported`
+   *  (fetched and imported once it succeeds there) or `error`. */
+  remoteRun(graph: string, video: string, host: string, agreed: string[], allow: Consent, only: string[] | null, settings: Settings,
             maxCostUsd: number | null, on: (m: PipelineMessage) => void): Promise<() => void>;
   /** Follow again a run this app started on a lab server, as `remoteRun` follows one. */
   remoteAttach(run: string, on: (m: PipelineMessage) => void): Promise<() => void>;
@@ -197,9 +198,10 @@ export interface PipelineApi {
 export interface RemotePlan { host: string; ok: boolean; problems: string[]; uploads: string[]; upload_to: string;
   keys: Record<string, string[]>; keys_allowed: boolean }
 /** A run this app started on a lab server and has not imported (the app's `remote_runs`), as it is there now: still
- *  running (`done` of `total` steps, or `unreachable` saying why it could not be asked), or failed (`problem`).
+ *  running (`done` of `total` steps, or `unreachable` saying why it could not be asked; with a `problem` when it
+ *  finished there and could not be imported yet), being imported, or failed (`problem`).
  *  `followed`: the run this page shows. `choices`: what Extract started it with, to show it again. */
-export interface RemoteRun { run: string; host: string; video: string; state: 'running' | 'failed'; problem: string | null; started_at: string;
+export interface RemoteRun { run: string; host: string; video: string; state: 'running' | 'importing' | 'failed'; problem: string | null; started_at: string;
   choices: { graph: string; only: string[]; settings: Settings; max_cost_usd: number | null };
   done?: number; total?: number; unreachable?: string; followed?: boolean }
 
@@ -580,9 +582,9 @@ export async function tauriPipeline(): Promise<PipelineApi> {
       return unlisten;
     },
     remotePlan: (graph, video, host, only, settings, maxCostUsd) => invoke<RemotePlan>('pipeline_remote_plan', { graph, video, host, only, settings, maxCostUsd }),
-    async remoteRun(graph, video, host, agreed, only, settings, maxCostUsd, on) {
+    async remoteRun(graph, video, host, agreed, allow, only, settings, maxCostUsd, on) {
       const unlisten = await listen<PipelineMessage>('pipeline', (e) => on(e.payload));   // before starting: no message is missed
-      try { await invoke('pipeline_remote_run', { graph, video, host, agreed, only, settings, maxCostUsd }); }
+      try { await invoke('pipeline_remote_run', { graph, video, host, agreed, uploads: allow.uploads, only, settings, maxCostUsd }); }
       catch (e) { unlisten(); throw e; }
       return unlisten;
     },

@@ -232,7 +232,8 @@
     if (now.hosts) hosts = now.hosts;
     if (now.cloud) cloud = now.cloud;
     if (started) return;   // a run has its places already
-    if (runOn && !(hosts ?? []).some((h) => h.name === runOn && h.keys !== undefined)) runOn = null;
+    // Run on goes back to this Mac when its server is gone, or its name now leads to another machine (a new choice)
+    if (runOn && !(hosts ?? []).some((h) => h.name === runOn && h.keys !== undefined && before.get(`ssh-${h.name}`) === machineId(h))) runOn = null;
     // each place still offered: the same machine, with that accelerator (a check may find a GPU gone)
     const offered = (place: string) => {
       const [backend, accelerator] = place.split(':');
@@ -298,7 +299,7 @@
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
     const set = settingsFor(withDefaults(fromDefaults, settings), pick.chosen), cap = spendingCap(active!, pick.chosen);
     try {
-      stop = runOn ? await api.remoteRun(graph!, video!, runOn, remote!.uploads, pick.only, set, cap, on)
+      stop = runOn ? await api.remoteRun(graph!, video!, runOn, remote!.uploads, consentFor(active!, ticked), pick.only, set, cap, on)
         : await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, set, cap, on);
     }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
@@ -327,19 +328,26 @@
   $effect(() => {   // a run that ended there while no one followed it, fetched and imported: offered to open
     let off: (() => void) | null = null, gone = false;
     api.onRemoteImported((m) => {
+      // the run on screen, imported by the listing of runs as its follower finished: it is done
+      if (m.run === view.run) { msgs = [...msgs, { v: 1, type: 'imported', run: m.run, bundle: m.bundle }]; arrived = [...arrived, Date.now()]; return; }
+      if (imported.some((x) => x.run === m.run)) return;
       const r = remoteRuns.find((x) => x.run === m.run);
       imported = [...imported, { run: m.run, host: r?.host ?? '', video: r?.video ?? m.bundle.title, bundle: m.bundle.id }];
     }).then((f) => { if (gone) f(); else off = f; });
     return () => { gone = true; off?.(); };
   });
   const listed = $derived(remoteRuns.filter((r) => !r.followed && r.run !== view.run));
+  // the server has the run (until then its code and video are on their way, and closing the app stops it)
+  let reattached = $state(false);
+  const startedThere = $derived(reattached || msgs.some((m) => m.type === 'remote_started'));
   const runText = (r: RemoteRun) => r.state === 'failed' ? r.problem || `It failed on ${r.host}`
+    : r.state === 'importing' ? 'Importing into the library…' : r.problem ? r.problem
     : r.unreachable ? `Running; ${r.host} cannot be reached now` : r.total ? `Running, ${r.done} of ${r.total} steps done` : 'Running';
   // a run still going there, shown again as it was started, and followed to its end
   const show = (r: RemoteRun) => step('Reaching the run…', async () => {
     video = r.video; runOn = r.host; graph = r.choices.graph; settings = r.choices.settings ?? {};
     wanted = r.choices.only?.length ? new Set(r.choices.only) : null; ticked = {};
-    started = true; msgs = []; arrived = []; now = Date.now();
+    started = true; reattached = true; msgs = []; arrived = []; now = Date.now();
     makePlan();
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
     try { stop = await api.remoteAttach(r.run, on); } catch (e) { started = false; throw e; }
@@ -463,9 +471,9 @@
         {/each}
         {#each listed as r (r.run)}
           <li aria-label={name(r.video)}><span class="file" title={r.video}>{name(r.video)}</span><span class="muted">{r.host}</span>
-            <span class:error={r.state === 'failed'}>{runText(r)}</span>
-            {#if r.state === 'running'}<button onclick={() => show(r)} disabled={started || !!busy}>Show</button>
-            {:else}<button onclick={() => dismiss(r.run)} disabled={!!busy}>Dismiss</button>{/if}</li>
+            <span class:error={r.state === 'failed' || !!r.problem}>{runText(r)}</span>
+            {#if r.state === 'failed' || r.problem}<button onclick={() => dismiss(r.run)} disabled={!!busy}>Dismiss</button>
+            {:else if r.state === 'running'}<button onclick={() => show(r)} disabled={started || !!busy}>Show</button>{/if}</li>
         {/each}
       </ul>
     </section>
@@ -477,7 +485,7 @@
         {#if started}{headline}
         {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
       </h3>
-      {#if runOn && started && !done}<p class="muted">It keeps going on {runOn} if this Mac sleeps or the app is closed.</p>{/if}
+      {#if runOn && started && !done && startedThere}<p class="muted">It keeps going on {runOn} if this Mac sleeps or the app is closed.</p>{/if}
       {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('compute')}>Add a remote server or cloud GPU</button></p>{/if}
       {#if total?.unknown.length && !started}{@const unknown = titlesOf(total.unknown)}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(unknown)}, which {unknown.length === 1 ? 'has' : 'have'} not run {runOn ? `on ${runOn}` : 'here'} before.</p>{/if}
       <ol class="steps">

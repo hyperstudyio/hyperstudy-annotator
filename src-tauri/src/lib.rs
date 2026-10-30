@@ -25,10 +25,11 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(data_dir.join("bundles"))?;
             let conn = db::open(&data_dir.join("annotator.db"))?;
+            remote_runs::recover(&conn)?;   // an import the app was quit during is tried again
             let uv_dirs = pipeline::UvDirs { python: data_dir.join("python"), cache: app.path().app_cache_dir()?.join("uv"),
                                              tools: data_dir.join("tools"), bin: data_dir.join("bin") };
             let setup = Mutex::new(commands::SetupStatus::at_start(&uv_dirs));
-            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), running_on: Mutex::new(None), control: Default::default(),
+            app.manage(commands::AppState { db: Mutex::new(conn), data_dir, running: Mutex::new(None), running_on: Mutex::new(None), remote_started: Default::default(), control: Default::default(),
                                             keys: std::sync::Arc::new(keys::Keys::new(Box::new(keys::Keychain(keys::SERVICE)))),
                                             uv_dirs, setup });
             commands::start_setup(app.handle().clone())?;   // install or upgrade the pipeline, set a new version up: in the background

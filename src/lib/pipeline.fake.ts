@@ -218,11 +218,13 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
   // the script, as --only runs it, under the run's id: from its start, or (`from`) a run already part way through
-  const play = (on: (m: PipelineMessage) => void, only: string[] | null, run = 'demo-run', first = 0) => {
+  const play = (on: (m: PipelineMessage) => void, only: string[] | null, run = 'demo-run', first = 0, remoteStart = false) => {
     listener = on;
     const here = new Set([...plan.nodes, ...(objects || gated ? objectsNodes : [])].map((n) => n.id));   // the steps this demo's graph has
     const ran = script.filter((m) => m.type !== 'event' || !m.node || (here.has(m.node) && (!only || only.includes(m.node))))   // as --only does
-      .map((m) => 'run' in m ? { ...m, run } as PipelineMessage : m);
+      .map((m) => 'run' in m ? { ...m, run } as PipelineMessage : m)
+      // a run on a lab server: started there once its code and video have been sent
+      .flatMap((m) => remoteStart && m.type === 'run.created' ? [m, { v: 1, type: 'remote_started', run, host: 'lab', started: true, resumed: false, status: 'running' } as PipelineMessage] : [m]);
     timers = ran.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
     return () => timers.forEach(clearTimeout);
   };
@@ -279,11 +281,11 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       const problems = Object.keys(keys).length && !h.keys ? [`${Object.values(keys).flat().join(', ')} need ${Object.keys(keys).join(', ')}, and ${host} may not hold your keys for its runs: \`perception hosts keys ${host} on\` lets it (or leave those steps out with --only)`] : [];
       return { host, ok: !problems.length, problems, uploads: ['video', 'audio', 'frames', 'faces', 'transcript'], upload_to: `${host} (SSH)`, keys, keys_allowed: !!h.keys };
     },
-    async remoteRun(_graph, _video, host, agreed, only, settings, maxCostUsd, on) {
+    async remoteRun(_graph, _video, host, agreed, allow, only, settings, maxCostUsd, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
-      runs.push({ allow: null, places: null, maxCostUsd, settings, only, host, agreed });
+      runs.push({ allow, places: null, maxCostUsd, settings, only, host, agreed });
       following = '20261029-120000-cccccc';
-      return play(on, only, following);
+      return play(on, only, following, 0, true);
     },
     async remoteAttach(run, on) {
       const r = labList.find((x) => x.run === run);
