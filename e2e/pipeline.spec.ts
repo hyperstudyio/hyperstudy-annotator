@@ -503,6 +503,35 @@ test('a remote server name already listed cannot be added over: another machine 
   await expect(form.getByText(/lab is already a remote server here: remove it first/)).toBeVisible();
 });
 
+test('a lab server takes your keys to its runs only once you say so, naming them and who can read them there', async ({ page }) => {
+  await planned(page, '/?pipeline-demo=remote');
+  let settings = await settingsAt(page, /^Compute$/);
+  const lab = settings.getByRole('listitem', { name: 'lab' });
+  const allow = lab.getByRole('checkbox', { name: 'Run whole pipelines here, with my keys' });
+  await expect(allow).not.toBeChecked();                                         // off until you say so
+  await expect(allow).toHaveAccessibleDescription('Its runs get the keys their steps need. While a run goes, root and your own processes on lab can read them.');
+  settings = await settingsAt(page, /^Models$/);
+  const anthropic = settings.getByRole('listitem', { name: 'Shot captions' }).getByRole('listitem', { name: 'Anthropic key' });
+  await anthropic.getByRole('button', { name: 'Add the Anthropic key' }).click();
+  await anthropic.getByRole('textbox', { name: 'Anthropic key' }).fill('sk-ant-test-0123456789');
+  await anthropic.getByRole('button', { name: 'Save' }).click();
+  await expect(anthropic).toContainText('Saved in the keychain');
+  await settingsAt(page, /^Compute$/);
+  // the keys a run there would get are the ones set, by name; with Anthropic's, where to make one with a spending limit
+  const said = lab.locator('#keys-lab');   // the checkbox's description (its text: the link's full stop follows it)
+  await expect(allow).toHaveAttribute('aria-describedby', 'keys-lab');
+  await expect(said).toHaveText('Its runs get your Anthropic key. While a run goes, root and your own processes on lab can read them. '
+    + 'Safer with keys made for this: an Anthropic workspace with a monthly limit.', { useInnerText: true });
+  await expect(said.getByRole('button', { name: 'an Anthropic workspace with a monthly limit' })).toBeVisible();
+  await allow.check();
+  await expect(allow).toBeChecked();
+  await settingsAt(page, /^Models$/);
+  await settingsAt(page, /^Compute$/);
+  await expect(allow).toBeChecked();                                             // as the pipeline keeps it
+  await allow.uncheck();
+  await expect(allow).not.toBeChecked();
+});
+
 test('a step on a remote server whose name now leads to another machine goes back to this machine', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=remote');
   const menu = placeMenu(dialog, 'faces', 'Face tracks');

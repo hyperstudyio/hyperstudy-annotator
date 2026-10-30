@@ -17,7 +17,7 @@
   import Cloud from './Cloud.svelte';
   import { DOCS_URL, openExternal } from '../links';
   import type { Updates } from '../updates.svelte';
-  import { placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
+  import { keysSent, placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
 
   let { api, updates = null, active = true, holdRelaunch = null, relaunchCaution = null, show = null, onshown, onbusy }: {
     api: PipelineApi | null; updates?: Updates | null; active?: boolean;
@@ -139,7 +139,7 @@
         {:else}<p class="muted">Checking…</p>{/if}
       </section>
       {#if problems.servers}<p class="error">Could not list the remote servers: {problems.servers}</p>{/if}
-      {#if hosts !== null}<Servers {api} {hosts} onchange={(now) => (hosts = now)} onbusy={busy} />
+      {#if hosts !== null}<Servers {api} {hosts} sent={keysSent(models?.nodes ?? null, keys, cli)} onchange={(now) => (hosts = now)} onbusy={busy} />
       {:else if loaded && !problems.servers}<p class="muted">This pipeline runs every step on this computer. Update hyperstudy-perception to use other machines.</p>{/if}
       {#if problems.cloud}<p class="error">Could not check the cloud GPU providers: {problems.cloud}</p>{/if}
       {#if cloud}<Cloud {api} {cloud} {keys} {cli} onchange={(now) => (cloud = now)} onkeys={(now) => (keys = now)} onbusy={busy} />
