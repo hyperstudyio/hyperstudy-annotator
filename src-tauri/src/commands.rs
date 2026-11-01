@@ -440,6 +440,15 @@ pub async fn pipeline_models(state: State<'_, AppState>) -> Result<Value> {
     blocking(move || p.one(&["models", "list"], "models")).await
 }
 
+/// What `graph validate` says of GRAPH: from perception 0.1.6, `uses`, the step each of its nodes runs (Settings lists
+/// the full graph's steps, not every step the pipeline has registered).
+#[tauri::command]
+pub async fn pipeline_graph_check(state: State<'_, AppState>, graph: String) -> Result<Value> {
+    let p = pipeline_alone(&state)?;   // no keys: reading a graph needs none
+    let g = p.graph(&graph)?;
+    blocking(move || p.one(&["graph", "validate", &g], "graph")).await
+}
+
 // --- the user's keys (keys.rs): stored in the keychain; the web view learns only whether each is ---
 
 #[tauri::command]

@@ -5,19 +5,19 @@
 </script>
 
 <script lang="ts">
-  // Settings, by what each thing is for: Models (every model the steps use: where it runs, its licence, the choices a
-  // step offers, and what it needs from you: a provider's key, access to a gated model), Compute (where steps can run:
-  // this computer, remote servers, cloud GPU providers, each with what it needs, its key included) and App (its
-  // version and updates). Keys and connections each have a Test. A key appears where
-  // it is used, not in a list of keys. This is the one place they are set; Extract shows what a run will use and sends
-  // you here, and loads them again (and plans again) when you go back. Loaded again each time this page is shown.
+  // Settings, by what each thing is for: Models (every model the full graph's steps use: where it runs, its licence,
+  // the choices a step offers, and what it needs from you: a provider's key, access to a gated model), Compute (where
+  // steps can run: this computer, remote servers, cloud GPU providers, each with what it needs, its key included) and
+  // App (its version and updates). Keys and connections each have a Test. A key appears where it is used, not in a list
+  // of keys. This is the one place they are set; Extract shows what a run will use and sends you here, and loads them
+  // again (and plans again) when you go back. Loaded again each time this page is shown.
   import { tick, untrack } from 'svelte';
   import Models from './Models.svelte';
   import Servers from './Servers.svelte';
   import Cloud from './Cloud.svelte';
   import { DOCS_URL, openExternal } from '../links';
   import type { Updates } from '../updates.svelte';
-  import { keysSent, placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
+  import { FULL_GRAPH, keysSent, ofGraph, placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
 
   let { api, updates = null, active = true, holdRelaunch = null, relaunchCaution = null, show = null, onshown, onbusy }: {
     api: PipelineApi | null; updates?: Updates | null; active?: boolean;
@@ -59,13 +59,14 @@
   const reason = (r: PromiseSettledResult<unknown>) => r.status === 'rejected' ? String(r.reason) : undefined;
 
   async function load(api: PipelineApi) {
-    const [k, c, h, cl, d, m] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor(), api.models()]);
+    const [k, c, h, cl, d, m, g] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor(), api.models(), api.graphSteps(FULL_GRAPH)]);
     if (k.status === 'fulfilled') keys = k.value;
     cli = c.status === 'fulfilled' ? c.value : null;
     hosts = h.status === 'fulfilled' ? h.value : older(h, 'hosts') ? null : hosts;
     cloud = cl.status === 'fulfilled' ? cl.value : older(cl, 'cloud') ? null : cloud;
     if (d.status === 'fulfilled') doctor = d.value;
-    models = m.status === 'fulfilled' ? m.value : null;
+    // the full graph's steps, the ones Extract runs: every step registered if the pipeline does not say which
+    models = m.status === 'fulfilled' ? ofGraph(m.value, g.status === 'fulfilled' ? g.value : null) : null;
     problems = {
       keys: [reason(k), older(c, 'keys') ? undefined : reason(c)].filter(Boolean).join('; ') || undefined,
       models: older(m, 'models') ? undefined : reason(m),
