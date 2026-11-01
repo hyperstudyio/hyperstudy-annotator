@@ -404,7 +404,12 @@
     started = true; reattached = true; msgs = []; arrived = []; now = Date.now();
     makePlan();
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
-    try { stop = await api.remoteAttach(r.run, on); } catch (e) { started = false; throw e; }
+    // not reached: the machine stays chosen only if it is still offered (its Test, skipped while it was shown, passed)
+    try { stop = await api.remoteAttach(r.run, on); } catch (e) {
+      started = false; reattached = false;
+      if (runOn && !usable(runOn === POD ? POD : `ssh-${runOn}`)) { runOn = null; makePlan(); }
+      throw e;
+    }
   });
   const dismiss = (run: string) => step('Putting it away…', async () => { await api.remoteDismiss(run); await loadRemoteRuns(); });
 

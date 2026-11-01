@@ -276,7 +276,8 @@ Checked:
   dry run), as a cloud GPU's for one step raises it, so the API steps keep the graph's cap. Its keys need RunPod's own
   yes in Settings (`cloud keys runpod on`). Followed to its end, the run is fetched into this machine's store and its
   pod deleted by the CLI, then exported here for the library; one nobody followed is fetched (and its pod deleted) when
-  the runs are listed, and a pod whose run can no longer end there (its coordinator gone, the run not on it) is
+  the runs are listed, and a pod whose run can no longer end there (its coordinator gone, the run not on it, the pod
+  never started) is
   canceled, which deletes it. Once the run is back the footer says the pod was deleted and what it cost, or that RunPod
   still has it.
 

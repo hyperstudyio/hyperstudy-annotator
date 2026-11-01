@@ -1380,6 +1380,18 @@ test('a machine chosen to run on whose Test then fails is no longer where the ru
   await expect(dialog.getByRole('button', { name: 'Start run', exact: true })).toBeVisible();
 });
 
+test('a run shown again on a machine whose Test fails, and which cannot be reached, leaves it unchosen', async ({ page }) => {
+  await page.addInitScript(() => { (globalThis as { __labDown?: boolean }).__labDown = true; });
+  await page.goto('/?pipeline-demo=lab-runs');
+  const dialog = page.getByRole('region', { name: 'Extract' });
+  await expect(dialog.getByText(/^lab is not offered/)).toBeVisible();
+  const list = dialog.getByRole('region', { name: 'Runs on other machines' });
+  await list.getByRole('listitem', { name: 'ooo_clip2.mp4' }).getByRole('button', { name: 'Show' }).click();
+  await expect(dialog.getByText(/could not reach you@lab/).first()).toBeVisible();
+  await expect(dialog.getByRole('radiogroup', { name: 'Run on' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Start run on lab' })).toHaveCount(0);
+});
+
 test('RunPod whose key fails its Test is not offered, for a step or a whole run', async ({ page }) => {
   await page.goto('/?pipeline-demo=runpod-key-gone');
   const dialog = page.getByRole('region', { name: 'Extract' });
