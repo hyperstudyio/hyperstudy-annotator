@@ -30,6 +30,14 @@ test('the imported bundle and any error are kept', () => {
   expect(foldRun(['a'], [{ v: 1, type: 'error', problems: ['uv is missing'] }]).problems).toEqual(['uv is missing']);
 });
 
+test('a pod made for the run is known once it is deleted, or said not to be, with what it cost', () => {
+  const made: PipelineMessage = { v: 1, type: 'pod', run: 'r1', pod: 'p1', hourly_usd: 0.59, reserved_usd: 0.84, deadline_at: 1 };
+  expect(foldRun(['a'], [made]).pod).toBeNull();   // made: nothing to say until it goes
+  expect(foldRun(['a'], [made, { v: 1, type: 'pod_deleted', run: 'r1', pod: 'p1', deleted: true, may_still_run: null, cost_usd: 0.31 }]).pod)
+    .toEqual({ deleted: true, cost_usd: 0.31, may_still_run: null });
+  expect(foldRun(['a'], [{ v: 1, type: 'pod_deleted', run: 'r1', pod: 'p1', deleted: false, may_still_run: 'its deadline was never set', cost_usd: 0.84 }]).pod?.deleted).toBe(false);
+});
+
 test('a plan can run when every node has a place and its secrets; downloads are part of running', () => {
   const node: PlanNode = { id: 'a', uses: 'x@1', where: 'native (mps)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [] };
   const plan = (n: Partial<PlanNode>): Plan => ({ ok: false, estimated_usd: 0, nodes: [{ ...node, ...n }] });

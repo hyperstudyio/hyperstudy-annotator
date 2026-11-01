@@ -57,13 +57,20 @@ export interface Host {
   keys?: boolean;
 }
 /** A cloud GPU provider (`perception cloud`): whether it is offered to nodes that can use one, its machine and price. */
-export interface CloudProvider { enabled: boolean; machine: string; region: string; hourly_usd: number }
+export interface CloudProvider { enabled: boolean; machine: string; region: string; hourly_usd: number;
+  /** RunPod's: whether whole runs on a pod made for them may hold the keys their steps declare (`cloud keys runpod
+   *  on|off`); absent from a pipeline before those runs (perception #53) */
+  keys?: boolean }
 /** The cloud GPU providers: AWS (its fields at the top level, as before RunPod) and RunPod (a pipeline from before it
  *  has no `runpod`). */
 export interface CloudStatus extends CloudProvider { runpod?: CloudProvider }
 export type CloudProviderName = 'aws' | 'runpod';
 /** A provider's status, by name. */
 export const provider = (c: CloudStatus, name: CloudProviderName): CloudProvider | undefined => name === 'aws' ? c : c.runpod;
+/** Where `remote run` makes a pod for the run on RunPod (Run on: RunPod), not a lab server. */
+export const POD = 'runpod';
+/** A machine a whole run goes to, as people know it: a pod made for a run is RunPod's, a lab server goes by its name. */
+export const machineTitle = (host: string) => host === POD ? 'RunPod' : host;
 /** A model one of the pipeline's steps uses (`perception models`): gated ones need access granted on their page. */
 export interface ModelInfo { node: string; id: string; source: string | null; size_gb: number | null; gated: boolean; licence_mode: string }
 /** A step the pipeline has (`perception models list`'s `nodes`): what it is called, the hosted API it calls (or null),
@@ -124,6 +131,9 @@ export type PipelineMessage = { v: 1 } & (
   | ({ type: 'plan' } & Plan)
   | { type: 'imported'; run: string; bundle: BundleSummary }
   | { type: 'remote_started'; run: string; host: string; started: boolean; resumed: boolean; status: string }
+  // a pod made for the run: once made, and once deleted (after its fetch or cancel), with what it cost
+  | { type: 'pod'; run: string; pod: string; hourly_usd: number; reserved_usd: number; deadline_at: number }
+  | { type: 'pod_deleted'; run: string; pod: string; deleted: boolean; may_still_run: string | null; cost_usd: number }
   | { type: 'error'; problems: string[] }
 );
 
@@ -158,6 +168,8 @@ export interface PipelineApi {
   checkKey(name: string): Promise<CheckResult>;
   /** The cloud GPU providers' status, or (with `on`) turn one on or off (`provider`: AWS when not given). */
   cloud(on?: boolean, provider?: CloudProviderName): Promise<CloudStatus>;
+  /** Whether whole runs on a RunPod pod may hold the keys their steps declare; the providers after it. */
+  cloudKeys(on: boolean): Promise<CloudStatus>;
   /** The models the steps use, and the steps (`perception models list`). */
   models(): Promise<ModelsListing>;
   /** The keys the app keeps, stored or not (never their values); store one, or remove it. */
@@ -196,7 +208,9 @@ export interface PipelineApi {
 /** What a run coordinated on a lab server would send it, and why it would not start (`remote run --dry-run`'s
  *  `remote_plan`): the kinds of data it would hold, and each key that would go with it -> the steps that declare it. */
 export interface RemotePlan { host: string; ok: boolean; problems: string[]; uploads: string[]; upload_to: string;
-  keys: Record<string, string[]>; keys_allowed: boolean }
+  keys: Record<string, string[]>; keys_allowed: boolean;
+  /** a pod made for the run: how long it may exist (its linger window for the fetch included) and what that reserves */
+  pod?: { deadline_s: number; linger_s: number; hourly_usd: number; reserved_usd: number; api_usd: number; api_cap_usd: number } }
 /** A run this app started on a lab server and has not imported (the app's `remote_runs`), as it is there now: still
  *  running (`done` of `total` steps, or `unreachable` saying why it could not be asked; with a `problem` when it
  *  finished there and could not be imported yet), being imported, or failed (`problem`).
@@ -209,6 +223,8 @@ export type NodeStateName = 'waiting' | 'cached' | 'running' | 'retrying' | 'suc
 export interface NodeState { state: NodeStateName; message: string }
 export interface RunView {
   run: string | null; nodes: Record<string, NodeState>; status: string | null; imported: BundleSummary | null; problems: string[];
+  /** the run's pod, once deleted (or not: `may_still_run` says why nothing may end it), with what it cost */
+  pod: { deleted: boolean; cost_usd: number; may_still_run: string | null } | null;
 }
 
 const STATES: Record<string, NodeStateName> = {
@@ -220,7 +236,7 @@ const KEEP = new Set<NodeStateName>(['running', 'retrying', 'succeeded', 'failed
 
 /** A run's messages folded into what the dialog shows. */
 export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
-  const v: RunView = { run: null, nodes: Object.fromEntries(nodes.map((n) => [n, { state: 'waiting', message: '' }])), status: null, imported: null, problems: [] };
+  const v: RunView = { run: null, nodes: Object.fromEntries(nodes.map((n) => [n, { state: 'waiting', message: '' }])), status: null, imported: null, problems: [], pod: null };
   for (const m of msgs) {
     switch (m.type) {
       case 'run.created': v.run = m.run; break;
@@ -231,6 +247,7 @@ export function foldRun(nodes: string[], msgs: PipelineMessage[]): RunView {
       }
       case 'run.finished': v.status = m.status; break;
       case 'imported': v.imported = m.bundle; break;
+      case 'pod_deleted': v.pod = { deleted: m.deleted, cost_usd: m.cost_usd, may_still_run: m.may_still_run }; break;
       case 'error': v.problems.push(...m.problems); break;
       case 'plan': if (!m.ok) v.problems.push('the pipeline cannot run this graph here (see the plan)'); break;
     }
@@ -569,6 +586,7 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     checkCloud: (provider) => invoke<CheckResult>('pipeline_cloud_check', { provider }),
     checkKey: (name) => invoke<CheckResult>('pipeline_key_check', { name }),
     cloud: (on, provider) => invoke<CloudStatus>('pipeline_cloud', { on, provider }),
+    cloudKeys: (on) => invoke<CloudStatus>('pipeline_cloud_keys', { on }),
     models: async () => { const r = await invoke<{ models: ModelInfo[]; nodes?: StepInfo[] }>('pipeline_models'); return { models: r.models, nodes: r.nodes ?? null }; },
     keys: () => invoke<KeyStatus[]>('keys_status'),
     setKey: (name, value) => invoke<KeyStatus[]>('key_set', { name, value }),

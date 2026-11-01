@@ -264,6 +264,22 @@ Checked:
   destinations and folders are checked in Rust before the CLI sees them (`host_args`, positional words after `--`). A
   pipeline from before these says so on the row.
 
+- **Offered once tested** (2026-11-01): another machine is offered on Extract, in Run on and in a step's menu, only
+  once its Test passes, asked each time Extract loads the machines (a server: `hosts probe`, which changes nothing; a
+  cloud provider: `cloud check`). One that fails is left out with one line saying why and leading to its Test in
+  Settings; Run on and the steps placed there go back to this Mac. A pipeline from before the tests offers its machines
+  untested.
+
+- **Run on RunPod** (perception #53, 0.1.4): a whole run on a pod made for it (`remote run runpod`), beside the lab
+  servers in Run on once RunPod is set up and its Test passes. The footer says what the pod reserves (its hourly price
+  for its whole deadline, from the video's length); the run's cap is raised by it in Rust (`with_pod_reserve`, from a
+  dry run), as a cloud GPU's for one step raises it, so the API steps keep the graph's cap. Its keys need RunPod's own
+  yes in Settings (`cloud keys runpod on`). Followed to its end, the run is fetched into this machine's store and its
+  pod deleted by the CLI, then exported here for the library; one nobody followed is fetched (and its pod deleted) when
+  the runs are listed, and a pod whose run can no longer end there (its coordinator gone, the run not on it) is
+  canceled, which deletes it. Once the run is back the footer says the pod was deleted and what it cost, or that RunPod
+  still has it.
+
 - **Awake during remote steps** (run-anywhere plan A1): a step on another machine is driven from the Mac, and one out of
   touch with it for 600 s is ended (perception's `lost_after_s`). While a run's plan puts a step on a lab server or a
   cloud GPU, the app holds a macOS power assertion against idle sleep (`awake.rs`, IOKit; `pmset -g assertions` lists

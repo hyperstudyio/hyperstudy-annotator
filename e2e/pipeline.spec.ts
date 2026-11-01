@@ -1350,3 +1350,69 @@ test('a lab server whose name now leads to another machine is no longer where th
   await expect(runOn(dialog, 'This Mac')).toBeChecked();                        // choosing it again is a new choice
   await expect(dialog.getByRole('button', { name: 'Start run', exact: true })).toBeVisible();
 });
+
+// --- what is offered: only machines whose Test passes, asked each time Extract loads them -----------------------------
+
+test('a machine whose Test fails is not offered: Run on and the step menus leave it out and say why, until it passes', async ({ page }) => {
+  await page.addInitScript(() => { (globalThis as { __labDown?: boolean }).__labDown = true; });
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await expect(dialog.getByText(/^lab is not offered: could not reach you@lab/)).toBeVisible();
+  await expect(dialog.getByRole('radiogroup', { name: 'Run on' })).toHaveCount(0);   // nowhere else to run the whole of it
+  const menu = placeMenu(dialog, 'faces', 'Face tracks');
+  await expect(menu.getByRole('option')).toHaveText(['Apple GPU, about 1 min 36 s', 'Cloud GPU (AWS L4), no estimate yet, up to $0.49']);
+  // reachable again: offered once its Test passes, asked when Extract is shown again
+  await page.evaluate(() => { (globalThis as { __labDown?: boolean }).__labDown = false; });
+  await settingsAt(page, /^Compute$/);
+  await toExtract(page);
+  await expect(runOn(dialog, 'lab')).toBeVisible();
+  await expect(menu.getByRole('option', { name: /lab \(SSH\)/ })).toHaveCount(1);
+  await expect(dialog.getByText(/is not offered/)).toHaveCount(0);
+});
+
+test('a machine chosen to run on whose Test then fails is no longer where the run goes', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await runOn(dialog, 'lab').check();
+  await expect(dialog.getByRole('button', { name: 'Start run on lab' })).toBeVisible();
+  await page.evaluate(() => { (globalThis as { __labDown?: boolean }).__labDown = true; });
+  await settingsAt(page, /^Compute$/);
+  await toExtract(page);                                                          // tested again: it cannot be reached
+  await expect(dialog.getByText(/^lab is not offered/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Start run', exact: true })).toBeVisible();
+});
+
+test('RunPod whose key fails its Test is not offered, for a step or a whole run', async ({ page }) => {
+  await page.goto('/?pipeline-demo=runpod-key-gone');
+  const dialog = page.getByRole('region', { name: 'Extract' });
+  await dialog.getByRole('button', { name: 'Choose a video…' }).click();
+  await expect(dialog.getByText('RunPod is not offered: no RunPod API key.')).toBeVisible();
+  await expect(dialog.getByRole('radiogroup', { name: 'Run on' })).toHaveCount(0);
+});
+
+// --- Run on: a whole run on a RunPod pod made for it (perception remote run runpod) ----------------------------------
+
+test('a run on RunPod says what its pod reserves, needs its yes for your keys, and says the pod was deleted', async ({ page }) => {
+  const dialog = await planned(page, '/?pipeline-demo=pod');
+  await runOn(dialog, 'RunPod').check();
+  await expect(dialog.getByRole('listitem', { name: 'faces' })).toContainText('RunPod');
+  await expect(dialog.getByText('RunPod receives the video and what every step makes, on a GPU reserved for up to 1 h 25 min: $0.84 at most.')).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: /steps to run, .*up to \$0\.84$/ })).toBeVisible();   // the reservation in the run's cost
+  const start = dialog.getByRole('button', { name: 'Start run on RunPod' });
+  await expect(start).toBeEnabled();
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
+  await expect(dialog.getByText('Shot captions needs your keys on RunPod:')).toBeVisible();
+  await expect(start).toBeDisabled();
+  await dialog.getByRole('button', { name: 'allow it in Settings' }).click();
+  const settings = page.getByRole('region', { name: 'Settings' });
+  const runpod = settings.getByRole('region', { name: 'Cloud GPU' }).getByRole('listitem', { name: 'RunPod', exact: true });
+  await expect(runpod.getByText(/While a run goes, the operator of the machine its pod is on can read them/)).toBeVisible();
+  await runpod.getByRole('checkbox', { name: 'Run whole pipelines here, with my keys' }).check();
+  await toExtract(page);
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(dialog.getByRole('heading', { name: /^Running on RunPod/ })).toBeVisible();
+  await expect(dialog.getByText('It keeps going on RunPod if this Mac sleeps or the app is closed.')).toBeVisible();
+  const r = (await runs(page)).at(-1) as unknown as { host: string };
+  expect(r.host).toBe('runpod');
+  await expect(dialog.getByText('Its pod was deleted: $0.31.')).toBeVisible({ timeout: 15_000 });
+  await expect(dialog.getByText('Imported into the library.')).toBeVisible();
+});

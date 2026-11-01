@@ -142,7 +142,7 @@
       {#if hosts !== null}<Servers {api} {hosts} sent={keysSent(models?.nodes ?? null, keys, cli)} onchange={(now) => (hosts = now)} onbusy={busy} />
       {:else if loaded && !problems.servers}<p class="muted">This pipeline runs every step on this computer. Update hyperstudy-perception to use other machines.</p>{/if}
       {#if problems.cloud}<p class="error">Could not check the cloud GPU providers: {problems.cloud}</p>{/if}
-      {#if cloud}<Cloud {api} {cloud} {keys} {cli} onchange={(now) => (cloud = now)} onkeys={(now) => (keys = now)} onbusy={busy} />
+      {#if cloud}<Cloud {api} {cloud} {keys} {cli} sent={keysSent(models?.nodes ?? null, keys, cli)} onchange={(now) => (cloud = now)} onkeys={(now) => (keys = now)} onbusy={busy} />
       {:else if loaded && !problems.cloud}<p class="muted">This pipeline cannot start cloud machines yet. Update hyperstudy-perception to use one.</p>{/if}
     {:else}
       <section class="set-part" aria-labelledby="updates-heading" bind:this={updatesSection}>

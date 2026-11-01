@@ -412,6 +412,14 @@ pub async fn pipeline_cloud(state: State<'_, AppState>, on: Option<bool>, provid
     blocking(move || p.one(&args, "cloud")).await
 }
 
+/// Whether whole runs on a RunPod pod made for them may hold the keys their steps declare (`perception cloud keys
+/// runpod on|off`); the providers after it.
+#[tauri::command]
+pub async fn pipeline_cloud_keys(state: State<'_, AppState>, on: bool) -> Result<Value> {
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&["cloud", "keys", pipeline::POD, if on { "on" } else { "off" }], "cloud")).await
+}
+
 /// The CLI's arguments for `pipeline_cloud`: only the providers the pipeline knows reach its command line. AWS is the
 /// CLI's default and is not named, so a pipeline from before RunPod (no provider argument) still turns it on and off.
 pub fn cloud_args(on: Option<bool>, provider: Option<&str>) -> Result<Vec<&'static str>> {
@@ -597,14 +605,14 @@ fn into_library(state: &AppState, run: &str, video: &str, make: impl FnOnce(&std
     Ok(serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary}))
 }
 
-// --- whole runs on a lab server (`perception remote run`): Extract's Run on -----------------------------------------
+// --- whole runs on a lab server, or a RunPod pod made for the run (`perception remote run`): Extract's Run on ------
 
 /// `remote run HOST GRAPH` for a video, with the features, settings and cap chosen: every step there, so no place is
 /// given (the host picks each, as `plan` does here). Running there is consent for HOST to hold the video and what every
-/// step makes (`--allow-uploads`), which Extract shows beside Start run.
+/// step makes (`--allow-uploads`), which Extract shows beside Start run. HOST `runpod` is a pod made for the run.
 fn remote_run_args(p: &Pipeline, host: &str, graph: &str, video: &str, only: &[String], settings: &Settings,
                    max_cost_usd: Option<f64>) -> Result<Vec<String>> {
-    if !pipeline::host_name_ok(host) {
+    if host != pipeline::POD && !pipeline::host_name_ok(host) {
         return Err(Error::Bundle(format!("not a lab server's name: {host:?}")));
     }
     let mut args = vec!["remote".to_string(), "run".into(), host.to_string(), p.graph(graph)?, "--input".into(),
@@ -620,9 +628,32 @@ fn remote_run_args(p: &Pipeline, host: &str, graph: &str, video: &str, only: &[S
 pub async fn pipeline_remote_plan(state: State<'_, AppState>, graph: String, video: String, host: String, only: Option<Vec<String>>,
                                   settings: Option<Settings>, max_cost_usd: Option<f64>) -> Result<Value> {
     let p = pipeline(&state)?;
-    let mut args = remote_run_args(&p, &host, &graph, &video, &only.unwrap_or_default(), &settings.unwrap_or_default(), max_cost_usd)?;
-    args.push("--dry-run".into());
-    blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "remote_plan")).await
+    let args = remote_run_args(&p, &host, &graph, &video, &only.unwrap_or_default(), &settings.unwrap_or_default(), max_cost_usd)?;
+    blocking(move || {
+        let mut args = if host == pipeline::POD { with_pod_reserve(&p, args)? } else { args };
+        args.push("--dry-run".into());
+        p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "remote_plan")
+    }).await
+}
+
+/// A run on a pod made for it, its cap raised by what the pod reserves (its hourly price for its whole deadline, which
+/// the pipeline works out from the video's length), as a cloud GPU for one step raises it (spendingCap): the API steps
+/// keep the cap they would have here. Read from a dry run, which says the reservation whatever the cap.
+fn with_pod_reserve(p: &Pipeline, mut args: Vec<String>) -> Result<Vec<String>> {
+    let rp = p.one(&[args.iter().map(String::as_str).collect::<Vec<_>>(), vec!["--dry-run"]].concat(), "remote_plan")?;
+    let (Some(cap), Some(reserved)) = (rp["max_cost_usd"].as_f64(), rp["pod"]["reserved_usd"].as_f64()) else {
+        return Ok(args);   // no cap said, or no pod (RunPod is off here): the dry run with these args says why
+    };
+    if let Some(i) = args.iter().position(|a| a == "--max-cost-usd") {
+        args.drain(i..i + 2);
+    }
+    args.extend(pipeline::cost_args(Some(pod_cap(cap, reserved)))?);
+    Ok(args)
+}
+
+/// The run's cap and a pod's reservation, up to the cent: never below what the pod reserves.
+pub fn pod_cap(cap: f64, reserved: f64) -> f64 {
+    ((cap + reserved) * 100.0 - 1e-9).ceil() / 100.0
 }
 
 /// A run's id, as the pipeline makes them (scheduler.RUN_ID): the app names a run on a lab server itself, so it is
@@ -661,6 +692,7 @@ pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: St
 fn remote_run_and_import(app: &AppHandle, p: &Pipeline, args: &[String], host: &str, video: &str, agreed: &[String],
                          uploads: &pipeline::Uploads, choices: &Value) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
+    let args = if host == pipeline::POD { with_pod_reserve(p, args.to_vec())? } else { args.to_vec() };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     // consent checked again against a fresh dry run of what is about to start there, not only on Extract
     let rp = p.one(&[&args[..], &["--dry-run"]].concat(), "remote_plan")?;
@@ -720,17 +752,33 @@ fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &
                 return Ok(None);   // being imported already (its `remote` event says when)
             }
             let imported = into_library(state, run, video, |out| {
-                let got = p.one(&["remote", "fetch", host, run, "--output", &out.to_string_lossy()], "fetched")?;
+                let out = out.to_string_lossy();
+                // a pod's run followed to its end is in this machine's store already, and its pod deleted: exported here
+                if host == pipeline::POD && p.one(&["status", run], "status").is_ok() {
+                    let got = p.one(&["export", run, "--output", &out], "exported")?;
+                    return got["path"].as_str().map(String::from).ok_or_else(|| Error::Bundle("the pipeline exported no bundle".into()));
+                }
+                // fetched from there (from a pod: imported here, then the pod deleted)
+                let got = p.one(&["remote", "fetch", host, run, "--output", &out], "fetched")?;
                 got["path"].as_str().map(String::from).ok_or_else(|| Error::Bundle(format!(
-                    "{host} made no bundle: {}", got["bundle_problem"].as_str().unwrap_or("the run did not succeed"))))
+                    "{} made no bundle: {}", pipeline::machine_title(host), got["bundle_problem"].as_str().unwrap_or("the run did not succeed"))))
             });
             match imported {
                 Ok(v) => { set("imported", None)?; Ok(Some(v)) }
-                Err(e) => { set("running", Some(&format!("Finished on {host}; not imported yet: {e}")))?; Err(e) }
+                Err(e) => { set("running", Some(&format!("Finished on {}; not imported yet: {e}", pipeline::machine_title(host))))?; Err(e) }
             }
         }
         "canceled" => { set("canceled", None)?; Ok(None) }
-        _ => { set("failed", Some(&format!("The run failed on {host}")))?; Ok(None) }
+        _ => { set("failed", Some(&format!("The run failed on {}", pipeline::machine_title(host))))?; Ok(None) }
+    }
+}
+
+/// A pod whose run can no longer end there (its coordinator gone, or the run not on it): canceled, which imports what
+/// it has and deletes the pod (`remote cancel runpod`), so it does not wait out its deadline. Why the run failed.
+fn pod_lost(p: &Pipeline, run: &str, what: &str) -> String {
+    match p.one(&["remote", "cancel", pipeline::POD, run], "canceled") {
+        Ok(_) => format!("{what}; its pod was deleted"),
+        Err(e) => format!("{what}; its pod could not be deleted: {e}"),
     }
 }
 
@@ -780,7 +828,22 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
         for r in open {
             let followed = state.running.lock().unwrap().as_deref() == Some(r.run.as_str());
             let mut row = serde_json::to_value(&r).map_err(|e| Error::Bundle(e.to_string()))?;
-            if r.state == "running" && !followed {
+            // a pod's run that ended while its follower here was stopped after its fetch: in this store, its pod gone
+            let here = if r.host == pipeline::POD && r.state == "running" && !followed {
+                p.one(&["status", &r.run], "status").ok().and_then(|s| s["status"].as_str().map(String::from)).filter(|s| s != "running")
+            } else { None };
+            if let Some(status) = here {
+                match finish_remote(&state, &p, &r.run, &r.host, &r.video, &status) {
+                    Ok(Some(imported)) => { let _ = app.emit("remote", &imported); }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("run {} on {}: {e}", r.run, r.host),
+                }
+                match crate::remote_runs::get(&state.db.lock().unwrap(), &r.run)? {
+                    Some(now) if matches!(now.state.as_str(), "failed" | "running" | "importing") =>
+                        row = serde_json::to_value(&now).map_err(|e| Error::Bundle(e.to_string()))?,
+                    _ => continue,
+                }
+            } else if r.state == "running" && !followed {
                 match p.one(&["remote", "status", &r.host, &r.run], "status") {
                     Ok(s) => {
                         let status = s["status"].as_str().unwrap_or("running");
@@ -796,7 +859,8 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
                                 _ => continue,   // imported or canceled: no longer listed
                             }
                         } else if s["coordinator"] == "gone" {
-                            let why = format!("It stopped on {} (the server restarted?)", r.host);
+                            let why = if r.host == pipeline::POD { pod_lost(&p, &r.run, "It stopped on its pod") }
+                                      else { format!("It stopped on {} (the server restarted?)", r.host) };
                             crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
                             row["state"] = "failed".into();
                             row["problem"] = why.into();
@@ -806,8 +870,16 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
                             row["done"] = tasks.iter().filter(|t| matches!(t["state"].as_str(), Some("succeeded" | "cached"))).count().into();
                         }
                     }
+                    // its pod went with its results (deleted, or removed itself at the end of its linger window)
+                    Err(e) if r.host == pipeline::POD && ["pod was deleted", "pod removed itself", "made no RunPod pod"].iter().any(|w| e.to_string().contains(w)) => {
+                        let why = e.to_string().trim_start_matches("the pipeline failed: ").to_string();
+                        crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
+                        row["state"] = "failed".into();
+                        row["problem"] = why.into();
+                    }
                     Err(e) if e.to_string().contains(&format!("no run {} on this host", r.run)) => {
-                        let why = format!("{} has no record of it: it did not start there, or was removed after the server's keep days", r.host);
+                        let why = if r.host == pipeline::POD { pod_lost(&p, &r.run, "Its pod has no record of it") }
+                                  else { format!("{} has no record of it: it did not start there, or was removed after the server's keep days", r.host) };
                         crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
                         row["state"] = "failed".into();
                         row["problem"] = why.into();
@@ -895,6 +967,16 @@ mod tests {
         for bad in ["gcp", "--json", "runpod; rm", ""] {
             assert!(cloud_args(Some(true), Some(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_pods_reservation_raises_the_cap_to_the_cent() {
+        assert_eq!(pod_cap(1.5, 0.8358), 2.34);   // clip1 on the full graph: 85 min at $0.59/h
+        assert_eq!(pod_cap(0.5, 0.25), 0.75);     // a sum on the cent stays there
+        assert_eq!(pod_cap(0.1, 0.2), 0.3);       // 0.30000000000000004 in floating point: the cent it is
+        assert_eq!(pod_cap(0.101, 0.2), 0.31);    // a part of a cent over: up, never below the reservation
+        assert_eq!(pipeline::machine_title(pipeline::POD), "RunPod");
+        assert_eq!(pipeline::machine_title("lab-2"), "lab-2");
     }
 
     #[test]

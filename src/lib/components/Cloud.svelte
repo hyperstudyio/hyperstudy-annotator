@@ -6,12 +6,16 @@
   // be used first; Test checks again, changing nothing (`perception cloud check`); Remove takes RunPod's key with it.
   // RunPod's Test is its key's: `cloud check runpod` and `keys check RUNPOD_API_KEY` make the same request (RunPod
   // lists your pods with the key), so a second Test beside it would only repeat it. AWS has no key row: its Test is here.
+  // RunPod also runs whole pipelines on a pod made for the run (Run on, on Extract): it says whether those runs may take
+  // your keys (`cloud keys runpod`), naming the ones they would get and who can read them there, on or off.
   import KeyRow from './KeyRow.svelte';
   import { openExternal } from '../links';
   import { keyRows, provider, tooOld, type CheckResult, type CliKeys, type CloudProviderName, type CloudStatus, type KeyStatus, type PipelineApi } from '../pipeline';
 
-  let { api, cloud, keys, cli, onchange, onkeys, onbusy }: {
+  let { api, cloud, keys, cli, sent, onchange, onkeys, onbusy }: {
     api: PipelineApi; cloud: CloudStatus; keys: KeyStatus[]; cli: CliKeys | null;
+    /** the keys a whole run on a pod would get (keysSent), by their labels */
+    sent: string[];
     onchange: (now: CloudStatus) => void; onkeys: (now: KeyStatus[]) => void;
     /** what is under way, then null (Start run on Extract waits for it) */
     onbusy: (busy: string | null) => void;
@@ -76,6 +80,13 @@
   const keyed = (p: CloudProviderName) => p === 'runpod' && !!runpodKey && (runpodKey.stored || !!runpodKey.elsewhere);
   const price = (p: CloudProviderName) => `${p === 'runpod' ? 'up to ' : ''}$${provider(cloud, p)!.hourly_usd.toFixed(2)} an hour`;
   const focus = (el: HTMLElement) => { el.focus(); };
+  // a change that fails leaves the box as the pipeline still has it (Svelte does not write a `checked` it wrote last)
+  const keysOn = async (box: HTMLInputElement) => {
+    if (!await act(box.checked ? 'Letting RunPod pods hold your keys…' : 'Taking your keys off RunPod pods…',
+                   async () => onchange(await api.cloudKeys(box.checked)))) box.checked = !!cloud.runpod?.keys;
+  };
+  const list = (xs: string[]) => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+  const gets = $derived(sent.length ? `Its runs get your ${list(sent)} ${sent.length === 1 ? 'key' : 'keys'} when their steps need ${sent.length === 1 ? 'it' : 'them'}.` : 'Its runs get the keys their steps need.');
 </script>
 
 <section class="set-part" aria-labelledby="cloud-heading">
@@ -102,6 +113,13 @@
           {#if tested[p]}<p class="tested" class:ok={tested[p]!.ok} class:error={!tested[p]!.ok} role="status">{tested[p]!.ok ? `✓ ${NAMES[p]} can be used` : tested[p]!.detail}.</p>{/if}
           {#if p === 'runpod' && runpodKey}
             <ul class="set-rows inner"><KeyRow {api} k={runpodKey} elsewhere={runpodKey.elsewhere} removable={false} onchange={keyChanged} {onbusy} /></ul>
+          {/if}
+          {#if p === 'runpod' && cloud.runpod?.keys !== undefined}
+            <div class="keys">
+              <label><input type="checkbox" checked={cloud.runpod.keys} disabled={!!busy} aria-describedby="keys-runpod"
+                onchange={(e) => keysOn(e.currentTarget)} />Run whole pipelines here, with my keys</label>
+              <p class="muted" id="keys-runpod">{gets} While a run goes, the operator of the machine its pod is on can read them (Secure Cloud only).</p>
+            </div>
           {:else if p === 'aws'}
             <p class="muted">Uses the AWS credentials on this computer.</p>
           {/if}
@@ -147,6 +165,11 @@
   .head .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .provider p { margin: 0; font-size: 12px; }
   .ok { color: var(--color-primary); }
+  /* as a server's (Servers.svelte): the switch, and under it what it gives and who can read it */
+  .keys { display: grid; gap: 3px; min-width: 0; }
+  .keys label { display: flex; gap: 8px; align-items: center; width: fit-content; cursor: pointer; }
+  .keys input { margin: 0; accent-color: var(--color-primary); }
+  .keys p { padding-left: 21px; max-width: 68ch; }
   .inner > :global(li) { padding: 0; }
   .add { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-bg-surface); }
   .add p { margin: 0; }

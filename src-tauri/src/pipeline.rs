@@ -522,6 +522,14 @@ pub struct SshOverrides {
     pub identity: Option<String>,
 }
 
+/// Where `remote run` makes a pod for the run on RunPod (pod_run.py), not a lab server.
+pub const POD: &str = "runpod";
+
+/// A machine as people know it: a pod made for a run is RunPod's, a lab server goes by its own name.
+pub fn machine_title(host: &str) -> &str {
+    if host == POD { "RunPod" } else { host }
+}
+
 /// A lab server's name as the CLI keeps it (hosts.py): lower-case letters, digits and `-`, and not a word it keeps for
 /// itself.
 pub fn host_name_ok(name: &str) -> bool {
