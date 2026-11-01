@@ -297,6 +297,8 @@ test('a Claude model is called by its name; other choices stay as they are', asy
 const step = (id: string, needs: string[], extra: Partial<PlanNode> = {}): PlanNode => ({ id, uses: `x.${id}@1`, where: 'native (cpu)', why_not: '',
   cached: false, downloads: [], missing_secrets: [], cost_usd: 0, cost_note: '', uploads: [], needs, settings: [], ...extra });
 const api = { uploads: ['frames', 'faces'], service: 'Anthropic API', upload_to: 'Anthropic API' };
+// a feature in several steps, one of them with an API: objects as the full graph had it before perception #51 named
+// its things in the captions call (the rules hold for any such feature)
 const objectsPlan: Plan = { ok: true, estimated_usd: 0, nodes: [step('decode', []), step('faces', ['decode']),
   step('objects_names', ['decode'], { ...api, part_of: 'objects', cost_usd: 0.02 }),
   step('objects_track', ['decode', 'faces', 'objects_names'], { part_of: 'objects', place: 'native:mps', options: ['native:mps'] }),
