@@ -277,9 +277,8 @@ Checked:
   yes in Settings (`cloud keys runpod on`). Followed to its end, the run is fetched into this machine's store and its
   pod deleted by the CLI, then exported here for the library; one nobody followed is fetched (and its pod deleted) when
   the runs are listed, and a pod whose run can no longer end there (its coordinator gone, the run not on it, the pod
-  never started) is
-  canceled, which deletes it. Once the run is back the footer says the pod was deleted and what it cost, or that RunPod
-  still has it.
+  never started) is canceled, which deletes it. Once the run is back the footer says the pod was deleted and what it
+  cost, or that RunPod still has it.
 
 - **Awake during remote steps** (run-anywhere plan A1): a step on another machine is driven from the Mac, and one out of
   touch with it for 600 s is ended (perception's `lost_after_s`). While a run's plan puts a step on a lab server or a
