@@ -1593,7 +1593,8 @@ esac
         p.path = finder.to_owned();
         p.uv_dirs = Some(d);
         let doctor = p.one(&["doctor"], "doctor").unwrap();
-        assert!(doctor["nodes"].as_array().unwrap().iter().any(|n| n["ref"] == "core.decode@1.0.0"));
+        // the decode step, whatever its version (the pipeline moves it: 1.1.0 since perception 0.1.2)
+        assert!(doctor["nodes"].as_array().unwrap().iter().any(|n| n["ref"].as_str().is_some_and(|r| r.starts_with("core.decode@"))));
 
         assert!(p.graphs().unwrap().iter().any(|g| g.file == "decode.yaml"));
         let graph = p.graph("decode.yaml").unwrap();
