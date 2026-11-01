@@ -638,36 +638,39 @@ test('in a narrow window Settings fits without scrolling sideways', async ({ pag
   expect(await page_.evaluate((d) => d.scrollWidth - d.clientWidth)).toBeLessThanOrEqual(0);
 });
 
-// --- a feature in several steps: objects is its names, its tracks and itself (perception #43), one feature (#45) -------
+// --- a feature in several steps: objects is its tracks and itself (perception #43, #51), one feature (#45) -------------
 
-test('objects is one feature: one row to tick, which runs and agrees to its three steps', async ({ page }) => {
+test('objects is one feature: one row to tick, which runs and agrees to its steps and the captions that name its things', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=objects');
   const objects = dialog.getByRole('listitem', { name: 'objects', exact: true });
-  await expect(dialog.getByRole('checkbox', { name: /^Run Object (names|tracks)$/ })).toHaveCount(0);
-  await expect(dialog.getByRole('listitem', { name: /^objects_(names|track)$/ })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: /^Run Object tracks$/ })).toHaveCount(0);
+  await expect(dialog.getByRole('listitem', { name: /^objects_track$/ })).toHaveCount(0);
   const box = dialog.getByRole('checkbox', { name: 'Run Objects' });
   await expect(box).not.toBeChecked();                                                    // it sends data off: off at first
-  await expect(box).toBeEnabled();                                                        // not "turn on Object names first"
-  await expect(objects).not.toContainText('first');
+  await expect(box).toBeDisabled();                                                       // the captions name what it tracks, and they
+  await expect(objects).toContainText('Turn on Shot captions first');                     // send data off: chosen, never brought along
+  await expect(objects).not.toContainText('Object tracks');                               // its own step is never one to turn on first
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
   await box.check();
   await expect(objects).toContainText('Apple GPU');                                        // where its GPU step runs
-  await expect(objects).toContainText('19 min 51 s');                                      // its three steps, one after another
-  await expect(objects).toContainText('$0.10');
+  await expect(objects).toContainText('19 min 20 s');                                      // its two steps, one after another
+  await expect(objects).toContainText('$0.08');
   await objects.getByRole('button', { name: 'Objects' }).click();
   const details = objects.locator('.details');
   await expect(details.getByText('facebook/sam3', { exact: true })).toHaveCount(2);         // once used, once downloaded
   await expect(details.getByText('claude-haiku-5-5', { exact: true })).toHaveCount(1);
   await expect(details).toContainText('frames and faces, sent to the Anthropic API');
   await dialog.getByRole('button', { name: 'Start run' }).click();
-  const [ran] = await runs(page) as unknown as { only: string[]; allow: { uploads: Record<string, unknown> } }[];
-  expect(ran.only).toEqual(expect.arrayContaining(['objects_names', 'objects_track', 'objects']));
-  expect(Object.keys(ran.allow.uploads).sort()).toEqual(['objects', 'objects_names']);
+  const [ran] = await runs(page) as unknown as { only: string[] | null; allow: { uploads: Record<string, unknown> } }[];
+  expect(ran.only).toBeNull();                                                            // every step of this demo's graph: no --only
+  expect(Object.keys(ran.allow.uploads).sort()).toEqual(['captions', 'objects']);
   await expect(objects).toContainText('Done', { timeout: 20_000 });                      // the demo's pace: a step every 0.4 s
-  await expect(dialog.getByRole('listitem', { name: /^objects_(names|track)$/ })).toHaveCount(0);   // one row in the run too
+  await expect(dialog.getByRole('listitem', { name: /^objects_track$/ })).toHaveCount(0);          // one row in the run too
 });
 
 test('the GPU step of objects is placed from its row', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=objects-remote');
+  await dialog.getByRole('checkbox', { name: 'Run Shot captions' }).check();
   await dialog.getByRole('checkbox', { name: 'Run Objects' }).check();
   const menu = placeMenu(dialog, 'objects', 'Objects');
   await menu.selectOption('ssh-lab:cuda');
@@ -680,9 +683,9 @@ test('the GPU step of objects is placed from its row', async ({ page }) => {
 
 test('a pipeline that does not say which steps are part of objects shows each step, as before', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo=objects-old');
-  await expect(dialog.getByRole('checkbox', { name: 'Run Object names' })).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: 'Run Object tracks' })).toBeVisible();
   await expect(dialog.getByRole('checkbox', { name: 'Run Objects' })).toBeDisabled();
-  await expect(dialog.getByRole('listitem', { name: 'objects', exact: true })).toContainText('Turn on Object names first');
+  await expect(dialog.getByRole('listitem', { name: 'objects', exact: true })).toContainText('Turn on Shot captions first');
   const settings = await settingsAt(page, /^Models$/);
   await expect(settings.getByRole('listitem', { name: 'Object tracks' })).toBeVisible();
 });
@@ -1188,7 +1191,7 @@ test('changing the captions default in Settings changes what Extract plans next,
 
 test('a default the pipeline no longer offers is not shown as chosen: the step shows its own default', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('hyperstudy-annotator:step-defaults',
-    JSON.stringify({ 'vlm.shot-captions@1.0.0': { model: 'claude-sonnet-4' } })));   // a model an update took away
+    JSON.stringify({ 'vlm.shot-captions-objects@1.0.0': { model: 'claude-sonnet-4' } })));   // a model an update took away
   await page.goto('/?pipeline-demo');
   const settings = await settingsAt(page, /^Models$/);
   await expect(settings.getByRole('combobox', { name: 'Shot captions: model' })).toHaveValue('claude-haiku-5-5');

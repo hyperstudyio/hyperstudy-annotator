@@ -41,26 +41,21 @@ const plan: Plan = {
       service: null, place: 'native:mps', options: ['native:mps'], estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here',
       estimates: { 'native:mps': { estimate_s: 96, estimate_basis: 'median of 3 runs of vision.face-track@1.0.0 on native:mps here' } } },
     { id: 'captions', needs: ['decode', 'asr', 'faces'], title: 'Shot captions', service: 'Anthropic API',
-      description: 'Per-shot descriptions from keyframes (faces boxed and labelled), speech and the face roster; on-screen text',
-      outputs: { shots: 'bundle.shots@0.1', text: 'bundle.text@0.1' },
+      description: 'Per-shot descriptions from keyframes (faces boxed and labelled), speech and the face roster, with the things on screen named in the same call for the object tracks (up to 8 a shot, in generic detector nouns); on-screen text',
+      outputs: { shots: 'bundle.shots@0.1', text: 'bundle.text@0.1', vocabulary: 'vocabulary.v1' },
       models: [{ id: 'claude-haiku-5-5', source: null, licence_mode: 'api-terms', size_gb: null }, { id: 'claude-opus-5-5', source: null, licence_mode: 'api-terms', size_gb: null }],
       settings: [{ key: 'model', description: 'bake-off choice: Haiku 5.5 with the face roster', value: 'claude-haiku-5-5', choices: ['claude-haiku-5-5', 'claude-opus-5-5'],
         prices: { 'claude-haiku-5-5': 0.003, 'claude-opus-5-5': 0.12 }, per: 'shot' },
         { key: 'effort', description: '', value: 'medium', choices: ['low', 'medium', 'high'], prices: null, per: null }],
-      uses: 'vlm.shot-captions@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
-      uploads: ['frames', 'faces', 'transcript'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 176.1, estimate_basis: 'median of 2 runs of vlm.shot-captions@1.0.0 on native:cpu here' },
+      uses: 'vlm.shot-captions-objects@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.156, cost_note: '',
+      uploads: ['frames', 'faces', 'transcript'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 176.1, estimate_basis: 'median of 2 runs of vlm.shot-captions-objects@1.0.0 on native:cpu here' },
   ],
 };
-/** For `objects`: the objects feature's steps in the plan, as the full graph has them (perception #43): the names (its
- *  API), the tracks (the GPU, its gated models a download) and the layer (its API); the names and the tracks are part of
- *  objects (#45). */
+/** For `objects`: the objects feature's steps in the plan, as the full graph has them (perception #43, #51): the tracks
+ *  (the GPU, its gated models a download) of the things the captions call names, and the layer (its API); the tracks
+ *  are part of objects (#45), and the captions a feature it needs. */
 const objectsNodes: Plan['nodes'] = [
-  { id: 'objects_names', needs: ['decode'], part_of: 'objects', title: 'Object names', service: 'Anthropic API', settings: [],
-    description: "The things on screen named by Claude Haiku 5.5 from each shot's keyframes (up to 8 a shot, in generic detector nouns), and each name's family, kind and whether it is worn, for the object tracks",
-    outputs: { vocabulary: 'vocabulary.v1' }, models: [{ id: 'claude-haiku-5-5', source: null, licence_mode: 'api-terms', size_gb: null }],
-    uses: 'vision.objects-names@1.0.0', where: 'native (cpu)', why_not: '', cached: false, downloads: [], missing_secrets: [], cost_usd: 0.02, cost_note: '',
-    uploads: ['frames', 'faces'], place: 'native:cpu', options: ['native:cpu'], estimate_s: 31, estimate_basis: 'median of 2 runs of vision.objects-names@1.0.0 on native:cpu here' },
-  { id: 'objects_track', needs: ['decode', 'faces', 'objects_names'], part_of: 'objects', title: 'Object tracks', service: null, settings: [],
+  { id: 'objects_track', needs: ['decode', 'faces', 'captions'], part_of: 'objects', title: 'Object tracks', service: null, settings: [],
     description: 'The named things and the clothing on every posed person, outlined and tracked within shots by SAM 3, and embedded by DINOv3, for the objects layer',
     outputs: { tracks: 'object_tracks.v1' },
     models: [{ id: 'facebook/sam3', source: 'hf://facebook/sam3@3c879f39826c281e95690f02c7821c4de09afae7', licence_mode: 'commercial-ok', size_gb: 3.44 },
@@ -125,20 +120,18 @@ const ev = (node: string | null, kind: string, message = ''): PipelineMessage =>
 const script: PipelineMessage[] = [
   { v: 1, type: 'run.created', run: 'demo-run', store: '~/.hyperstudy-perception' },
   ev('decode', 'task.cached', '5ccfe2d78fac'),
-  ev('objects_names', 'task.started', 'attempt 1 on native (cpu)'),
   ev('asr', 'task.started', 'attempt 1 on native (mps)'),
   ev('faces', 'task.started', 'attempt 1 on native (mps)'),
   ev('asr', 'task.succeeded', '5.2 s'),
   ev('faces', 'task.retry', 'attempt 1 failed (the node exited without a response); retry in 2 s'),
   ev('faces', 'task.started', 'attempt 2 on native (mps)'),
-  ev('objects_names', 'task.succeeded', '31.0 s'),
   ev('faces', 'task.succeeded', '96.1 s'),
+  ev('captions', 'task.started', 'attempt 1 on native (cpu)'),
+  ev('captions', 'task.succeeded', '149.4 s'),
   ev('objects_track', 'task.started', 'attempt 1 on native (mps)'),
   ev('objects_track', 'task.succeeded', '1100.4 s'),
   ev('objects', 'task.started', 'attempt 1 on native (cpu)'),
   ev('objects', 'task.succeeded', '60.2 s'),
-  ev('captions', 'task.started', 'attempt 1 on native (cpu)'),
-  ev('captions', 'task.succeeded', '149.4 s'),
   ev(null, 'run.succeeded'),
   { v: 1, type: 'run.finished', run: 'demo-run', status: 'succeeded' },
   { v: 1, type: 'imported', run: 'demo-run', bundle: { id: 'demo-bundle', title: 'clip', video_sha256: 'f'.repeat(64), schema_version: '0.1.0', created_at: null,
@@ -150,22 +143,20 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `objects`: the objects feature's three steps (perception #43), with `noPartOf` from a pipeline before they said they are one feature (#45); the gated demos have them too. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `objects`: the objects feature's two steps (perception #43, #51), with `noPartOf` from a pipeline before they said they are one feature (#45); the gated demos have them too. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 
-// the objects feature in its three steps (perception #43), as `models list` lists them: the layer's step records SAM 3
-// and DINOv3 without a source (the track step downloads them), and the names and track steps are part of it (#45)
+// the objects feature in its two steps (perception #43, #51), as `models list` lists them: the layer's step records SAM 3
+// and DINOv3 without a source (the track step downloads them), and the track step is part of it (#45)
 const OBJECTS: (StepInfo & { models: ModelInfo[] })[] = [
   { node: 'vision.objects@2.0.0', title: 'Objects', service: 'Anthropic API', part_of: null, secrets: ['ANTHROPIC_API_KEY'], settings: [], models: [
     { node: 'vision.objects@2.0.0', id: 'claude-haiku-5-5', source: null, size_gb: null, gated: false, licence_mode: 'api-terms' },
     { node: 'vision.objects@2.0.0', id: 'facebook/sam3', source: null, size_gb: null, gated: false, licence_mode: 'commercial-ok' },
     { node: 'vision.objects@2.0.0', id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: null, size_gb: null, gated: false, licence_mode: 'commercial-ok' }] },
-  { node: 'vision.objects-names@1.0.0', title: 'Object names', service: 'Anthropic API', part_of: 'vision.objects', secrets: ['ANTHROPIC_API_KEY'], settings: [], models: [
-    { node: 'vision.objects-names@1.0.0', id: 'claude-haiku-5-5', source: null, size_gb: null, gated: false, licence_mode: 'api-terms' }] },
   { node: 'vision.objects-track@1.0.0', title: 'Object tracks', service: null, part_of: 'vision.objects', secrets: ['HF_TOKEN'], settings: [], models: [
     { node: 'vision.objects-track@1.0.0', id: 'facebook/sam3', source: 'hf://facebook/sam3@3c879f39826c281e95690f02c7821c4de09afae7', size_gb: 3.44, gated: true, licence_mode: 'commercial-ok' },
     { node: 'vision.objects-track@1.0.0', id: 'facebook/dinov3-vitl16-pretrain-lvd1689m', source: 'hf://facebook/dinov3-vitl16-pretrain-lvd1689m@ea8dc2863c51be0a264bab82070e3e8836b02d51', size_gb: 1.21, gated: true, licence_mode: 'commercial-ok' }] },
@@ -239,7 +230,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   let following: string | null = null;
   const importedListeners = new Set<(m: { run: string; bundle: BundleSummary }) => void>();
   // the keys each step declares, as `remote run --dry-run` says which go with the run
-  const DECLARES: Record<string, string> = { captions: 'ANTHROPIC_API_KEY', objects_names: 'ANTHROPIC_API_KEY', objects: 'ANTHROPIC_API_KEY', objects_track: 'HF_TOKEN' };
+  const DECLARES: Record<string, string> = { captions: 'ANTHROPIC_API_KEY', objects: 'ANTHROPIC_API_KEY', objects_track: 'HF_TOKEN' };
   return {
     setupStatus: async () => status,
     async onSetup(on) { setupListeners.add(on); return () => setupListeners.delete(on); },
@@ -258,7 +249,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
         .map((n) => remote_ ? remote(n, places[n.id], hosts, cloud.enabled, cloud.runpod!.enabled) : n)
         // missingKey: the captions step has no Anthropic key until one is saved
         .map((n) => missingKey && n.id === 'captions' && !stored.has('ANTHROPIC_API_KEY') ? { ...n, missing_secrets: ['ANTHROPIC_API_KEY'] } : n);
-      // `objects` (and the gated demos): the objects feature's three steps; `noPartOf`, from a pipeline before part_of
+      // `objects` (and the gated demos): the objects feature's two steps; `noPartOf`, from a pipeline before part_of
       const withObjects = objects || gated ? [...nodes, ...objectsNodes.map((n) => remote_ ? remote(n, places[n.id], hosts) : n)
         .map(({ part_of, ...n }) => noPartOf ? n : { ...n, part_of })] : nodes;
       const all = summary ? [...withObjects, { id: 'summary', needs: ['captions'], title: 'Summary', uses: 'test.summary@1.0.0', where: 'native (cpu)', why_not: '', cached: false,
