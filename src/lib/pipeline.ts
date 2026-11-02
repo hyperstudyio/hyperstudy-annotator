@@ -496,6 +496,10 @@ export function machineCost(plan: Plan, n: PlanNode): number {
 /** The run's spending cap: the graph's (it covers the APIs its steps call), raised by what each step that runs on a
  *  machine that costs money (a cloud GPU) costs at most there. Null when the plan does not say the graph's cap (the
  *  CLI keeps the graph's own). */
+/** An amount said as at most: up to the cent, never below it (as Rust's pod_cap raises the cap), so what is shown is
+ *  never less than what may be spent. */
+export const upToCent = (usd: number) => Math.ceil(usd * 100 - 1e-9) / 100 || 0;   // never -0
+
 export function spendingCap(plan: Plan, chosen: string[]): number | null {
   if (plan.max_cost_usd == null) return null;
   // cached steps too: a cache can be gone by the time the run starts (the upload gate counts them for the same reason)
