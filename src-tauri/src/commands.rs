@@ -787,8 +787,22 @@ fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &
                 Err(e) => { set("running", Some(&format!("Finished on {}; not imported yet: {e}", pipeline::machine_title(host))))?; Err(e) }
             }
         }
-        "canceled" => { set("canceled", None)?; Ok(None) }
-        _ => { set("failed", Some(&format!("The run failed on {}", pipeline::machine_title(host))))?; Ok(None) }
+        ended => {
+            let (now, why) = if ended == "canceled" { ("canceled", None) }
+                             else { ("failed", Some(format!("The run failed on {}", pipeline::machine_title(host)))) };
+            // a pod lingers after its run for a fetch, billed: deleted now (by its follower already, if it had one); one
+            // that cannot be yet stays listed, so the next look deletes it again
+            if host == pipeline::POD {
+                if let Err(e) = p.one(&["remote", "cancel", pipeline::POD, run], "canceled").map_err(|e| e.to_string()) {
+                    if !pod_gone(&e) {
+                        set("running", Some(&format!("It ended ({ended}) on RunPod; its pod could not be deleted yet: {e}")))?;
+                        return Ok(None);
+                    }
+                }
+            }
+            set(now, why.as_deref())?;
+            Ok(None)
+        }
     }
 }
 
