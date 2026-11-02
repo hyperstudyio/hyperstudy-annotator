@@ -279,7 +279,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       const podPlan = host === POD ? { pod: { deadline_s: 5100, linger_s: 1800, hourly_usd: 0.59, reserved_usd: 0.8358, api_usd: 0.24, api_cap_usd: (cap ?? 0.5) - 0.8358 } } : {};
       return { host, ok: !problems.length, problems, uploads: ['video', 'audio', 'frames', 'faces', 'transcript'], upload_to: `${host} (SSH)`, keys, keys_allowed: !!h.keys, ...podPlan };
     },
-    async remoteRun(_graph, _video, host, agreed, allow, only, settings, maxCostUsd, on) {
+    async remoteRun(_graph, _video, host, agreed, allow, only, settings, maxCostUsd, _podReservedUsd, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       runs.push({ allow, places: null, maxCostUsd, settings, only, host, agreed });
       following = '20261029-120000-cccccc';

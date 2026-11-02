@@ -630,7 +630,7 @@ pub async fn pipeline_remote_plan(state: State<'_, AppState>, graph: String, vid
     let p = pipeline(&state)?;
     let args = remote_run_args(&p, &host, &graph, &video, &only.unwrap_or_default(), &settings.unwrap_or_default(), max_cost_usd)?;
     blocking(move || {
-        let mut args = if host == pipeline::POD { with_pod_reserve(&p, args)? } else { args };
+        let mut args = if host == pipeline::POD { with_pod_reserve(&p, args, None)? } else { args };
         args.push("--dry-run".into());
         p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "remote_plan")
     }).await
@@ -639,15 +639,23 @@ pub async fn pipeline_remote_plan(state: State<'_, AppState>, graph: String, vid
 /// A run on a pod made for it, its cap raised by what the pod reserves (its hourly price for its whole deadline, which
 /// the pipeline works out from the video's length), as a cloud GPU for one step raises it (spendingCap): the API steps
 /// keep the cap they would have here. Read from a dry run, which says the reservation whatever the cap.
-fn with_pod_reserve(p: &Pipeline, args: Vec<String>) -> Result<Vec<String>> {
+/// SHOWN: the reservation Extract showed, which a run's start may not exceed (planning has none yet).
+fn with_pod_reserve(p: &Pipeline, args: Vec<String>, shown: Option<f64>) -> Result<Vec<String>> {
     let rp = p.one(&[args.iter().map(String::as_str).collect::<Vec<_>>(), vec!["--dry-run"]].concat(), "remote_plan")?;
-    pod_args(args, &rp)
+    pod_args(args, &rp, shown)
 }
 
 /// ARGS with the cap its dry run's PLAN said raised by the pod's reservation; as they were if it said no cap, or no pod
-/// (RunPod is off here: the dry run with these args says why).
-pub fn pod_args(mut args: Vec<String>, plan: &Value) -> Result<Vec<String>> {
-    let (Some(cap), Some(reserved)) = (plan["max_cost_usd"].as_f64(), plan["pod"]["reserved_usd"].as_f64()) else {
+/// (RunPod is off here: the dry run with these args says why). A reservation above SHOWN (a GPU's price, or the deadline,
+/// changed since Extract planned) is not agreed to: refused, to be planned again, as the cap is held to what was shown.
+pub fn pod_args(mut args: Vec<String>, plan: &Value, shown: Option<f64>) -> Result<Vec<String>> {
+    let reserved = plan["pod"]["reserved_usd"].as_f64();
+    if let (Some(r), Some(s)) = (reserved, shown) {
+        if pod_cap(0.0, r) > pod_cap(0.0, s) {
+            return Err(Error::Bundle(format!("The pod would now reserve up to ${:.2}, more than the ${:.2} shown: plan again", pod_cap(0.0, r), pod_cap(0.0, s))));
+        }
+    }
+    let (Some(cap), Some(reserved)) = (plan["max_cost_usd"].as_f64(), reserved) else {
         return Ok(args);
     };
     if let Some(i) = args.iter().position(|a| a == "--max-cost-usd") {
@@ -676,7 +684,7 @@ fn new_run_id() -> String {
 #[tauri::command]
 pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, host: String,
                            agreed: Vec<String>, uploads: Option<pipeline::Uploads>, only: Option<Vec<String>>,
-                           settings: Option<Settings>, max_cost_usd: Option<f64>) -> Result<()> {
+                           settings: Option<Settings>, max_cost_usd: Option<f64>, pod_reserved_usd: Option<f64>) -> Result<()> {
     let p = pipeline(&state)?;
     let (only, settings) = (only.unwrap_or_default(), settings.unwrap_or_default());
     let args = remote_run_args(&p, &host, &graph, &video, &only, &settings, max_cost_usd)?;
@@ -685,7 +693,7 @@ pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: St
     *state.running_on.lock().unwrap() = Some(host.clone());
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };
-        let last = remote_run_and_import(&app, &p, &args, &host, &video, &agreed, &uploads.unwrap_or_default(), &choices)
+        let last = remote_run_and_import(&app, &p, &args, &host, &video, &agreed, &uploads.unwrap_or_default(), &choices, pod_reserved_usd)
             .unwrap_or_else(|e| Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})));
         clear_run(&app);
         if let Some(last) = last {
@@ -696,9 +704,12 @@ pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: St
 }
 
 fn remote_run_and_import(app: &AppHandle, p: &Pipeline, args: &[String], host: &str, video: &str, agreed: &[String],
-                         uploads: &pipeline::Uploads, choices: &Value) -> Result<Option<Value>> {
+                         uploads: &pipeline::Uploads, choices: &Value, pod_reserved_usd: Option<f64>) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
-    let args = if host == pipeline::POD { with_pod_reserve(p, args.to_vec())? } else { args.to_vec() };
+    let args = if host == pipeline::POD {
+        let shown = pod_reserved_usd.ok_or_else(|| Error::Bundle("Extract did not say what the pod reserves: plan again".into()))?;
+        with_pod_reserve(p, args.to_vec(), Some(shown))?
+    } else { args.to_vec() };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     // consent checked again against a fresh dry run of what is about to start there, not only on Extract
     let rp = p.one(&[&args[..], &["--dry-run"]].concat(), "remote_plan")?;
@@ -1006,9 +1017,15 @@ mod tests {
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let asked = args(&["remote", "run", "runpod", "g.yaml", "v.mp4", "--max-cost-usd", "1.50", "--json"]);
         let plan = serde_json::json!({"max_cost_usd": 1.5, "pod": {"reserved_usd": 0.8358}});
-        assert_eq!(pod_args(asked.clone(), &plan).unwrap(), args(&["remote", "run", "runpod", "g.yaml", "v.mp4", "--json", "--max-cost-usd", "2.34"]));
-        assert_eq!(pod_args(asked.clone(), &serde_json::json!({"max_cost_usd": 1.5})).unwrap(), asked);
-        assert_eq!(pod_args(asked.clone(), &serde_json::json!({"pod": {"reserved_usd": 0.8}})).unwrap(), asked);
+        let raised = args(&["remote", "run", "runpod", "g.yaml", "v.mp4", "--json", "--max-cost-usd", "2.34"]);
+        assert_eq!(pod_args(asked.clone(), &plan, None).unwrap(), raised);          // planning: no reservation shown yet
+        assert_eq!(pod_args(asked.clone(), &plan, Some(0.84)).unwrap(), raised);    // the $0.84 Extract showed
+        assert_eq!(pod_args(asked.clone(), &plan, Some(0.9)).unwrap(), raised);     // less than shown: started
+        // more than shown (a GPU's price rose since Extract planned): refused, not started on a cap no one saw
+        let dearer = serde_json::json!({"max_cost_usd": 1.5, "pod": {"reserved_usd": 2.1}});
+        assert!(pod_args(asked.clone(), &dearer, Some(0.84)).unwrap_err().to_string().contains("up to $2.10, more than the $0.84 shown"));
+        assert_eq!(pod_args(asked.clone(), &serde_json::json!({"max_cost_usd": 1.5}), Some(0.84)).unwrap(), asked);
+        assert_eq!(pod_args(asked.clone(), &serde_json::json!({"pod": {"reserved_usd": 0.8}}), Some(0.84)).unwrap(), asked);
     }
 
     #[test]

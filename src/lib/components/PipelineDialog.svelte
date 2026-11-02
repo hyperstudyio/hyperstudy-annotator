@@ -348,7 +348,7 @@
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
     const set = settingsFor(withDefaults(fromDefaults, settings), pick.chosen), cap = spendingCap(active!, pick.chosen);
     try {
-      stop = runOn ? await api.remoteRun(graph!, video!, runOn, remote!.uploads, consentFor(active!, ticked), pick.only, set, cap, on)
+      stop = runOn ? await api.remoteRun(graph!, video!, runOn, remote!.uploads, consentFor(active!, ticked), pick.only, set, cap, runOn === POD ? remote!.pod?.reserved_usd ?? null : null, on)
         : await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, set, cap, on);
     }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
