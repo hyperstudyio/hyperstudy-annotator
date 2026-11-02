@@ -845,11 +845,12 @@ pub fn ended_here(run: &str, status: std::result::Result<Value, String>) -> std:
 }
 
 /// A pod whose run can no longer end there (its coordinator gone, or the run not on it): canceled, which imports what
-/// it has and deletes the pod (`remote cancel runpod`), so it does not wait out its deadline. Why the run failed.
-fn pod_lost(p: &Pipeline, run: &str, what: &str) -> String {
+/// it has and deletes the pod (`remote cancel runpod`), so it does not wait out its deadline. Why the run failed; or,
+/// the pod not deleted, why the run is still listed (each look tries again).
+fn pod_lost(p: &Pipeline, run: &str, what: &str) -> std::result::Result<String, String> {
     match p.one(&["remote", "cancel", pipeline::POD, run], "canceled") {
-        Ok(_) => format!("{what}; its pod was deleted"),
-        Err(e) => format!("{what}; its pod could not be deleted: {e}"),
+        Ok(_) => Ok(format!("{what}; its pod was deleted")),
+        Err(e) => Err(format!("{what}; its pod could not be deleted yet: {e}")),
     }
 }
 
@@ -931,7 +932,15 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
                 }
                 Some(Seen::Going { done, total }) => { row["done"] = done.into(); row["total"] = total.into(); }
                 Some(Seen::Failed(why)) => failed(why, &mut row)?,
-                Some(Seen::PodLost(what)) => failed(pod_lost(&p, &r.run, what), &mut row)?,
+                // a pod not deleted (RunPod not reached) is still billed: the run stays listed, and the next look
+                // deletes it again
+                Some(Seen::PodLost(what)) => match pod_lost(&p, &r.run, what) {
+                    Ok(why) => failed(why, &mut row)?,
+                    Err(why) => {
+                        crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "running", Some(&why))?;
+                        row["problem"] = why.into();
+                    }
+                },
                 Some(Seen::Unreachable(why)) => row["unreachable"] = why.into(),
             }
             if followed {
