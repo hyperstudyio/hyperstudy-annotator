@@ -37,7 +37,7 @@
   let cloud = $state<CloudStatus | null>(null);
   let doctor = $state<Doctor | null>(null);
   let models = $state<ModelsListing | null>(null);   // null: an older pipeline without `models`, or not listed yet
-  let problems = $state<{ keys?: string; models?: string; servers?: string; cloud?: string; computer?: string }>({});
+  let problems = $state<{ keys?: string; models?: string; steps?: string; servers?: string; cloud?: string; computer?: string }>({});
   let loaded = $state(false);
   // a tab per purpose; App (the version and its updates) is the only one without a pipeline (in a browser)
   type Tab = 'models' | 'compute' | 'app';
@@ -65,11 +65,14 @@
     hosts = h.status === 'fulfilled' ? h.value : older(h, 'hosts') ? null : hosts;
     cloud = cl.status === 'fulfilled' ? cl.value : older(cl, 'cloud') ? null : cloud;
     if (d.status === 'fulfilled') doctor = d.value;
-    // the full graph's steps, the ones Extract runs: every step registered if the pipeline does not say which
+    // the full graph's steps: with it, Extract plans nothing else (its graph choice is only for a pipeline without one).
+    // Every step registered if the pipeline does not say which (before 0.1.6), or has no full graph; if asking failed,
+    // with why
     models = m.status === 'fulfilled' ? ofGraph(m.value, g.status === 'fulfilled' ? g.value : null) : null;
     problems = {
       keys: [reason(k), older(c, 'keys') ? undefined : reason(c)].filter(Boolean).join('; ') || undefined,
       models: older(m, 'models') ? undefined : reason(m),
+      steps: m.status === 'fulfilled' && !/FileNotFoundError/.test(String(reason(g))) ? reason(g)?.replace(/^(Error: )?(the pipeline failed: )?/, '') : undefined,
       servers: older(h, 'hosts') ? undefined : reason(h),
       cloud: older(cl, 'cloud') ? undefined : reason(cl),
       computer: reason(d),
@@ -122,7 +125,7 @@
   <div class="panel-body" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
     {#if tab === 'models' && api}
       {#if problems.keys}<p class="error top">Could not read the keys: {problems.keys}</p>{/if}
-      <Models {api} {keys} {cli} {models} problem={problems.models} onkeys={(now) => (keys = now)} onbusy={busy} />
+      <Models {api} {keys} {cli} {models} problem={problems.models} allSteps={problems.steps} onkeys={(now) => (keys = now)} onbusy={busy} />
       <p class="foot muted">Keys are kept in this computer's keychain, and each step gets only the keys it needs.</p>
     {:else if tab === 'compute' && api}
       <!-- what this computer can run: one line, with the steps it cannot and why only when there are some -->

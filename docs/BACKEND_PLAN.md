@@ -42,8 +42,10 @@ dialogs by hand, is still open).
   key; gated models' access and the Hugging Face key, shown only when a step uses one), Machines (this computer,
   remote servers, cloud GPU providers you add: RunPod with its API key, AWS with the credentials on the computer), App.
   A key appears where it is used, not in a list of keys. Where a step runs is chosen on its own row on Extract.
-- **Settings: Models and Compute (2026-10-27, Luke).** Machines is called Compute. Models lists every step with its
-  models (linked), where it runs, a licence that limits use, the choices it offers as defaults (the captions model and
+- **Settings: Models and Compute (2026-10-27, Luke).** Machines is called Compute. Models lists the full graph's
+  steps (`graph validate`'s `uses`, perception 0.1.6: the pipeline also registers steps only other graphs run, such as
+  the captions the full graph replaced; with a full graph Extract plans nothing else; before 0.1.6, or without a full
+  graph, every step; if asking fails, every step with why) with its models (linked), where it runs, a licence that limits use, the choices it offers as defaults (the captions model and
   effort: kept per user by step ref, applied by Extract where a run has not chosen otherwise, stepDefaults.ts), and what
   it needs: its provider's key, or access to a gated model and the Hugging Face key. A key no step uses is listed apart
   so it can be removed. Every key, cloud provider and server has a Test (`perception keys check`, `cloud check`,
