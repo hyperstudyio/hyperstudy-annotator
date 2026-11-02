@@ -165,7 +165,8 @@ dialogs by hand, is still open).
    - `fold` giving what `corrections.ts` gives. Both implementations are tested against shared fixtures (a bundle,
      an op log and the expected folded result), so neither can drift. The fixtures are synthetic: real bundles carry
      face crops and frames of study videos.
-4. **HyperStudy integration (paused, to be designed).** Endpoints for bundles and corrections of record, the
+4. **HyperStudy integration: designed 2026-11-02 in [HYPERSTUDY_PLAN.md](HYPERSTUDY_PLAN.md).** The questions below
+   are answered there. Endpoints for bundles and corrections of record, the
    Python SDK building on the reader of step 3, and `Workspace.svelte` embedded in HyperStudy through a third
    `BundleSource`. Design questions: where bundles are stored (next to the videos, keyed by sha256?), how the
    correction log of record is kept (Firestore documents are limited to 1 MB, so a subcollection or a file), how the
