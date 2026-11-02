@@ -483,7 +483,7 @@ export function placeName(place: string, places?: Record<string, PlaceInfo>): st
 export function placeLabel(n: PlanNode, place: string, places?: Record<string, PlaceInfo>): string {
   const e = n.estimates?.[place];
   if (!e) return placeName(place, places);
-  const machine = e.cost_usd && !n.service && places?.[place]?.remote ? `, up to $${e.cost_usd.toFixed(2)}` : '';   // another machine's price
+  const machine = e.cost_usd && !n.service && places?.[place]?.remote ? `, up to $${upToCent(e.cost_usd).toFixed(2)}` : '';   // another machine's price
   return `${placeName(place, places)}, ${e.estimate_s != null ? `about ${duration(e.estimate_s)}` : 'no estimate yet'}${machine}`;
 }
 
@@ -493,6 +493,10 @@ export function machineCost(plan: Plan, n: PlanNode): number {
   return n.place && !n.service && plan.places?.[n.place]?.remote ? n.estimates?.[n.place]?.cost_usd ?? 0 : 0;
 }
 
+/** An amount said as at most: up to the cent, never below it (as Rust's pod_cap raises the cap), so what is shown is
+ *  never less than what may be spent. */
+export const upToCent = (usd: number) => Math.ceil(usd * 100 - 1e-9) / 100 || 0;   // never -0
+
 /** The run's spending cap: the graph's (it covers the APIs its steps call), raised by what each step that runs on a
  *  machine that costs money (a cloud GPU) costs at most there. Null when the plan does not say the graph's cap (the
  *  CLI keeps the graph's own). */
@@ -500,7 +504,7 @@ export function spendingCap(plan: Plan, chosen: string[]): number | null {
   if (plan.max_cost_usd == null) return null;
   // cached steps too: a cache can be gone by the time the run starts (the upload gate counts them for the same reason)
   const machines = plan.nodes.filter((n) => chosen.includes(n.id)).reduce((a, n) => a + machineCost(plan, n), 0);
-  return Math.ceil((plan.max_cost_usd + machines) * 100 - 1e-9) / 100;   // up to the cent: never below a reservation
+  return upToCent(plan.max_cost_usd + machines);   // never below a reservation
 }
 
 /** The places to send: only for steps that run (a place for a node --only leaves out is a CLI error). */

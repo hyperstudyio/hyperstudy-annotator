@@ -17,7 +17,7 @@
   import type { RunStatus } from './Rail.svelte';
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
-  import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
+  import { upToCent, blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
     featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, tooOld, machineTitle, POD, type CliKeys, type RemotePlan, type RemoteRun, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
@@ -553,7 +553,7 @@
     <section class="plan" aria-label={started ? 'Run' : 'Plan'}>
       <h3>
         {#if started}{headline}
-        {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost + reserved}, {reserved ? 'up to ' : ''}${(cost + reserved).toFixed(2)}{/if}{/if}
+        {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost + reserved}, {reserved ? 'up to ' : ''}${(reserved ? upToCent(cost + reserved) : cost).toFixed(2)}{/if}{/if}
       </h3>
       {#if runOn && started && !done && startedThere}<p class="muted">It keeps going on {runOnTitle} if this Mac sleeps or the app is closed.</p>{/if}
       {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('compute')}>Add a remote server or cloud GPU</button></p>{/if}
@@ -608,7 +608,7 @@
               {:else if on}
                 {#if needed}<span class="muted" id={`needed-${n.id}`}>Needed by {list(titlesOf(needed))}</span>{/if}
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
-                {#if cost}<span>{steps.some((p) => machineCost(plan!, p)) ? 'Up to ' : ''}${cost.toFixed(2)}</span>{/if}
+                {#if cost}<span>{steps.some((p) => machineCost(plan!, p)) ? `Up to $${upToCent(cost).toFixed(2)}` : `$${cost.toFixed(2)}`}</span>{/if}
                 {#each steps.filter((p) => p.why_not) as p (p.id)}<span class="error">{p.why_not}</span>{/each}
                 {#each [...new Set(steps.flatMap((p) => p.missing_secrets))] as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
@@ -665,7 +665,7 @@
       {#if runOn && !started && keysHeld}<p class="error">{list(keyNeeders)} {keyNeeders.length === 1 ? 'needs' : 'need'} your keys on {runOnTitle}:
         <button class="link" onclick={() => onsettings?.('compute')}>allow it in Settings</button>, or turn {keyNeeders.length === 1 ? 'it' : 'them'} off.</p>{/if}
       {#if runOn && !started && plan && remote?.ok}<p class="muted">{runOnTitle} receives the video and what every step makes{#if remote.pod}, on a GPU
-        reserved for up to {duration(remote.pod.deadline_s)}: ${remote.pod.reserved_usd.toFixed(2)} at most{/if}.</p>{/if}
+        reserved for up to {duration(remote.pod.deadline_s)}: ${upToCent(remote.pod.reserved_usd).toFixed(2)} at most{/if}.</p>{/if}
       {#if runOn && !started && plan && !remote && !remoteError}<p class="muted">Checking {runOnTitle}…</p>{/if}
       {#if !started}{#each failing as f (f.m)}<p class="muted">{f.title} is not offered: {f.why}. <button class="link" onclick={() => onsettings?.('compute')}>Test it in Settings</button></p>{/each}{/if}
       {#if busy}<p class="muted">{busy}</p>{/if}

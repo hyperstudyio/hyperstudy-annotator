@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysSent, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, ofGraph, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysSent, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, ofGraph, upToCent, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -464,4 +464,11 @@ test("Settings lists the steps the full graph runs, not every step registered; a
     models: [m('vlm.shot-captions-objects@1.0.0')], nodes: [info('vlm.shot-captions-objects@1.0.0')] });
   expect(ofGraph(listing, null)).toBe(listing);
   expect(ofGraph({ models: listing.models, nodes: null }, ['vlm.shot-captions@1.0.0'])).toEqual({ models: [m('vlm.shot-captions@1.0.0')], nodes: null });
+});
+
+test('an amount said as at most goes up to the cent, as the cap Rust raises does', () => {
+  expect(upToCent(0.8312)).toBe(0.84);     // shown $0.83 before, while the cap allowed $0.84
+  expect(upToCent(0.84)).toBe(0.84);       // on the cent: stays
+  expect(upToCent(0.1 + 0.2)).toBe(0.3);   // 0.30000000000000004: the cent it is
+  expect(upToCent(0)).toBe(0);
 });
