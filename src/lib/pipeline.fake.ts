@@ -381,7 +381,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     },
     // the full graph's steps (`graph validate`'s `uses`, perception 0.1.6); an older pipeline does not say
     async graphSteps(graph) {
-      if (oldCli) throw new Error(`the pipeline failed: FileNotFoundError: [Errno 2] No such file or directory: '${graph}'`);
+      if (!graphs.some((g) => g.file === graph) || oldCli) throw new Error(`the pipeline failed: FileNotFoundError: [Errno 2] No such file or directory: '${graph}'`);
       if ((globalThis as { __graphCheckFails?: boolean }).__graphCheckFails) throw new Error('the pipeline failed: uv sync failed (network)');
       if (oldChecks) return null;
       return [...plan.nodes.map((n) => n.uses), ...(gated ? GATED : objects ? OBJECTS : []).map((s) => s.node)];

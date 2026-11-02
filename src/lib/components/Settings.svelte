@@ -58,8 +58,10 @@
   const older = (r: PromiseSettledResult<unknown>, cmd: string) => r.status === 'rejected' && new RegExp(`invalid choice: '${cmd}'`).test(String(r.reason));
   const reason = (r: PromiseSettledResult<unknown>) => r.status === 'rejected' ? String(r.reason) : undefined;
 
+  // the full graph's steps; null for a pipeline without a full graph (as Extract finds it), whose steps are every step
+  const fullSteps = async (api: PipelineApi) => (await api.graphs()).some((x) => x.file === FULL_GRAPH) ? api.graphSteps(FULL_GRAPH) : null;
   async function load(api: PipelineApi) {
-    const [k, c, h, cl, d, m, g] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor(), api.models(), api.graphSteps(FULL_GRAPH)]);
+    const [k, c, h, cl, d, m, g] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor(), api.models(), fullSteps(api)]);
     if (k.status === 'fulfilled') keys = k.value;
     cli = c.status === 'fulfilled' ? c.value : null;
     hosts = h.status === 'fulfilled' ? h.value : older(h, 'hosts') ? null : hosts;
@@ -72,7 +74,7 @@
     problems = {
       keys: [reason(k), older(c, 'keys') ? undefined : reason(c)].filter(Boolean).join('; ') || undefined,
       models: older(m, 'models') ? undefined : reason(m),
-      steps: m.status === 'fulfilled' && !/FileNotFoundError/.test(String(reason(g))) ? reason(g)?.replace(/^(Error: )?(the pipeline failed: )?/, '') : undefined,
+      steps: m.status === 'fulfilled' ? reason(g)?.replace(/^(Error: )?(the pipeline failed: )?/, '') : undefined,
       servers: older(h, 'hosts') ? undefined : reason(h),
       cloud: older(cl, 'cloud') ? undefined : reason(cl),
       computer: reason(d),
