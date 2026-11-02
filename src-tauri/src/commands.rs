@@ -824,7 +824,7 @@ pub fn seen_there(host: &str, run: &str, status: std::result::Result<Value, Stri
         // never started: its pod may still be there, billed
         Err(e) if pod && e.contains("pod failed to start") => Seen::PodLost("Its pod failed to start"),
         // its pod went with its results (deleted, or removed itself at the end of its linger window), or never was
-        Err(e) if pod && ["pod was deleted", "pod removed itself", "made no RunPod pod"].iter().any(|w| e.contains(w)) =>
+        Err(e) if pod && pod_gone(&e) =>
             Seen::Failed(e.trim_start_matches("the pipeline failed: ").to_string()),
         Err(e) if e.contains(&format!("no run {run} on this host")) =>
             if pod { Seen::PodLost("Its pod has no record of it") }
@@ -953,15 +953,31 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
 }
 
 /// Put away a run that failed on a lab server, or one that finished there and could not be imported: no longer listed
-/// on Extract.
+/// on Extract. A pod's run not failed (its pod perhaps still there, billed) has its pod deleted first, and is kept, with
+/// why, if that fails: nothing would look at it again.
 #[tauri::command]
-pub fn pipeline_remote_dismiss(state: State<'_, AppState>, run: String) -> Result<()> {
-    let conn = state.db.lock().unwrap();
-    match crate::remote_runs::get(&conn, pipeline::run_id(&run)?)? {
-        Some(r) if r.state == "failed" || (r.state == "running" && r.problem.is_some()) =>
-            crate::remote_runs::set_state(&conn, &r.run, "dismissed", r.problem.as_deref()),
-        _ => Err(Error::Bundle(format!("run {run} is not a failed run to put away"))),
+pub async fn pipeline_remote_dismiss(state: State<'_, AppState>, run: String) -> Result<()> {
+    let rec = crate::remote_runs::get(&state.db.lock().unwrap(), pipeline::run_id(&run)?)?;
+    let r = match rec {
+        Some(r) if r.state == "failed" || (r.state == "running" && r.problem.is_some()) => r,
+        _ => return Err(Error::Bundle(format!("run {run} is not a failed run to put away"))),
+    };
+    if r.host == pipeline::POD && r.state == "running" {
+        let p = pipeline(&state)?;
+        let id = r.run.clone();
+        let deleted = blocking(move || p.one(&["remote", "cancel", pipeline::POD, &id], "canceled")).await;
+        if let Err(e) = deleted.map_err(|e| e.to_string()) {
+            if !pod_gone(&e) {
+                return Err(Error::Bundle(format!("Its pod could not be deleted, so the run is kept: {e}. RunPod's console can delete it.")));
+            }
+        }
     }
+    crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "dismissed", r.problem.as_deref())
+}
+
+/// Whether the pipeline's error says a run's pod is gone already (deleted, removed itself, or never made here).
+pub fn pod_gone(e: &str) -> bool {
+    ["pod was deleted", "pod removed itself", "made no RunPod pod"].iter().any(|w| e.contains(w))
 }
 
 /// Cancel the run in progress: through `perception cancel` once the CLI has named it, else by stopping its process
