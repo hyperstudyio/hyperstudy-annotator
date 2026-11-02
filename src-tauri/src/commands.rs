@@ -412,6 +412,14 @@ pub async fn pipeline_cloud(state: State<'_, AppState>, on: Option<bool>, provid
     blocking(move || p.one(&args, "cloud")).await
 }
 
+/// Whether whole runs on a RunPod pod made for them may hold the keys their steps declare (`perception cloud keys
+/// runpod on|off`); the providers after it.
+#[tauri::command]
+pub async fn pipeline_cloud_keys(state: State<'_, AppState>, on: bool) -> Result<Value> {
+    let p = pipeline(&state)?;
+    blocking(move || p.one(&["cloud", "keys", pipeline::POD, if on { "on" } else { "off" }], "cloud")).await
+}
+
 /// The CLI's arguments for `pipeline_cloud`: only the providers the pipeline knows reach its command line. AWS is the
 /// CLI's default and is not named, so a pipeline from before RunPod (no provider argument) still turns it on and off.
 pub fn cloud_args(on: Option<bool>, provider: Option<&str>) -> Result<Vec<&'static str>> {
@@ -597,14 +605,14 @@ fn into_library(state: &AppState, run: &str, video: &str, make: impl FnOnce(&std
     Ok(serde_json::json!({"v": 1, "type": "imported", "run": run, "bundle": summary}))
 }
 
-// --- whole runs on a lab server (`perception remote run`): Extract's Run on -----------------------------------------
+// --- whole runs on a lab server, or a RunPod pod made for the run (`perception remote run`): Extract's Run on ------
 
 /// `remote run HOST GRAPH` for a video, with the features, settings and cap chosen: every step there, so no place is
 /// given (the host picks each, as `plan` does here). Running there is consent for HOST to hold the video and what every
-/// step makes (`--allow-uploads`), which Extract shows beside Start run.
+/// step makes (`--allow-uploads`), which Extract shows beside Start run. HOST `runpod` is a pod made for the run.
 fn remote_run_args(p: &Pipeline, host: &str, graph: &str, video: &str, only: &[String], settings: &Settings,
                    max_cost_usd: Option<f64>) -> Result<Vec<String>> {
-    if !pipeline::host_name_ok(host) {
+    if host != pipeline::POD && !pipeline::host_name_ok(host) {
         return Err(Error::Bundle(format!("not a lab server's name: {host:?}")));
     }
     let mut args = vec!["remote".to_string(), "run".into(), host.to_string(), p.graph(graph)?, "--input".into(),
@@ -620,9 +628,46 @@ fn remote_run_args(p: &Pipeline, host: &str, graph: &str, video: &str, only: &[S
 pub async fn pipeline_remote_plan(state: State<'_, AppState>, graph: String, video: String, host: String, only: Option<Vec<String>>,
                                   settings: Option<Settings>, max_cost_usd: Option<f64>) -> Result<Value> {
     let p = pipeline(&state)?;
-    let mut args = remote_run_args(&p, &host, &graph, &video, &only.unwrap_or_default(), &settings.unwrap_or_default(), max_cost_usd)?;
-    args.push("--dry-run".into());
-    blocking(move || p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "remote_plan")).await
+    let args = remote_run_args(&p, &host, &graph, &video, &only.unwrap_or_default(), &settings.unwrap_or_default(), max_cost_usd)?;
+    blocking(move || {
+        let mut args = if host == pipeline::POD { with_pod_reserve(&p, args, None)? } else { args };
+        args.push("--dry-run".into());
+        p.one(&args.iter().map(String::as_str).collect::<Vec<_>>(), "remote_plan")
+    }).await
+}
+
+/// A run on a pod made for it, its cap raised by what the pod reserves (its hourly price for its whole deadline, which
+/// the pipeline works out from the video's length), as a cloud GPU for one step raises it (spendingCap): the API steps
+/// keep the cap they would have here. Read from a dry run, which says the reservation whatever the cap.
+/// SHOWN: the reservation Extract showed, which a run's start may not exceed (planning has none yet).
+fn with_pod_reserve(p: &Pipeline, args: Vec<String>, shown: Option<f64>) -> Result<Vec<String>> {
+    let rp = p.one(&[args.iter().map(String::as_str).collect::<Vec<_>>(), vec!["--dry-run"]].concat(), "remote_plan")?;
+    pod_args(args, &rp, shown)
+}
+
+/// ARGS with the cap its dry run's PLAN said raised by the pod's reservation; as they were if it said no cap, or no pod
+/// (RunPod is off here: the dry run with these args says why). A reservation above SHOWN (a GPU's price, or the deadline,
+/// changed since Extract planned) is not agreed to: refused, to be planned again, as the cap is held to what was shown.
+pub fn pod_args(mut args: Vec<String>, plan: &Value, shown: Option<f64>) -> Result<Vec<String>> {
+    let reserved = plan["pod"]["reserved_usd"].as_f64();
+    if let (Some(r), Some(s)) = (reserved, shown) {
+        if pod_cap(0.0, r) > pod_cap(0.0, s) {
+            return Err(Error::Bundle(format!("The pod would now reserve up to ${:.2}, more than the ${:.2} shown: plan again", pod_cap(0.0, r), pod_cap(0.0, s))));
+        }
+    }
+    let (Some(cap), Some(reserved)) = (plan["max_cost_usd"].as_f64(), reserved) else {
+        return Ok(args);
+    };
+    if let Some(i) = args.iter().position(|a| a == "--max-cost-usd") {
+        args.drain(i..i + 2);
+    }
+    args.extend(pipeline::cost_args(Some(pod_cap(cap, reserved)))?);
+    Ok(args)
+}
+
+/// The run's cap and a pod's reservation, up to the cent: never below what the pod reserves.
+pub fn pod_cap(cap: f64, reserved: f64) -> f64 {
+    ((cap + reserved) * 100.0 - 1e-9).ceil() / 100.0
 }
 
 /// A run's id, as the pipeline makes them (scheduler.RUN_ID): the app names a run on a lab server itself, so it is
@@ -639,7 +684,7 @@ fn new_run_id() -> String {
 #[tauri::command]
 pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: String, video: String, host: String,
                            agreed: Vec<String>, uploads: Option<pipeline::Uploads>, only: Option<Vec<String>>,
-                           settings: Option<Settings>, max_cost_usd: Option<f64>) -> Result<()> {
+                           settings: Option<Settings>, max_cost_usd: Option<f64>, pod_reserved_usd: Option<f64>) -> Result<()> {
     let p = pipeline(&state)?;
     let (only, settings) = (only.unwrap_or_default(), settings.unwrap_or_default());
     let args = remote_run_args(&p, &host, &graph, &video, &only, &settings, max_cost_usd)?;
@@ -648,7 +693,7 @@ pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: St
     *state.running_on.lock().unwrap() = Some(host.clone());
     std::thread::spawn(move || {
         let _clear = { let app = app.clone(); pipeline::OnPanic(move || clear_run(&app)) };
-        let last = remote_run_and_import(&app, &p, &args, &host, &video, &agreed, &uploads.unwrap_or_default(), &choices)
+        let last = remote_run_and_import(&app, &p, &args, &host, &video, &agreed, &uploads.unwrap_or_default(), &choices, pod_reserved_usd)
             .unwrap_or_else(|e| Some(serde_json::json!({"v": 1, "type": "error", "problems": [e.to_string()]})));
         clear_run(&app);
         if let Some(last) = last {
@@ -659,8 +704,12 @@ pub fn pipeline_remote_run(app: AppHandle, state: State<'_, AppState>, graph: St
 }
 
 fn remote_run_and_import(app: &AppHandle, p: &Pipeline, args: &[String], host: &str, video: &str, agreed: &[String],
-                         uploads: &pipeline::Uploads, choices: &Value) -> Result<Option<Value>> {
+                         uploads: &pipeline::Uploads, choices: &Value, pod_reserved_usd: Option<f64>) -> Result<Option<Value>> {
     let state = app.state::<AppState>();
+    let args = if host == pipeline::POD {
+        let shown = pod_reserved_usd.ok_or_else(|| Error::Bundle("Extract did not say what the pod reserves: plan again".into()))?;
+        with_pod_reserve(p, args.to_vec(), Some(shown))?
+    } else { args.to_vec() };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     // consent checked again against a fresh dry run of what is about to start there, not only on Extract
     let rp = p.one(&[&args[..], &["--dry-run"]].concat(), "remote_plan")?;
@@ -698,6 +747,19 @@ fn ended(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &str, fol
         Ok(Some((_, status))) => finish_remote(state, p, run, host, video, &status),
         Ok(None) => {
             let why = said.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
+            if host == pipeline::POD {
+                // started there, the run may go on on its pod (its follower lost it, as SSH can be): kept listed, for the
+                // listing to look at it there (seen_there), never its pod deleted with it
+                if state.remote_started.load(std::sync::atomic::Ordering::SeqCst) {
+                    crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "running", Some(&why))?;
+                    return Ok(None);
+                }
+                // refused before it started: a pod made for it is deleted, or the run kept listed to try again
+                if let Err(e) = delete_pod(p, run) {
+                    crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "running", Some(&format!("{why}; its pod could not be deleted yet: {e}")))?;
+                    return Ok(None);
+                }
+            }
             crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "failed", Some(&why))?;
             Ok(None)
         }
@@ -720,18 +782,98 @@ fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &
                 return Ok(None);   // being imported already (its `remote` event says when)
             }
             let imported = into_library(state, run, video, |out| {
-                let got = p.one(&["remote", "fetch", host, run, "--output", &out.to_string_lossy()], "fetched")?;
+                let out = out.to_string_lossy();
+                // a pod's run followed to its end is in this machine's store already, and its pod deleted: exported here
+                let here = host == pipeline::POD
+                    && ended_here(run, p.one(&["status", run], "status").map_err(|e| e.to_string())).map_err(Error::Bundle)?.is_some();
+                if here {
+                    let got = p.one(&["export", run, "--output", &out], "exported")?;
+                    return got["path"].as_str().map(String::from).ok_or_else(|| Error::Bundle("the pipeline exported no bundle".into()));
+                }
+                // fetched from there (from a pod: imported here, then the pod deleted)
+                let got = p.one(&["remote", "fetch", host, run, "--output", &out], "fetched")?;
                 got["path"].as_str().map(String::from).ok_or_else(|| Error::Bundle(format!(
-                    "{host} made no bundle: {}", got["bundle_problem"].as_str().unwrap_or("the run did not succeed"))))
+                    "{} made no bundle: {}", pipeline::machine_title(host), got["bundle_problem"].as_str().unwrap_or("the run did not succeed"))))
             });
             match imported {
                 Ok(v) => { set("imported", None)?; Ok(Some(v)) }
-                Err(e) => { set("running", Some(&format!("Finished on {host}; not imported yet: {e}")))?; Err(e) }
+                Err(e) => { set("running", Some(&format!("Finished on {}; not imported yet: {e}", pipeline::machine_title(host))))?; Err(e) }
             }
         }
-        "canceled" => { set("canceled", None)?; Ok(None) }
-        _ => { set("failed", Some(&format!("The run failed on {host}")))?; Ok(None) }
+        ended => {
+            let (now, why) = if ended == "canceled" { ("canceled", None) }
+                             else { ("failed", Some(format!("The run failed on {}", pipeline::machine_title(host)))) };
+            // a pod lingers after its run for a fetch, billed: deleted now (by its follower already, if it had one); one
+            // that cannot be yet stays listed, so the next look deletes it again
+            if host == pipeline::POD {
+                if let Err(e) = delete_pod(p, run) {
+                    set("running", Some(&format!("It ended ({ended}) on RunPod; its pod could not be deleted yet: {e}")))?;
+                    return Ok(None);
+                }
+            }
+            set(now, why.as_deref())?;
+            Ok(None)
+        }
     }
+}
+
+/// What a look at a run on another machine says of it.
+#[derive(Debug, PartialEq)]
+pub enum Seen {
+    /// ended there, as this status: fetched and imported, or recorded as it ended (finish_remote)
+    Ended(String),
+    /// still running there: how far it is
+    Going { done: usize, total: usize },
+    /// it cannot end there: recorded failed, with why
+    Failed(String),
+    /// a pod's run that cannot end there, its pod perhaps still billed: canceled, which deletes it (pod_lost)
+    PodLost(&'static str),
+    /// not reached now: why
+    Unreachable(String),
+}
+
+/// A run on HOST as its `remote status` says (or why that failed, as the pipeline's error says it).
+pub fn seen_there(host: &str, run: &str, status: std::result::Result<Value, String>) -> Seen {
+    let pod = host == pipeline::POD;
+    match status {
+        Ok(s) => match s["status"].as_str().unwrap_or("running") {
+            "running" if s["coordinator"] == "gone" =>
+                if pod { Seen::PodLost("It stopped on its pod") } else { Seen::Failed(format!("It stopped on {host} (the server restarted?)")) },
+            "running" => {
+                let tasks = s["tasks"].as_array().cloned().unwrap_or_default();
+                let done = tasks.iter().filter(|t| matches!(t["state"].as_str(), Some("succeeded" | "cached"))).count();
+                Seen::Going { done, total: tasks.len() }
+            }
+            ended => Seen::Ended(ended.to_string()),
+        },
+        // never started: its pod may still be there, billed
+        Err(e) if pod && e.contains("pod failed to start") => Seen::PodLost("Its pod failed to start"),
+        // its pod went with its results (deleted, or removed itself at the end of its linger window), or never was
+        Err(e) if pod && pod_gone(&e) =>
+            Seen::Failed(e.trim_start_matches("the pipeline failed: ").to_string()),
+        Err(e) if e.contains(&format!("no run {run} on this host")) =>
+            if pod { Seen::PodLost("Its pod has no record of it") }
+            else { Seen::Failed(format!("{host} has no record of it: it did not start there, or was removed after the server's keep days")) },
+        Err(e) => Seen::Unreachable(e),
+    }
+}
+
+/// How a pod's run ended, as this machine's own `status` of it says (its follower fetched it here, then deleted the
+/// pod): Some, ended; None, not in this store (`no run RUN`: still on its pod, which is asked). Any other failure is
+/// an error: the pod, deleted after the fetch, could not say better, and would have the run taken for lost.
+pub fn ended_here(run: &str, status: std::result::Result<Value, String>) -> std::result::Result<Option<String>, String> {
+    match status {
+        Ok(s) => Ok(s["status"].as_str().filter(|s| *s != "running").map(String::from)),
+        Err(e) if e.trim_end().ends_with(&format!("no run {run}")) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// A pod whose run can no longer end there (its coordinator gone, or the run not on it): canceled, which imports what
+/// it has and deletes the pod (`remote cancel runpod`), so it does not wait out its deadline. Why the run failed; or,
+/// the pod not deleted, why the run is still listed (each look tries again).
+fn pod_lost(p: &Pipeline, run: &str, what: &str) -> std::result::Result<String, String> {
+    delete_pod(p, run).map(|()| format!("{what}; its pod was deleted")).map_err(|e| format!("{what}; its pod could not be deleted yet: {e}"))
 }
 
 /// Follow again a run this app started on a lab server (after the app was closed while it went on), as
@@ -780,40 +922,54 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
         for r in open {
             let followed = state.running.lock().unwrap().as_deref() == Some(r.run.as_str());
             let mut row = serde_json::to_value(&r).map_err(|e| Error::Bundle(e.to_string()))?;
-            if r.state == "running" && !followed {
-                match p.one(&["remote", "status", &r.host, &r.run], "status") {
-                    Ok(s) => {
-                        let status = s["status"].as_str().unwrap_or("running");
-                        if status != "running" {
-                            match finish_remote(&state, &p, &r.run, &r.host, &r.video, status) {
-                                Ok(Some(imported)) => { let _ = app.emit("remote", &imported); }
-                                Ok(None) => {}
-                                Err(e) => eprintln!("run {} on {}: {e}", r.run, r.host),
-                            }
-                            match crate::remote_runs::get(&state.db.lock().unwrap(), &r.run)? {
-                                Some(now) if matches!(now.state.as_str(), "failed" | "running" | "importing") =>
-                                    row = serde_json::to_value(&now).map_err(|e| Error::Bundle(e.to_string()))?,
-                                _ => continue,   // imported or canceled: no longer listed
-                            }
-                        } else if s["coordinator"] == "gone" {
-                            let why = format!("It stopped on {} (the server restarted?)", r.host);
-                            crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
-                            row["state"] = "failed".into();
-                            row["problem"] = why.into();
-                        } else {
-                            let tasks = s["tasks"].as_array().cloned().unwrap_or_default();
-                            row["total"] = tasks.len().into();
-                            row["done"] = tasks.iter().filter(|t| matches!(t["state"].as_str(), Some("succeeded" | "cached"))).count().into();
-                        }
+            let seen = if r.state != "running" || followed { None }
+                // a pod's run that ended while its follower here was stopped after its fetch: in this store, its pod gone
+                else {
+                    let here = if r.host == pipeline::POD { ended_here(&r.run, p.one(&["status", &r.run], "status").map_err(|e| e.to_string())) } else { Ok(None) };
+                    Some(match here {
+                        Ok(Some(status)) => Seen::Ended(status),
+                        Ok(None) => seen_there(&r.host, &r.run, p.one(&["remote", "status", &r.host, &r.run], "status").map_err(|e| e.to_string())),
+                        Err(e) => Seen::Unreachable(e),   // this machine's own store could not say: asked again next time
+                    })
+                };
+            let failed = |why: String, row: &mut Value| -> Result<()> {
+                crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
+                row["state"] = "failed".into();
+                row["problem"] = why.into();
+                Ok(())
+            };
+            match seen {
+                None => {}
+                Some(Seen::Ended(status)) => {
+                    match finish_remote(&state, &p, &r.run, &r.host, &r.video, &status) {
+                        Ok(Some(imported)) => { let _ = app.emit("remote", &imported); }
+                        Ok(None) => {}
+                        Err(e) => eprintln!("run {} on {}: {e}", r.run, r.host),
                     }
-                    Err(e) if e.to_string().contains(&format!("no run {} on this host", r.run)) => {
-                        let why = format!("{} has no record of it: it did not start there, or was removed after the server's keep days", r.host);
-                        crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
-                        row["state"] = "failed".into();
+                    match crate::remote_runs::get(&state.db.lock().unwrap(), &r.run)? {
+                        Some(now) if matches!(now.state.as_str(), "failed" | "running" | "importing") =>
+                            row = serde_json::to_value(&now).map_err(|e| Error::Bundle(e.to_string()))?,
+                        _ => continue,   // imported or canceled: no longer listed
+                    }
+                }
+                Some(Seen::Going { done, total }) => {
+                    if r.problem.is_some() {   // going after all (its follower had lost it): why no longer holds
+                        crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "running", None)?;
+                        row["problem"] = Value::Null;
+                    }
+                    row["done"] = done.into(); row["total"] = total.into();
+                }
+                Some(Seen::Failed(why)) => failed(why, &mut row)?,
+                // a pod not deleted (RunPod not reached) is still billed: the run stays listed, and the next look
+                // deletes it again
+                Some(Seen::PodLost(what)) => match pod_lost(&p, &r.run, what) {
+                    Ok(why) => failed(why, &mut row)?,
+                    Err(why) => {
+                        crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "running", Some(&why))?;
                         row["problem"] = why.into();
                     }
-                    Err(e) => row["unreachable"] = e.to_string().into(),
-                }
+                },
+                Some(Seen::Unreachable(why)) => row["unreachable"] = why.into(),
             }
             if followed {
                 row["followed"] = true.into();
@@ -825,15 +981,37 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
 }
 
 /// Put away a run that failed on a lab server, or one that finished there and could not be imported: no longer listed
-/// on Extract.
+/// on Extract. A pod's run not failed (its pod perhaps still there, billed) has its pod deleted first, and is kept, with
+/// why, if that fails: nothing would look at it again.
 #[tauri::command]
-pub fn pipeline_remote_dismiss(state: State<'_, AppState>, run: String) -> Result<()> {
-    let conn = state.db.lock().unwrap();
-    match crate::remote_runs::get(&conn, pipeline::run_id(&run)?)? {
-        Some(r) if r.state == "failed" || (r.state == "running" && r.problem.is_some()) =>
-            crate::remote_runs::set_state(&conn, &r.run, "dismissed", r.problem.as_deref()),
-        _ => Err(Error::Bundle(format!("run {run} is not a failed run to put away"))),
+pub async fn pipeline_remote_dismiss(state: State<'_, AppState>, run: String) -> Result<()> {
+    let rec = crate::remote_runs::get(&state.db.lock().unwrap(), pipeline::run_id(&run)?)?;
+    let r = match rec {
+        Some(r) if r.state == "failed" || (r.state == "running" && r.problem.is_some()) => r,
+        _ => return Err(Error::Bundle(format!("run {run} is not a failed run to put away"))),
+    };
+    if r.host == pipeline::POD && r.state == "running" {
+        let p = pipeline(&state)?;
+        let id = r.run.clone();
+        if let Err(e) = blocking(move || Ok(delete_pod(&p, &id))).await? {
+            return Err(Error::Bundle(format!("Its pod could not be deleted, so the run is kept: {e}. RunPod's console can delete it.")));
+        }
     }
+    crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "dismissed", r.problem.as_deref())
+}
+
+/// Delete the pod a run on RunPod has, if it still has one (`remote cancel runpod`): Ok once it is gone, by this or
+/// before; why not, if RunPod could not be reached.
+fn delete_pod(p: &Pipeline, run: &str) -> std::result::Result<(), String> {
+    match p.one(&["remote", "cancel", pipeline::POD, run], "canceled").map_err(|e| e.to_string()) {
+        Err(e) if !pod_gone(&e) => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the pipeline's error says a run's pod is gone already (deleted, removed itself, or never made here).
+pub fn pod_gone(e: &str) -> bool {
+    ["pod was deleted", "pod removed itself", "made no RunPod pod"].iter().any(|w| e.contains(w))
 }
 
 /// Cancel the run in progress: through `perception cancel` once the CLI has named it, else by stopping its process
@@ -863,7 +1041,17 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
     if let pipeline::Cancel::Stop(pid) = state.control.cancel() {
         pipeline::stop_process(pid)?;
     }
-    // it may have reached the server just now: canceled there too ("no run" there: nothing reached it)
+    // it may have reached the server just now: canceled there too ("no run" there: nothing reached it). A pod is made
+    // before the run starts on it: deleted, or (RunPod not reached) the run kept listed, so the next look deletes it
+    if host == pipeline::POD {
+        let id = run.clone();
+        if let Err(e) = blocking(move || Ok(delete_pod(&p, &id))).await? {
+            let why = format!("Canceled before it started on RunPod; its pod could not be deleted yet: {e}");
+            crate::remote_runs::set_state(&state.db.lock().unwrap(), &run, "running", Some(&why))?;
+            return Err(Error::Bundle(why));
+        }
+        return Ok(());
+    }
     blocking(move || { let _ = p.one(&["remote", "cancel", &host, &run], "canceled"); Ok(()) }).await
 }
 
@@ -895,6 +1083,65 @@ mod tests {
         for bad in ["gcp", "--json", "runpod; rm", ""] {
             assert!(cloud_args(Some(true), Some(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_pods_reservation_raises_the_cap_to_the_cent() {
+        assert_eq!(pod_cap(1.5, 0.8358), 2.34);   // clip1 on the full graph: 85 min at $0.59/h
+        assert_eq!(pod_cap(0.5, 0.25), 0.75);     // a sum on the cent stays there
+        assert_eq!(pod_cap(0.1, 0.2), 0.3);       // 0.30000000000000004 in floating point: the cent it is
+        assert_eq!(pod_cap(0.101, 0.2), 0.31);    // a part of a cent over: up, never below the reservation
+        assert_eq!(pipeline::machine_title(pipeline::POD), "RunPod");
+        assert_eq!(pipeline::machine_title("lab-2"), "lab-2");
+        // the dry run's cap replaced by the raised one; no pod (or no cap) leaves the arguments as they were
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let asked = args(&["remote", "run", "runpod", "g.yaml", "v.mp4", "--max-cost-usd", "1.50", "--json"]);
+        let plan = serde_json::json!({"max_cost_usd": 1.5, "pod": {"reserved_usd": 0.8358}});
+        let raised = args(&["remote", "run", "runpod", "g.yaml", "v.mp4", "--json", "--max-cost-usd", "2.34"]);
+        assert_eq!(pod_args(asked.clone(), &plan, None).unwrap(), raised);          // planning: no reservation shown yet
+        assert_eq!(pod_args(asked.clone(), &plan, Some(0.84)).unwrap(), raised);    // the $0.84 Extract showed
+        assert_eq!(pod_args(asked.clone(), &plan, Some(0.9)).unwrap(), raised);     // less than shown: started
+        // more than shown (a GPU's price rose since Extract planned): refused, not started on a cap no one saw
+        let dearer = serde_json::json!({"max_cost_usd": 1.5, "pod": {"reserved_usd": 2.1}});
+        assert!(pod_args(asked.clone(), &dearer, Some(0.84)).unwrap_err().to_string().contains("up to $2.10, more than the $0.84 shown"));
+        assert_eq!(pod_args(asked.clone(), &serde_json::json!({"max_cost_usd": 1.5}), Some(0.84)).unwrap(), asked);
+        assert_eq!(pod_args(asked.clone(), &serde_json::json!({"pod": {"reserved_usd": 0.8}}), Some(0.84)).unwrap(), asked);
+    }
+
+    #[test]
+    fn a_look_at_a_run_elsewhere_says_what_to_do_with_it() {
+        use serde_json::json;
+        const RUN: &str = "20261031-120000-abcdef";
+        let err = |e: &str| Err(format!("the pipeline failed: {e}"));
+        let tasks = json!([{"state": "succeeded"}, {"state": "cached"}, {"state": "running"}, {"state": "waiting"}]);
+        assert_eq!(seen_there("lab", RUN, Ok(json!({"status": "running", "coordinator": "running", "tasks": tasks}))), Seen::Going { done: 2, total: 4 });
+        assert_eq!(seen_there(pipeline::POD, RUN, Ok(json!({"status": "succeeded"}))), Seen::Ended("succeeded".into()));
+        assert_eq!(seen_there("lab", RUN, Ok(json!({"status": "failed"}))), Seen::Ended("failed".into()));
+        // its coordinator gone: a pod is canceled (deleted), a server's run failed
+        assert_eq!(seen_there(pipeline::POD, RUN, Ok(json!({"status": "running", "coordinator": "gone"}))), Seen::PodLost("It stopped on its pod"));
+        assert_eq!(seen_there("lab", RUN, Ok(json!({"status": "running", "coordinator": "gone"}))), Seen::Failed("It stopped on lab (the server restarted?)".into()));
+        // the pipeline's own words (perception cli.py, remote_coordinator.py, 0.1.5)
+        let deleted = format!("run {RUN}'s pod was deleted after its run was fetched (it cost about $0.31)");
+        assert_eq!(seen_there(pipeline::POD, RUN, err(&deleted)), Seen::Failed(deleted));
+        for gone in [format!("run {RUN}'s pod removed itself (the end of its linger window, or its deadline) before anyone fetched the run: its results went with it (it cost about $0.84)"),
+                     format!("this machine made no RunPod pod for run {RUN}")] {
+            assert!(matches!(seen_there(pipeline::POD, RUN, err(&gone)), Seen::Failed(_)), "{gone}");
+        }
+        let unstarted = format!("run {RUN}'s pod failed to start, and was not deleted: `perception remote cancel runpod {RUN}` deletes it");
+        assert_eq!(seen_there(pipeline::POD, RUN, err(&unstarted)), Seen::PodLost("Its pod failed to start"));
+        assert_eq!(seen_there(pipeline::POD, RUN, err(&format!("no run {RUN} on this host"))), Seen::PodLost("Its pod has no record of it"));
+        assert!(matches!(seen_there("lab", RUN, err(&format!("no run {RUN} on this host"))), Seen::Failed(w) if w.starts_with("lab has no record of it")));
+        // a server's words about a pod are not taken as a pod's; another run's record is not this one's
+        assert!(matches!(seen_there("lab", RUN, err("run x's pod was deleted")), Seen::Unreachable(_)));
+        assert!(matches!(seen_there("lab", RUN, err("no run 20261031-120000-000000 on this host")), Seen::Unreachable(_)));
+        assert!(matches!(seen_there(pipeline::POD, RUN, err("could not reach root@1.2.3.4 (ssh exit 255)")), Seen::Unreachable(_)));
+        // a pod's run followed here to its end: this store's status says how it ended; only its "no run" sends the
+        // question to the pod (deleted after the fetch, it would say the run is lost): any other failure is said
+        assert_eq!(ended_here(RUN, Ok(json!({"status": "succeeded"}))), Ok(Some("succeeded".into())));
+        assert_eq!(ended_here(RUN, Ok(json!({"status": "running"}))), Ok(None));
+        assert_eq!(ended_here(RUN, err(&format!("no run {RUN}"))), Ok(None));
+        assert!(ended_here(RUN, err("uv sync failed: the lock is held")).is_err());
+        assert!(ended_here(RUN, err(&format!("no run {RUN} on this host"))).is_err());   // a server's words, not this store's
     }
 
     #[test]

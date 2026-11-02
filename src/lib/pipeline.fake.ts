@@ -1,5 +1,6 @@
 // A scripted stand-in for the pipeline, for browser mode (?pipeline-demo): the dialog's screens can be checked in a
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
+import { POD } from './pipeline';
 import type { CheckResult, CloudStatus, Doctor, GraphPreset, Host, KeyStatus, ModelInfo, Plan, PipelineApi, PipelineMessage, RemoteRun, SetupStatus, SetupStep, SshOverrides, StepInfo } from './pipeline';
 import type { BundleSummary } from './types';
 
@@ -143,7 +144,7 @@ const script: PipelineMessage[] = [
  *  from before plans said what each node needs. `oldCli`: one from before plans carried places, estimates or needs.
  *  `twoPlaces`: a machine where faces can run in two places (the place menu). `summary`: a free, local feature that
  *  needs captions (which sends data off): turning it on brings captions along. `remote`: faces can also run on a lab
- *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `objects`: the objects feature's two steps (perception #43, #51), with `noPartOf` from a pipeline before they said they are one feature (#45); the gated demos have them too. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
+ *  server or a cloud GPU (perception #15/#16). `setup`: the first launch's setup still running (it finishes after `setupMs`), or failed (a retry then succeeds). `machinesError`: listing the machines fails (not an older pipeline). `noCloud`: lab servers but no cloud (perception #15 without #16). `keysError`: listing the CLI's keys fails (not an older pipeline). `gated`: steps whose models are gated on Hugging Face (objects: SAM 3 and DINOv3; speaker diarization: pyannote), with `hf` the Hugging Face token's state: none (no token anywhere), `granted` (every model), `pending` (Meta has not yet granted DINOv3: `__metaGranted` grants it), `refused` (Hugging Face refuses the token), `file` (a token the CLI finds in a file, every model granted) or `old` (a pipeline whose check does not say each model's access). A token saved containing "pending" is not yet granted DINOv3; one containing "unscoped" is a fine-grained token that may not read gated repos; one starting "rejected" is refused. `hfStored`: a Hugging Face key is in the keychain (saved in 0.0.2, which listed every key). A key starting "rejected" is refused, as its provider refuses a wrong one. `oldChecks`: a pipeline from before keys check, cloud check and hosts probe. A destination containing "unreachable" cannot be reached. `objects`: the objects feature's two steps (perception #43, #51), with `noPartOf` from a pipeline before they said they are one feature (#45); the gated demos have them too. `pod`: RunPod set up with its key, and the lab server (whole runs on either: Run on). A test sets `__labDown` to have the lab server's Test fail, and showing a run there with it. `runs` records each run's arguments, and `added` each server added with its overrides, for tests. */
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
@@ -182,7 +183,7 @@ function hfCheck(token: string | undefined): CheckResult {
     models: models.map((m) => ({ ...m, access: pending && m.id.includes('dinov3') ? 'not-granted' as const : 'granted' as const, reason: null })) };
 }
 
-export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hf = 'none' as 'none' | 'granted' | 'pending' | 'refused' | 'file' | 'old', hfStored = false, oldChecks = false, runpodKeyGone = false, objects = false, noPartOf = false, labRuns = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
+export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = false, noNeeds = false, oldCli = false, twoPlaces: twoPlaces_ = false, summary = false, remote: remote_ = false, machinesError = false, noCloud = false, keysError = false, missingKey = false, gated = false, hf = 'none' as 'none' | 'granted' | 'pending' | 'refused' | 'file' | 'old', hfStored = false, oldChecks = false, runpodKeyGone = false, objects = false, noPartOf = false, labRuns = false, pod = false, setup = 'done' as 'done' | 'installing' | 'install-failed' | 'running' | 'failed', setupMs = 1500 } = {},
                              runs: { allow: unknown; places: unknown; maxCostUsd: number | null; settings?: unknown; only?: string[] | null; host?: string; agreed?: string[] }[] = [],
                              added: { name: string; dest: string; overrides?: SshOverrides }[] = []): PipelineApi {
   const step = (node: string, what: string, ok = true, message = ''): SetupStep => ({ node, what, ok, seconds: 2, message });
@@ -199,23 +200,27 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
   // the machines `perception hosts` and `perception cloud` keep: in remote mode a lab server and the cloud to start with
   let hosts: Host[] = remote_ ? [labHost('lab', 'you@lab')] : [];
   const hfSaved = gated && { granted: 'hf_demo', pending: 'hf_demo_pending', refused: 'rejected-hf', old: 'hf_demo' }[hf as string];
-  const stored = new Map<string, string>(hfStored ? [['HF_TOKEN', 'hf_saved_in_0_0_2']] : hfSaved ? [['HF_TOKEN', hfSaved]] : []);
+  const stored = new Map<string, string>([...(hfStored ? [['HF_TOKEN', 'hf_saved_in_0_0_2']] as [string, string][] : hfSaved ? [['HF_TOKEN', hfSaved]] as [string, string][] : []),
+    ...(pod ? [['RUNPOD_API_KEY', 'rp_demo']] as [string, string][] : [])]);
   const keyStatus = (): KeyStatus[] => KEYS.map((k) => ({ ...k, stored: stored.has(k.name) }));
   const cloud: CloudStatus = { enabled: remote_, machine: 'AWS g6.2xlarge, NVIDIA L4', region: 'us-east-1', hourly_usd: 0.9776,
     // runpodKeyGone: RunPod added with a key the CLI found then, gone since (unset, or taken out of the keychain elsewhere)
-    runpod: { enabled: runpodKeyGone, machine: 'RunPod, one of L4, RTX 4090, RTX A5000', region: 'any', hourly_usd: 0.69 } };
+    runpod: { enabled: runpodKeyGone || pod, machine: 'RunPod, one of L4, RTX 4090, RTX A5000', region: 'any', hourly_usd: 0.69, keys: false } };
   const unchecked = (cmd: string) => { if (oldChecks) throw new Error(`the pipeline failed: perception: error: argument action: invalid choice: '${cmd}'`); };
   const older = (cmd = 'hosts') => { if (oldCli || (cmd === 'cloud' && noCloud)) throw new Error(`the pipeline failed: perception: error: argument cmd: invalid choice: '${cmd}'`); };
   let listener: ((m: PipelineMessage) => void) | null = null;
   let timers: ReturnType<typeof setTimeout>[] = [];
   // the script, as --only runs it, under the run's id: from its start, or (`from`) a run already part way through
-  const play = (on: (m: PipelineMessage) => void, only: string[] | null, run = 'demo-run', first = 0, remoteStart = false) => {
+  const play = (on: (m: PipelineMessage) => void, only: string[] | null, run = 'demo-run', first = 0, remoteStart = false, host = 'lab') => {
     listener = on;
     const here = new Set([...plan.nodes, ...(objects || gated ? objectsNodes : [])].map((n) => n.id));   // the steps this demo's graph has
     const ran = script.filter((m) => m.type !== 'event' || !m.node || (here.has(m.node) && (!only || only.includes(m.node))))   // as --only does
       .map((m) => 'run' in m ? { ...m, run } as PipelineMessage : m)
       // a run on a lab server: started there once its code and video have been sent
-      .flatMap((m) => remoteStart && m.type === 'run.created' ? [m, { v: 1, type: 'remote_started', run, host: 'lab', started: true, resumed: false, status: 'running' } as PipelineMessage] : [m]);
+      .flatMap((m) => remoteStart && m.type === 'run.created' ? [m, { v: 1, type: 'remote_started', run, host, started: true, resumed: false, status: 'running' } as PipelineMessage] : [m])
+      // a pod made for the run: said once made, and deleted once the run is fetched, before its import here
+      .flatMap((m) => host !== POD ? [m] : m.type === 'run.created' ? [m, { v: 1, type: 'pod', run, pod: 'pod-demo', hourly_usd: 0.59, reserved_usd: 0.84, deadline_at: 1793600000 } as PipelineMessage]
+        : m.type === 'run.finished' ? [m, { v: 1, type: 'pod_deleted', run, pod: 'pod-demo', deleted: true, may_still_run: null, cost_usd: 0.31 } as PipelineMessage] : [m]);
     timers = ran.map((m, i) => setTimeout(() => on(m), first + stepMs * (i + 1)));   // the demo's pacing
     return () => timers.forEach(clearTimeout);
   };
@@ -263,24 +268,27 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       runs.push({ allow, places, maxCostUsd, settings, only });
       return play(on, only, 'demo-run', slowStart ? 60_000 : 0);
     },
-    async remotePlan(_graph, _video, host, only, _settings, _cap) {
-      const h = hosts.find((x) => x.name === host);
+    async remotePlan(_graph, _video, host, only, _settings, cap) {
+      const h = host === POD ? (cloud.runpod!.enabled ? { keys: cloud.runpod!.keys } : undefined) : hosts.find((x) => x.name === host);
       if (!h) throw new Error(`the pipeline failed: no host '${host}' (perception hosts add)`);
       const chosen = only ?? [...plan.nodes, ...(objects || gated ? objectsNodes : [])].map((n) => n.id);
       const keys: Record<string, string[]> = {};
       for (const id of chosen) if (DECLARES[id]) (keys[DECLARES[id]] ??= []).push(id);
       const problems = Object.keys(keys).length && !h.keys ? [`${Object.values(keys).flat().join(', ')} need ${Object.keys(keys).join(', ')}, and ${host} may not hold your keys for its runs: \`perception hosts keys ${host} on\` lets it (or leave those steps out with --only)`] : [];
-      return { host, ok: !problems.length, problems, uploads: ['video', 'audio', 'frames', 'faces', 'transcript'], upload_to: `${host} (SSH)`, keys, keys_allowed: !!h.keys };
+      // a pod for the 2-minute clip: 85 min reserved at up to $0.59/h, which the app adds to the run's cap
+      const podPlan = host === POD ? { pod: { deadline_s: 5100, linger_s: 1800, hourly_usd: 0.59, reserved_usd: 0.8358, api_usd: 0.24, api_cap_usd: (cap ?? 0.5) - 0.8358 } } : {};
+      return { host, ok: !problems.length, problems, uploads: ['video', 'audio', 'frames', 'faces', 'transcript'], upload_to: `${host} (SSH)`, keys, keys_allowed: !!h.keys, ...podPlan };
     },
-    async remoteRun(_graph, _video, host, agreed, allow, only, settings, maxCostUsd, on) {
+    async remoteRun(_graph, _video, host, agreed, allow, only, settings, maxCostUsd, _podReservedUsd, on) {
       if (rejectRun) throw new Error('a pipeline run is already in progress');
       runs.push({ allow, places: null, maxCostUsd, settings, only, host, agreed });
       following = '20261029-120000-cccccc';
-      return play(on, only, following, 0, true);
+      return play(on, only, following, 0, true, host);
     },
     async remoteAttach(run, on) {
       const r = labList.find((x) => x.run === run);
       if (!r) throw new Error(`run ${run} was not started from this app`);
+      if ((globalThis as { __labDown?: boolean }).__labDown) throw new Error('could not reach you@lab (ssh exit 255)');
       following = run;
       return play(on, r.choices.only.length ? r.choices.only : null, run);
     },
@@ -322,7 +330,8 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
     async probeHost(dest) {
       unchecked('probe');
       await (globalThis as { __holdHost?: Promise<void> }).__holdHost;
-      if (dest.includes('unreachable')) throw new Error(`the pipeline failed: could not reach ${dest} (ssh exit 255): ssh: connect to host ${dest} port 22: Operation timed out`);
+      if (dest.includes('unreachable') || (dest === 'you@lab' && (globalThis as { __labDown?: boolean }).__labDown))
+        throw new Error(`the pipeline failed: could not reach ${dest} (ssh exit 255): ssh: connect to host ${dest} port 22: Operation timed out`);
       const h = labHost('probe', dest);
       return { dest, root: h.root, caps: h.caps };
     },
@@ -355,6 +364,7 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
       if (on !== undefined) { if (provider === 'runpod') cloud.runpod!.enabled = on; else cloud.enabled = on; }
       return { ...cloud, runpod: { ...cloud.runpod! } };
     },
+    async cloudKeys(on) { older('cloud'); cloud.runpod!.keys = on; return { ...cloud, runpod: { ...cloud.runpod! } }; },
     async models() {
       older('models');
       const all = plan.nodes.flatMap((n) => (n.models ?? []).map((m) => ({ node: n.uses, ...m, gated: false })));

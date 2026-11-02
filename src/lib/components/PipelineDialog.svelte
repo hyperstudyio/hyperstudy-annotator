@@ -4,18 +4,21 @@
   // the plan (where each step runs, what is cached, what it costs, each step's details and settings: what it downloads
   // and what it sends off), then the run, step by step. Turning on a feature that sends data to a cloud API is the
   // choice to send it; such features start off. A pipeline with no full graph offers its graphs instead.
-  // Run on: this Mac (each step's place chosen on its row), or a lab server that coordinates the whole run (`perception
-  // remote run`): every step there, so it goes on with this Mac asleep or the app closed; starting it is the consent for
-  // the server to hold the video and what every step makes, said beside Start run. The runs started there that are not
+  // Run on: this Mac (each step's place chosen on its row), or a lab server or a RunPod pod made for the run that
+  // coordinates the whole run (`perception remote run`): every step there, so it goes on with this Mac asleep or the app
+  // closed; starting it is the consent for the machine to hold the video and what every step makes, said beside Start
+  // run (a pod: also what it reserves, and once the run is back, that it was deleted). Another machine is offered, here
+  // and in a step's menu, only once its Test passes, asked each time the machines are loaded. The runs started there that are not
   // in the library yet are listed under the video: one still running can be shown again, one that has ended is fetched
   // and imported (Rust: remote_runs), and one that failed says why until put away.
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
+  import { openExternal } from '../links';
   import type { RunStatus } from './Rail.svelte';
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, tooOld, type CliKeys, type RemotePlan, type RemoteRun, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
+    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, tooOld, machineTitle, POD, type CliKeys, type RemotePlan, type RemoteRun, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -68,6 +71,7 @@
   let stop: (() => void) | null = null;
   // the lab server a whole run is coordinated on (null: this Mac), what it would hold and why it would not start there
   let runOn = $state<string | null>(null);
+  const runOnTitle = $derived(runOn ? machineTitle(runOn) : '');
   let remote = $state<RemotePlan | null>(null);
   let remoteError = $state<string | null>(null);
   // the runs started on lab servers that are not in the library, and those imported since this page was opened
@@ -104,11 +108,11 @@
     const set = settingsFor(withDefaults(fromDefaults, settings), pick.chosen);
     remote = null; remoteError = null;
     if (!host || !g || !v || !plan || started || planning) return;
-    untrack(() => newestRemote(api.remotePlan(g, v, host, only, set, cap), (r) => (remote = r), (e) => (remoteError = tooOld(e, 'run on a lab server'))));
+    untrack(() => newestRemote(api.remotePlan(g, v, host, only, set, cap), (r) => (remote = r), (e) => (remoteError = tooOld(e, runOn === POD ? 'run on RunPod' : 'run on a lab server'))));
   });
   const keysHeld = $derived(!!remote && !remote.keys_allowed && Object.keys(remote.keys).length > 0);
   const keyNeeders = $derived(remote ? titlesOf([...new Set(Object.values(remote.keys).flat())].filter((id) => pick.chosen.includes(id))) : []);
-  const remoteWhy = $derived(remoteError ? [`could not check ${runOn}: ${remoteError}`]
+  const remoteWhy = $derived(remoteError ? [`could not check ${runOnTitle}: ${remoteError}`]
     : (remote?.problems ?? []).filter((p) => !(keysHeld && /may not hold your keys/.test(p))));
   // what blocks a run: the plan's own problems, and a step that would send data off beyond what the user agreed to
   const why = $derived(active && !started ? runOn ? remoteWhy : [...blockers(active), ...(canPick(active) ? titlesOf(unagreed(active, ticked)).map((t) =>
@@ -232,8 +236,10 @@
     if (now.hosts) hosts = now.hosts;
     if (now.cloud) cloud = now.cloud;
     if (started) return;   // a run has its places already
-    // Run on goes back to this Mac when its server is gone, or its name now leads to another machine (a new choice)
-    if (runOn && !(hosts ?? []).some((h) => h.name === runOn && h.keys !== undefined && before.get(`ssh-${h.name}`) === machineId(h))) runOn = null;
+    // Run on goes back to this Mac when its server is gone, or its name now leads to another machine (a new choice),
+    // or RunPod is no longer set up
+    if (runOn && (runOn === POD ? !cloud?.runpod?.enabled
+      : !(hosts ?? []).some((h) => h.name === runOn && h.keys !== undefined && before.get(`ssh-${h.name}`) === machineId(h)))) runOn = null;
     // each place still offered: the same machine, with that accelerator (a check may find a GPU gone)
     const offered = (place: string) => {
       const [backend, accelerator] = place.split(':');
@@ -243,13 +249,62 @@
       const h = (hosts ?? []).find((x) => `ssh-${x.name}` === backend);
       return !!h && before.get(backend) === machineId(h) && h.caps.accelerators.includes(accelerator);
     };
+    dropPlaces(offered);
+    await makePlan(true);
+  };
+  // the steps placed where `offered` says they can no longer go: back to this machine, and the agreement their place
+  // gave with them. Whether any were.
+  const dropPlaces = (offered: (place: string) => boolean) => {
     const gone = Object.entries(places).filter(([, p]) => !offered(p)).map(([n]) => n);
     if (gone.length) {
       places = Object.fromEntries(Object.entries(places).filter(([n]) => !gone.includes(n)));
       ticked = Object.fromEntries(Object.entries(ticked).filter(([n]) => !gone.includes(n)));
     }
-    await makePlan(true);
+    return gone.length > 0;
   };
+
+  // Each other machine's Test, asked each time the machines are loaded: a server reached as adding it would (`hosts
+  // probe`, which changes nothing), a cloud provider checked (`cloud check`). Kept under what it was of (a server's
+  // address and folder), so a name that now leads elsewhere is not taken as tested; an earlier answer stands until the
+  // new one comes. `ok`: true, or why not. A pipeline from before the tests offers its machines untested, as before.
+  let tests = $state<Record<string, { of: string; ok: true | string }>>({});
+  const testOf: Record<string, ReturnType<typeof latestOnly>> = {};
+  const testedAs = (m: string) => m === POD ? (cloud?.runpod?.enabled ? m : null) : m === 'cloud' ? (cloud?.enabled ? m : null)
+    : (() => { const h = (hosts ?? []).find((x) => `ssh-${x.name}` === m); return h ? machineId(h) : null; })();
+  const usable = (m: string) => tests[m]?.ok === true && tests[m].of === testedAs(m);
+  /** A place a step may be offered: this machine's, or one on another machine whose Test passed. */
+  const usablePlace = (place: string) => { const b = place.split(':')[0]; return b === 'native' || b === 'self' || usable(b); };
+  const sshOf = (h: Host) => ({ ...(h.user ? { user: h.user } : {}), ...(h.port ? { port: h.port } : {}), ...(h.identity ? { identity: h.identity } : {}) });
+  const checked = async (r: Promise<{ ok: boolean; detail: string }>) => { const c = await r; if (!c.ok) throw new Error(c.detail); };
+  $effect(() => {
+    const h = hosts, c = cloud;
+    untrack(() => {
+      // each machine, what it was of, its Test, and the commands a pipeline from before that Test does not know
+      type Asked = [string, string, () => Promise<unknown>, string];
+      const asked: Asked[] = [
+        ...(h ?? []).map((x): Asked => [`ssh-${x.name}`, machineId(x), () => api.probeHost(x.dest, sshOf(x)), 'probe|hosts']),
+        ...(c?.runpod?.enabled ? [[POD, POD, () => checked(api.checkCloud('runpod')), 'check|cloud'] as Asked] : []),
+        ...(c?.enabled ? [['cloud', 'cloud', () => checked(api.checkCloud('aws')), 'check|cloud'] as Asked] : []),
+      ];
+      // each machine's newest Test alone answers: an older, slower one (asked on an earlier load) never overwrites it
+      for (const [m, of, test, unknown] of asked) {
+        const said = test().then(() => true as const, (e) => new RegExp(`invalid choice: '(${unknown})'`).test(String(e)) ? true as const
+          : String(e).replace(/^(Error: )?(the pipeline failed: )?/, '').replace(/\.$/, ''));
+        (testOf[m] ??= latestOnly())(said, (ok) => {
+          if (testedAs(m) !== of) return;   // removed, or added again elsewhere, while it was tested
+          tests = { ...tests, [m]: { of, ok } };
+          if (ok === true || started) return;
+          // one that fails is not offered: Run on and the steps placed there go back to this Mac
+          const away = runOn !== null && (runOn === POD ? m === POD : m === `ssh-${runOn}`);
+          if (away) runOn = null;
+          if (dropPlaces((p) => p.split(':')[0] !== m) || away) makePlan(true);
+        }, () => {});
+      }
+    });
+  });
+  const titleOfMachine = (m: string) => m === POD ? 'RunPod' : m === 'cloud' ? 'AWS' : m.replace(/^ssh-/, '');
+  // the machines set up in Settings whose Test failed just now: not offered, said once each
+  const failing = $derived(Object.entries(tests).filter(([m, t]) => t.ok !== true && t.of === testedAs(m)).map(([m, t]) => ({ m, title: titleOfMachine(m), why: t.ok as string })));
   // another video: the features go back to their defaults, so turning on a step that sends data off for one video is
   // not the choice to send the next one's
   const chooseVideo = async () => { const v = await api.pickVideo(); if (v) { video = v; wanted = null; ticked = {}; await makePlan(); } };
@@ -299,24 +354,29 @@
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
     const set = settingsFor(withDefaults(fromDefaults, settings), pick.chosen), cap = spendingCap(active!, pick.chosen);
     try {
-      stop = runOn ? await api.remoteRun(graph!, video!, runOn, remote!.uploads, consentFor(active!, ticked), pick.only, set, cap, on)
+      stop = runOn ? await api.remoteRun(graph!, video!, runOn, remote!.uploads, consentFor(active!, ticked), pick.only, set, cap, runOn === POD ? remote!.pod?.reserved_usd ?? null : null, on)
         : await api.run(graph!, video!, consentFor(active!, ticked), placesFor(places, pick.chosen), pick.only, set, cap, on);
     }
     catch (e) { started = false; throw e; }   // not started after all: the dialog stays usable, with the reason
   });
   const cancel = () => step('Canceling…', async () => { await api.cancel(view.run); });   // no id yet: its process is stopped
 
-  // Run on: this Mac, or a lab server (one whose pipeline coordinates runs there: perception #46 lists its `keys`)
-  const servers = $derived((hosts ?? []).filter((h) => h.keys !== undefined));
+  // Run on: this Mac, a lab server (one whose pipeline coordinates runs there: perception #46 lists its `keys`), or
+  // RunPod (a pipeline that makes a pod for a whole run: perception #53 says whether it gets your keys), each once its
+  // Test has passed
+  const servers = $derived((hosts ?? []).filter((h) => h.keys !== undefined && usable(`ssh-${h.name}`)));
+  const podOffered = $derived(!!cloud?.runpod?.enabled && cloud.runpod.keys !== undefined && usable(POD));
   const chooseRunOn = async (host: string | null) => { runOn = host; await makePlan(true); };
   /** The plan as a run on `host` would go: every step there (the API steps call their API from there), none already
-   *  done (the server keeps its own results), each with its time there when one is known. */
+   *  done (the machine keeps its own results; a pod starts empty), each with its time there when one is known. */
   const onHost = (p: Plan, host: string): Plan => ({ ...p, nodes: p.nodes.map((n) => {
     if (n.service) return { ...n, cached: false };
-    const there = (n.options ?? []).find((o) => o.startsWith(`ssh-${host}:`)), est = there ? n.estimates?.[there] : undefined;
-    return { ...n, cached: false, where: host, why_not: '', place: null, options: [], estimate_s: est?.estimate_s ?? null,
-             estimate_basis: est?.estimate_basis ?? `no runs on ${host} yet` };
+    const there = (n.options ?? []).find((o) => o.startsWith(host === POD ? `${POD}:` : `ssh-${host}:`)), est = there ? n.estimates?.[there] : undefined;
+    return { ...n, cached: false, where: machineTitle(host), why_not: '', place: null, options: [], estimate_s: est?.estimate_s ?? null,
+             estimate_basis: est?.estimate_basis ?? `no runs on ${machineTitle(host)} yet` };
   }) });
+  // what a pod made for the run reserves (the most it can cost): counted in the run's cost, as a cloud GPU's for a step is
+  const reserved = $derived(runOn === POD ? remote?.pod?.reserved_usd ?? 0 : 0);
 
   const loadRemoteRuns = async () => { try { remoteRuns = await api.remoteRuns(); } catch { /* an older app's database: none */ } };
   $effect(() => {   // checked again while the page is on screen: a run there may have ended
@@ -340,9 +400,9 @@
   // the server has the run (until then its code and video are on their way, and closing the app stops it)
   let reattached = $state(false);
   const startedThere = $derived(reattached || msgs.some((m) => m.type === 'remote_started'));
-  const runText = (r: RemoteRun) => r.state === 'failed' ? r.problem || `It failed on ${r.host}`
+  const runText = (r: RemoteRun) => r.state === 'failed' ? r.problem || `It failed on ${machineTitle(r.host)}`
     : r.state === 'importing' ? 'Importing into the library…' : r.problem ? r.problem
-    : r.unreachable ? `Running; ${r.host} cannot be reached now` : r.total ? `Running, ${r.done} of ${r.total} steps done` : 'Running';
+    : r.unreachable ? `Running; ${machineTitle(r.host)} cannot be reached now` : r.total ? `Running, ${r.done} of ${r.total} steps done` : 'Running';
   // a run still going there, shown again as it was started, and followed to its end
   const show = (r: RemoteRun) => step('Reaching the run…', async () => {
     video = r.video; runOn = r.host; graph = r.choices.graph; settings = r.choices.settings ?? {};
@@ -350,7 +410,12 @@
     started = true; reattached = true; msgs = []; arrived = []; now = Date.now();
     makePlan();
     const on = (m: PipelineMessage) => { arrived = [...arrived, Date.now()]; msgs = [...msgs, m]; };
-    try { stop = await api.remoteAttach(r.run, on); } catch (e) { started = false; throw e; }
+    // not reached: the machine stays chosen only if it is still offered (its Test, skipped while it was shown, passed)
+    try { stop = await api.remoteAttach(r.run, on); } catch (e) {
+      started = false; reattached = false;
+      if (runOn && !usable(runOn === POD ? POD : `ssh-${runOn}`)) { runOn = null; makePlan(); }
+      throw e;
+    }
   });
   const dismiss = (run: string) => step('Putting it away…', async () => { await api.remoteDismiss(run); await loadRemoteRuns(); });
 
@@ -366,7 +431,7 @@
     if (view.status === 'failed') return 'The run failed';
     if (view.status === 'canceled') return 'The run was canceled';
     if (view.problems.length) return 'The run stopped';
-    return `Running${runOn ? ` on ${runOn}` : ''}, ${finished} of ${states.length} steps done`;
+    return `Running${runOn ? ` on ${runOnTitle}` : ''}, ${finished} of ${states.length} steps done`;
   });
   const chosenGraph = $derived(graphs.find((g) => g.file === graph));
   // the rows: a feature each, its steps in its row (the plan's, or once started what runs)
@@ -394,7 +459,7 @@
   const elsewhere = $derived(!!hosts?.length || !!cloud?.enabled || !!cloud?.runpod?.enabled);
   // what leaves this machine, and where to: the API it calls, or the other machine it runs on (its inputs, whatever they hold)
   const leaves = (n: PlanNode) => {
-    if (runOn) return `What it reads and makes, kept on ${runOn}${n.service && n.uploads?.length ? `; ${list(n.uploads)}, sent to the ${n.service}` : ''}`;
+    if (runOn) return `What it reads and makes, kept on ${runOnTitle}${n.service && n.uploads?.length ? `; ${list(n.uploads)}, sent to the ${n.service}` : ''}`;
     const to = dest(n);
     if (!to && !n.uploads?.length) return 'Nothing';
     const what = n.uploads?.length ? list(n.uploads) : 'Its inputs';
@@ -432,7 +497,7 @@
           {#if video}<span class="file" title={video}>{name(video)}</span><button onclick={chooseVideo} disabled={started}>Change…</button>
           {:else}<button class="primary" onclick={chooseVideo}>Choose a video…</button>{/if}
         </div>
-      {#if servers.length}
+      {#if servers.length || podOffered || runOn}
         <span class="label" id="runon-label">Run on</span>
         <div class="value">
           <div class="segments" role="radiogroup" aria-labelledby="runon-label">
@@ -440,6 +505,11 @@
             {#each servers as h (h.name)}
               <label class="segment" class:on={runOn === h.name}><input type="radio" name="runon" checked={runOn === h.name} disabled={started} onchange={() => chooseRunOn(h.name)} />{h.name}</label>
             {/each}
+            <!-- a run shown again keeps the machine it is on, whatever its Test says now -->
+            {#if runOn && runOn !== POD && !servers.some((h) => h.name === runOn)}<label class="segment on"><input type="radio" name="runon" checked disabled />{runOn}</label>{/if}
+            {#if podOffered || runOn === POD}
+              <label class="segment" class:on={runOn === POD}><input type="radio" name="runon" checked={runOn === POD} disabled={started} onchange={() => chooseRunOn(POD)} />RunPod</label>
+            {/if}
           </div>
         </div>
       {/if}
@@ -466,11 +536,11 @@
       <h2 id="elsewhere-heading">Runs on other machines</h2>
       <ul>
         {#each imported as r (r.run)}
-          <li aria-label={name(r.video)}><span class="file" title={r.video}>{name(r.video)}</span><span class="muted">{r.host}</span>
+          <li aria-label={name(r.video)}><span class="file" title={r.video}>{name(r.video)}</span><span class="muted">{machineTitle(r.host)}</span>
             <span>In the library</span><button onclick={() => onopen(r.bundle)}>Open in Annotator</button></li>
         {/each}
         {#each listed as r (r.run)}
-          <li aria-label={name(r.video)}><span class="file" title={r.video}>{name(r.video)}</span><span class="muted">{r.host}</span>
+          <li aria-label={name(r.video)}><span class="file" title={r.video}>{name(r.video)}</span><span class="muted">{machineTitle(r.host)}</span>
             <span class:error={r.state === 'failed' || !!r.problem}>{runText(r)}</span>
             {#if r.state === 'failed' || r.problem}<button onclick={() => dismiss(r.run)} disabled={!!busy}>Dismiss</button>
             {:else if r.state === 'running'}<button onclick={() => show(r)} disabled={started || !!busy}>Show</button>{/if}</li>
@@ -483,11 +553,11 @@
     <section class="plan" aria-label={started ? 'Run' : 'Plan'}>
       <h3>
         {#if started}{headline}
-        {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost}, ${cost.toFixed(2)}{/if}{/if}
+        {:else}{stepCount} {stepCount === 1 ? 'step' : 'steps'} to run{#if timeText}, {timeText}{/if}{#if cost + reserved}, {reserved ? 'up to ' : ''}${(cost + reserved).toFixed(2)}{/if}{/if}
       </h3>
-      {#if runOn && started && !done && startedThere}<p class="muted">It keeps going on {runOn} if this Mac sleeps or the app is closed.</p>{/if}
+      {#if runOn && started && !done && startedThere}<p class="muted">It keeps going on {runOnTitle} if this Mac sleeps or the app is closed.</p>{/if}
       {#if !started && !elsewhere && hosts !== null}<p class="muted">Steps run on {here}. <button class="link" onclick={() => onsettings?.('compute')}>Add a remote server or cloud GPU</button></p>{/if}
-      {#if total?.unknown.length && !started}{@const unknown = titlesOf(total.unknown)}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(unknown)}, which {unknown.length === 1 ? 'has' : 'have'} not run {runOn ? `on ${runOn}` : 'here'} before.</p>{/if}
+      {#if total?.unknown.length && !started}{@const unknown = titlesOf(total.unknown)}<p class="muted">{timeText ? 'Not counting' : 'No estimate yet for'} {list(unknown)}, which {unknown.length === 1 ? 'has' : 'have'} not run {runOn ? `on ${runOnTitle}` : 'here'} before.</p>{/if}
       <ol class="steps">
         {#each rows as n (n.id)}
           <!-- a feature in several steps is one row: its state, time, cost and details are its steps' together -->
@@ -513,9 +583,9 @@
               {#if done}<span class="muted">Already done</span>
               {:else}{#each placed as p (p.id)}
                 {#if p.service}{p.service}
-                {:else if p.place && !started && on && (p.options?.length ?? 0) > 1}
+                {:else if p.place && !started && on && (p.options ?? []).filter(usablePlace).length > 1}
                   <select aria-label={`Where ${title(placed.length === 1 ? n : p)} runs`} value={places[p.id] ?? p.place} onchange={(e) => choosePlace(p.id, e.currentTarget.value)}>
-                    {#each p.options ?? [] as o (o)}<option value={o}>{placeLabel(p, o, plan.places)}</option>{/each}
+                    {#each (p.options ?? []).filter(usablePlace) as o (o)}<option value={o}>{placeLabel(p, o, plan.places)}</option>{/each}
                   </select>
                 {:else if p.place}{placeName(p.place, plan.places)}
                 {:else if p.where}{p.where}   <!-- a CLI from before plans named places -->
@@ -592,10 +662,12 @@
       {#each view.problems as p (p)}<p class="error">{p}</p>{/each}
       {#if view.status && view.status !== 'succeeded'}<p class="error">The run {view.status}. The step marked failed says why.</p>{/if}
       {#each why as b (b)}<p class="error">{b[0].toUpperCase() + b.slice(1).replace(/\.$/, '')}.</p>{/each}
-      {#if runOn && !started && keysHeld}<p class="error">{list(keyNeeders)} {keyNeeders.length === 1 ? 'needs' : 'need'} your keys on {runOn}:
+      {#if runOn && !started && keysHeld}<p class="error">{list(keyNeeders)} {keyNeeders.length === 1 ? 'needs' : 'need'} your keys on {runOnTitle}:
         <button class="link" onclick={() => onsettings?.('compute')}>allow it in Settings</button>, or turn {keyNeeders.length === 1 ? 'it' : 'them'} off.</p>{/if}
-      {#if runOn && !started && plan && remote?.ok}<p class="muted">{runOn} receives the video and what every step makes.</p>{/if}
-      {#if runOn && !started && plan && !remote && !remoteError}<p class="muted">Checking {runOn}…</p>{/if}
+      {#if runOn && !started && plan && remote?.ok}<p class="muted">{runOnTitle} receives the video and what every step makes{#if remote.pod}, on a GPU
+        reserved for up to {duration(remote.pod.deadline_s)}: ${remote.pod.reserved_usd.toFixed(2)} at most{/if}.</p>{/if}
+      {#if runOn && !started && plan && !remote && !remoteError}<p class="muted">Checking {runOnTitle}…</p>{/if}
+      {#if !started}{#each failing as f (f.m)}<p class="muted">{f.title} is not offered: {f.why}. <button class="link" onclick={() => onsettings?.('compute')}>Test it in Settings</button></p>{/each}{/if}
       {#if busy}<p class="muted">{busy}</p>{/if}
       {#if machinesError && !started}<p class="error">Could not list the remote servers or the cloud GPU: {machinesError}</p>{/if}
       {#if keysError && !started}<p class="error">Could not read {keysError}</p>{/if}
@@ -608,6 +680,9 @@
       {:else if setup?.state === 'failed'}
         <p class="error">Setting up the pipeline failed: {setup.problem}. <button class="link" onclick={retrySetup} disabled={!!busy || (started && !done)}>Try again</button></p>
       {/if}
+      {#if view.pod?.deleted}<p class="muted">Its pod was deleted: ${view.pod.cost_usd.toFixed(2)}.</p>
+      {:else if view.pod}<p class="error">RunPod still has its pod{view.pod.may_still_run ? ` (${view.pod.may_still_run})` : ''}:
+        <button class="link" onclick={() => openExternal('https://console.runpod.io/pods')}>delete it in RunPod's console</button>.</p>{/if}
       {#if view.imported}<p>Imported into the library.</p>
       {:else if started && !done && view.status === 'succeeded'}<p class="muted">Importing into the library…</p>{/if}
     </div>
@@ -619,7 +694,7 @@
     {:else if started && !done}
       <button onclick={cancel}>Cancel run</button>
     {:else if !started && plan}
-      <button class="primary" onclick={run} disabled={!canRun}>{runOn ? `Start run on ${runOn}` : 'Start run'}</button>
+      <button class="primary" onclick={run} disabled={!canRun}>{runOn ? `Start run on ${runOnTitle}` : 'Start run'}</button>
     {/if}
   </footer>
 </section>
