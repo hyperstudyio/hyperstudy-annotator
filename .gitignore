@@ -12,3 +12,5 @@ test-results/
 playwright-report/
 # the uv the app bundles, fetched by scripts/fetch-uv.sh (never committed)
 src-tauri/binaries/
+# the docs demo's video, bundle and screenshots (scripts/docs-demo: made again from the scene)
+scripts/docs-demo/out/
