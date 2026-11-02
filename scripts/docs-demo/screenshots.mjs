@@ -1,7 +1,7 @@
 // The docs' screenshots of the app, in browser mode: the Annotator on the demo bundle (make-demo.mjs), and Extract and
 // Settings on the scripted stand-in (?pipeline-demo). Needs the dev server (npm run dev) and the demo served with CORS:
 //   node scripts/docs-demo/make-demo.mjs
-//   (cd scripts/docs-demo/out && python3 ../serve.py) &      # http://127.0.0.1:8799
+//   python3 scripts/docs-demo/serve.py &                     # out/, at http://127.0.0.1:8799
 //   node scripts/docs-demo/screenshots.mjs [out]             (out: scripts/docs-demo/out/shots)
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
@@ -18,7 +18,11 @@ const browser = await chromium.launch({ channel: 'chrome' });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
 /** A screenshot of the window, or of its left part (clip: width and height in CSS pixels) when the page uses only that. */
 const shot = async (page, name, clip) => {
-  await page.waitForTimeout(400);
+  // what is on screen is the page's last state: no toast over it, its fade (and any other transition) ended, and two
+  // frames drawn since the last change (the overlay and timeline draw in requestAnimationFrame)
+  await page.locator('.toast.show').waitFor({ state: 'detached' });
+  await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)));
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   await page.screenshot({ path: join(out, `${name}.png`), ...(clip ? { clip: { x: 0, y: 0, ...clip } } : {}) });
   console.log(name);
 };
@@ -73,7 +77,6 @@ const bar = (page, text) => page.locator('.tl-content .bar').filter({ hasText: t
   await page.locator('video').evaluate((v) => new Promise((done) => { v.pause(); v.currentTime = 16; v.addEventListener('seeked', done, { once: true }); }));
   await page.locator('[data-group="annotations"] .bar').last().click();
   await page.locator('[data-group="annotations"] .bar').last().click();
-  await page.locator('.toast.show').waitFor({ state: 'detached' });   // the "added" toast, over the row
   await shot(page, 'annotations');
   await page.close();
 }
