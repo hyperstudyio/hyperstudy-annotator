@@ -747,6 +747,13 @@ fn ended(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &str, fol
         Ok(Some((_, status))) => finish_remote(state, p, run, host, video, &status),
         Ok(None) => {
             let why = said.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
+            // a pod's run that ended so may have left its pod: deleted, or the run kept listed to try again
+            if host == pipeline::POD {
+                if let Err(e) = delete_pod(p, run) {
+                    crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "running", Some(&format!("{why}; its pod could not be deleted yet: {e}")))?;
+                    return Ok(None);
+                }
+            }
             crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "failed", Some(&why))?;
             Ok(None)
         }
@@ -793,11 +800,9 @@ fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &
             // a pod lingers after its run for a fetch, billed: deleted now (by its follower already, if it had one); one
             // that cannot be yet stays listed, so the next look deletes it again
             if host == pipeline::POD {
-                if let Err(e) = p.one(&["remote", "cancel", pipeline::POD, run], "canceled").map_err(|e| e.to_string()) {
-                    if !pod_gone(&e) {
-                        set("running", Some(&format!("It ended ({ended}) on RunPod; its pod could not be deleted yet: {e}")))?;
-                        return Ok(None);
-                    }
+                if let Err(e) = delete_pod(p, run) {
+                    set("running", Some(&format!("It ended ({ended}) on RunPod; its pod could not be deleted yet: {e}")))?;
+                    return Ok(None);
                 }
             }
             set(now, why.as_deref())?;
@@ -862,10 +867,7 @@ pub fn ended_here(run: &str, status: std::result::Result<Value, String>) -> std:
 /// it has and deletes the pod (`remote cancel runpod`), so it does not wait out its deadline. Why the run failed; or,
 /// the pod not deleted, why the run is still listed (each look tries again).
 fn pod_lost(p: &Pipeline, run: &str, what: &str) -> std::result::Result<String, String> {
-    match p.one(&["remote", "cancel", pipeline::POD, run], "canceled") {
-        Ok(_) => Ok(format!("{what}; its pod was deleted")),
-        Err(e) => Err(format!("{what}; its pod could not be deleted yet: {e}")),
-    }
+    delete_pod(p, run).map(|()| format!("{what}; its pod was deleted")).map_err(|e| format!("{what}; its pod could not be deleted yet: {e}"))
 }
 
 /// Follow again a run this app started on a lab server (after the app was closed while it went on), as
@@ -979,14 +981,20 @@ pub async fn pipeline_remote_dismiss(state: State<'_, AppState>, run: String) ->
     if r.host == pipeline::POD && r.state == "running" {
         let p = pipeline(&state)?;
         let id = r.run.clone();
-        let deleted = blocking(move || p.one(&["remote", "cancel", pipeline::POD, &id], "canceled")).await;
-        if let Err(e) = deleted.map_err(|e| e.to_string()) {
-            if !pod_gone(&e) {
-                return Err(Error::Bundle(format!("Its pod could not be deleted, so the run is kept: {e}. RunPod's console can delete it.")));
-            }
+        if let Err(e) = blocking(move || Ok(delete_pod(&p, &id))).await? {
+            return Err(Error::Bundle(format!("Its pod could not be deleted, so the run is kept: {e}. RunPod's console can delete it.")));
         }
     }
     crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "dismissed", r.problem.as_deref())
+}
+
+/// Delete the pod a run on RunPod has, if it still has one (`remote cancel runpod`): Ok once it is gone, by this or
+/// before; why not, if RunPod could not be reached.
+fn delete_pod(p: &Pipeline, run: &str) -> std::result::Result<(), String> {
+    match p.one(&["remote", "cancel", pipeline::POD, run], "canceled").map_err(|e| e.to_string()) {
+        Err(e) if !pod_gone(&e) => Err(e),
+        _ => Ok(()),
+    }
 }
 
 /// Whether the pipeline's error says a run's pod is gone already (deleted, removed itself, or never made here).
