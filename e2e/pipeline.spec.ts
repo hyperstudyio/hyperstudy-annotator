@@ -1392,6 +1392,24 @@ test('a run shown again on a machine whose Test fails, and which cannot be reach
   await expect(dialog.getByRole('button', { name: 'Start run on lab' })).toHaveCount(0);
 });
 
+test("a machine's older Test, answering after a newer one, does not undo it", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = globalThis as { __holdHost?: Promise<void>; __release?: () => void };
+    w.__holdHost = new Promise((r) => { w.__release = r; });                   // the first load's Test of lab: held
+  });
+  const dialog = await planned(page, '/?pipeline-demo=remote');
+  await page.evaluate(() => { (globalThis as { __holdHost?: Promise<void> }).__holdHost = undefined; });
+  await settingsAt(page, /^Compute$/);
+  await toExtract(page);                                                          // tested again: it passes
+  await expect(runOn(dialog, 'lab')).toBeVisible();
+  await page.evaluate(() => {                                                     // the first one now fails, late
+    const w = globalThis as { __labDown?: boolean; __release?: () => void };
+    w.__labDown = true; w.__release!();
+  });
+  await expect(dialog.getByText(/^lab is not offered/)).toHaveCount(0);
+  await expect(runOn(dialog, 'lab')).toBeVisible();
+});
+
 test('RunPod whose key fails its Test is not offered, for a step or a whole run', async ({ page }) => {
   await page.goto('/?pipeline-demo=runpod-key-gone');
   const dialog = page.getByRole('region', { name: 'Extract' });

@@ -268,6 +268,7 @@
   // address and folder), so a name that now leads elsewhere is not taken as tested; an earlier answer stands until the
   // new one comes. `ok`: true, or why not. A pipeline from before the tests offers its machines untested, as before.
   let tests = $state<Record<string, { of: string; ok: true | string }>>({});
+  const testOf: Record<string, ReturnType<typeof latestOnly>> = {};
   const testedAs = (m: string) => m === POD ? (cloud?.runpod?.enabled ? m : null) : m === 'cloud' ? (cloud?.enabled ? m : null)
     : (() => { const h = (hosts ?? []).find((x) => `ssh-${x.name}` === m); return h ? machineId(h) : null; })();
   const usable = (m: string) => tests[m]?.ok === true && tests[m].of === testedAs(m);
@@ -283,9 +284,11 @@
         ...(c?.runpod?.enabled ? [[POD, POD, () => checked(api.checkCloud('runpod'))] as [string, string, () => Promise<unknown>]] : []),
         ...(c?.enabled ? [['cloud', 'cloud', () => checked(api.checkCloud('aws'))] as [string, string, () => Promise<unknown>]] : []),
       ];
-      for (const [m, of, test] of asked) test().then(() => true as const, (e) => /invalid choice/.test(String(e)) ? true as const
-          : String(e).replace(/^(Error: )?(the pipeline failed: )?/, '').replace(/\.$/, ''))
-        .then((ok) => {
+      // each machine's newest Test alone answers: an older, slower one (asked on an earlier load) never overwrites it
+      for (const [m, of, test] of asked) {
+        const said = test().then(() => true as const, (e) => /invalid choice/.test(String(e)) ? true as const
+          : String(e).replace(/^(Error: )?(the pipeline failed: )?/, '').replace(/\.$/, ''));
+        (testOf[m] ??= latestOnly())(said, (ok) => {
           if (testedAs(m) !== of) return;   // removed, or added again elsewhere, while it was tested
           tests = { ...tests, [m]: { of, ok } };
           if (ok === true || started) return;
@@ -293,7 +296,8 @@
           const away = runOn !== null && (runOn === POD ? m === POD : m === `ssh-${runOn}`);
           if (away) runOn = null;
           if (dropPlaces((p) => p.split(':')[0] !== m) || away) makePlan(true);
-        });
+        }, () => {});
+      }
     });
   });
   const titleOfMachine = (m: string) => m === POD ? 'RunPod' : m === 'cloud' ? 'AWS' : m.replace(/^ssh-/, '');
