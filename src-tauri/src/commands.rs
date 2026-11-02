@@ -1029,7 +1029,17 @@ pub async fn pipeline_cancel(state: State<'_, AppState>, run: Option<String>) ->
     if let pipeline::Cancel::Stop(pid) = state.control.cancel() {
         pipeline::stop_process(pid)?;
     }
-    // it may have reached the server just now: canceled there too ("no run" there: nothing reached it)
+    // it may have reached the server just now: canceled there too ("no run" there: nothing reached it). A pod is made
+    // before the run starts on it: deleted, or (RunPod not reached) the run kept listed, so the next look deletes it
+    if host == pipeline::POD {
+        let id = run.clone();
+        if let Err(e) = blocking(move || Ok(delete_pod(&p, &id))).await? {
+            let why = format!("Canceled before it started on RunPod; its pod could not be deleted yet: {e}");
+            crate::remote_runs::set_state(&state.db.lock().unwrap(), &run, "running", Some(&why))?;
+            return Err(Error::Bundle(why));
+        }
+        return Ok(());
+    }
     blocking(move || { let _ = p.one(&["remote", "cancel", &host, &run], "canceled"); Ok(()) }).await
 }
 
