@@ -747,8 +747,14 @@ fn ended(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &str, fol
         Ok(Some((_, status))) => finish_remote(state, p, run, host, video, &status),
         Ok(None) => {
             let why = said.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
-            // a pod's run that ended so may have left its pod: deleted, or the run kept listed to try again
             if host == pipeline::POD {
+                // started there, the run may go on on its pod (its follower lost it, as SSH can be): kept listed, for the
+                // listing to look at it there (seen_there), never its pod deleted with it
+                if state.remote_started.load(std::sync::atomic::Ordering::SeqCst) {
+                    crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "running", Some(&why))?;
+                    return Ok(None);
+                }
+                // refused before it started: a pod made for it is deleted, or the run kept listed to try again
                 if let Err(e) = delete_pod(p, run) {
                     crate::remote_runs::set_state(&state.db.lock().unwrap(), run, "running", Some(&format!("{why}; its pod could not be deleted yet: {e}")))?;
                     return Ok(None);
@@ -946,7 +952,13 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
                         _ => continue,   // imported or canceled: no longer listed
                     }
                 }
-                Some(Seen::Going { done, total }) => { row["done"] = done.into(); row["total"] = total.into(); }
+                Some(Seen::Going { done, total }) => {
+                    if r.problem.is_some() {   // going after all (its follower had lost it): why no longer holds
+                        crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "running", None)?;
+                        row["problem"] = Value::Null;
+                    }
+                    row["done"] = done.into(); row["total"] = total.into();
+                }
                 Some(Seen::Failed(why)) => failed(why, &mut row)?,
                 // a pod not deleted (RunPod not reached) is still billed: the run stays listed, and the next look
                 // deletes it again
