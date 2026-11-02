@@ -373,8 +373,18 @@ export function fakePipeline(stepMs = 400, { rejectRun = false, slowStart = fals
         secrets: n.id === 'captions' ? ['ANTHROPIC_API_KEY'] : [], settings: n.settings ?? [] }));
       // `gated`: the steps whose models are gated, as the pipeline's manifests declare them (`objects`: its steps alone)
       const extra = gated ? GATED : objects ? OBJECTS : [];
-      return { models: [...all, ...extra.flatMap((s) => s.models)],
-               nodes: nodes && [...nodes, ...extra.map(({ models: _, ...s }) => noPartOf ? { ...s, part_of: undefined } : s)] };
+      // registered, as the pipeline has it, though the full graph runs the captions that name the objects instead
+      const replaced = nodes?.find((s) => s.node === 'vlm.shot-captions-objects@1.0.0');
+      const others = replaced ? [{ ...replaced, node: 'vlm.shot-captions@1.0.0' }] : [];
+      return { models: [...all, ...extra.flatMap((s) => s.models), ...others.flatMap((s) => all.filter((m) => m.node === replaced!.node).map((m) => ({ ...m, node: s.node })))],
+               nodes: nodes && [...nodes, ...extra.map(({ models: _, ...s }) => noPartOf ? { ...s, part_of: undefined } : s), ...others] };
+    },
+    // the full graph's steps (`graph validate`'s `uses`, perception 0.1.6); an older pipeline does not say
+    async graphSteps(graph) {
+      if (!graphs.some((g) => g.file === graph) || oldCli) throw new Error(`the pipeline failed: FileNotFoundError: [Errno 2] No such file or directory: '${graph}'`);
+      if ((globalThis as { __graphCheckFails?: boolean }).__graphCheckFails) throw new Error('the pipeline failed: uv sync failed (network)');
+      if (oldChecks) return null;
+      return [...plan.nodes.map((n) => n.uses), ...(gated ? GATED : objects ? OBJECTS : []).map((s) => s.node)];
     },
     // the app's keychain: names and whether stored (values are kept here only to check none reaches the page)
     async keys() { return keyStatus(); },

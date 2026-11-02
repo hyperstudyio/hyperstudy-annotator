@@ -726,6 +726,16 @@ test('Models lists every step with its models, where it runs, a licence that lim
   await expect(faces).toContainText('Runs on your computers');
   await expect(settings.getByRole('combobox', { name: 'Shot captions: model' })).toHaveValue('claude-haiku-5-5');
   await expect(settings.getByRole('region', { name: 'Hugging Face' })).toHaveCount(0);   // no gated model: no key asked for
+  // the full graph's steps only: not the captions it replaced, which the pipeline still has registered
+  await expect(settings.getByRole('listitem', { name: 'Shot captions' })).toHaveCount(1);
+});
+
+test("Models lists every step, and says why, when asking which steps the full graph runs fails", async ({ page }) => {
+  await page.addInitScript(() => { (globalThis as { __graphCheckFails?: boolean }).__graphCheckFails = true; });
+  await page.goto('/?pipeline-demo');
+  const settings = await settingsAt(page, /^Models$/);
+  await expect(settings.getByText('Every step the pipeline has is listed, not only the full graph\'s: uv sync failed (network)')).toBeVisible();
+  await expect(settings.getByRole('listitem', { name: 'Shot captions' })).toHaveCount(2);
 });
 
 test("the captions model chosen in Models is what Extract plans with, and Extract can still change it for a run", async ({ page }) => {

@@ -15,10 +15,12 @@
   import { loadDefaults, saveDefault } from '../stepDefaults';
   import { choiceLabel, choiceName, keyRows, oncePerModel, stepGroups, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
   import type { LicenceMode } from '../types';
-  let { api, keys, cli, models, problem = null, onkeys, onbusy }: {
+  let { api, keys, cli, models, problem = null, allSteps = null, onkeys, onbusy }: {
     api: PipelineApi; keys: KeyStatus[]; cli: CliKeys | null;
     /** the models and steps; null: not known (an older pipeline, or the listing failed: `problem`) */
     models: ModelsListing | null; problem?: string | null;
+    /** why every step registered is listed, not the full graph's (asking which it runs failed), or null */
+    allSteps?: string | null;
     onkeys: (now: KeyStatus[]) => void; onbusy: (busy: string | null) => void;
   } = $props();
   const rows = $derived(keyRows(keys, cli));
@@ -92,6 +94,7 @@
   <div class="set-head"><h2 id="models-heading">The steps' models</h2></div>
   <p class="muted">What each step runs, and what it needs from you. The choices here are the defaults; Extract can change them for one run.</p>
   {#if problem}<p class="error">Could not list the models: {problem}</p>{/if}
+  {#if allSteps}<p class="error">Every step the pipeline has is listed, not only the full graph's: {allSteps}</p>{/if}
   {#if models}
     <ul class="set-rows steps">
       {#each groups as { step: s, parts } (s.node)}

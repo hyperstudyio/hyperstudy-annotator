@@ -87,6 +87,13 @@ export function stepGroups(steps: StepInfo[]): { step: StepInfo; parts: StepInfo
   const head = (s: StepInfo) => (s.part_of && s.part_of !== id(s) && steps.find((x) => id(x) === s.part_of)) || s;
   return steps.filter((s) => head(s) === s).map((s) => ({ step: s, parts: [s, ...steps.filter((x) => x !== s && head(x) === s)] }));
 }
+/** The models and steps of the steps a graph runs (STEPS, by ref): the pipeline lists every step it has registered,
+ *  some only in other graphs (a step the full graph has replaced keeps its title). All of them when STEPS is not known. */
+export function ofGraph(listing: ModelsListing, steps: string[] | null): ModelsListing {
+  if (!steps) return listing;
+  const has = new Set(steps);
+  return { models: listing.models.filter((m) => has.has(m.node)), nodes: listing.nodes && listing.nodes.filter((s) => has.has(s.node)) };
+}
 /** Each model once, where it first appears: the entry with a source when there is one, as a step that only records a
  *  model another step downloads (the objects layer's SAM 3) declares none. */
 export function oncePerModel<M extends { id: string; source: string | null }>(models: M[]): M[] {
@@ -172,6 +179,8 @@ export interface PipelineApi {
   cloudKeys(on: boolean): Promise<CloudStatus>;
   /** The models the steps use, and the steps (`perception models list`). */
   models(): Promise<ModelsListing>;
+  /** The steps a graph runs, by ref (`graph validate`'s `uses`); null from a pipeline before it said (0.1.6). */
+  graphSteps(graph: string): Promise<string[] | null>;
   /** The keys the app keeps, stored or not (never their values); store one, or remove it. */
   keys(): Promise<KeyStatus[]>;
   setKey(name: string, value: string): Promise<KeyStatus[]>;
@@ -587,6 +596,7 @@ export async function tauriPipeline(): Promise<PipelineApi> {
     checkKey: (name) => invoke<CheckResult>('pipeline_key_check', { name }),
     cloud: (on, provider) => invoke<CloudStatus>('pipeline_cloud', { on, provider }),
     cloudKeys: (on) => invoke<CloudStatus>('pipeline_cloud_keys', { on }),
+    graphSteps: async (graph) => { const r = await invoke<{ uses?: Record<string, string> }>('pipeline_graph_check', { graph }); return r.uses ? Object.values(r.uses) : null; },
     models: async () => { const r = await invoke<{ models: ModelInfo[]; nodes?: StepInfo[] }>('pipeline_models'); return { models: r.models, nodes: r.nodes ?? null }; },
     keys: () => invoke<KeyStatus[]>('keys_status'),
     setKey: (name, value) => invoke<KeyStatus[]>('key_set', { name, value }),

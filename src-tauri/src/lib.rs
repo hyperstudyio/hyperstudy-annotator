@@ -70,6 +70,7 @@ pub fn run() {
             commands::pipeline_cloud,
             commands::pipeline_cloud_keys,
             commands::pipeline_models,
+            commands::pipeline_graph_check,
             commands::pipeline_plan,
             commands::pipeline_run,
             commands::pipeline_cancel,

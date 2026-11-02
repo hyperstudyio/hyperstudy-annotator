@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysSent, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysSent, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, ofGraph, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -453,4 +453,15 @@ test('keysSent names the keys the steps declare that are set here, in the keycha
 test('keysSent names none when no step is known or none of their keys is set', () => {
   expect(keysSent(null, keptKeys, null)).toEqual([]);
   expect(keysSent([stepInfo('audio.diarize@1.1.0', ['HF_TOKEN'])], keptKeys, null)).toEqual([]);
+});
+
+test("Settings lists the steps the full graph runs, not every step registered; all of them if the pipeline does not say", () => {
+  const info = (node: string): StepInfo => ({ node, title: 'Shot captions', service: 'Anthropic API', secrets: ['ANTHROPIC_API_KEY'], settings: [] });
+  const m = (node: string): ModelInfo => ({ node, id: 'claude-haiku-5-5', source: null, size_gb: null, gated: false, licence_mode: 'api-terms' });
+  const listing = { models: [m('vlm.shot-captions@1.0.0'), m('vlm.shot-captions-objects@1.0.0')],
+    nodes: [info('vlm.shot-captions@1.0.0'), info('vlm.shot-captions-objects@1.0.0')] };
+  expect(ofGraph(listing, ['core.decode@1.1.0', 'vlm.shot-captions-objects@1.0.0'])).toEqual({
+    models: [m('vlm.shot-captions-objects@1.0.0')], nodes: [info('vlm.shot-captions-objects@1.0.0')] });
+  expect(ofGraph(listing, null)).toBe(listing);
+  expect(ofGraph({ models: listing.models, nodes: null }, ['vlm.shot-captions@1.0.0'])).toEqual({ models: [m('vlm.shot-captions@1.0.0')], nodes: null });
 });

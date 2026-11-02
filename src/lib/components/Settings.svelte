@@ -5,19 +5,19 @@
 </script>
 
 <script lang="ts">
-  // Settings, by what each thing is for: Models (every model the steps use: where it runs, its licence, the choices a
-  // step offers, and what it needs from you: a provider's key, access to a gated model), Compute (where steps can run:
-  // this computer, remote servers, cloud GPU providers, each with what it needs, its key included) and App (its
-  // version and updates). Keys and connections each have a Test. A key appears where
-  // it is used, not in a list of keys. This is the one place they are set; Extract shows what a run will use and sends
-  // you here, and loads them again (and plans again) when you go back. Loaded again each time this page is shown.
+  // Settings, by what each thing is for: Models (every model the full graph's steps use: where it runs, its licence,
+  // the choices a step offers, and what it needs from you: a provider's key, access to a gated model), Compute (where
+  // steps can run: this computer, remote servers, cloud GPU providers, each with what it needs, its key included) and
+  // App (its version and updates). Keys and connections each have a Test. A key appears where it is used, not in a list
+  // of keys. This is the one place they are set; Extract shows what a run will use and sends you here, and loads them
+  // again (and plans again) when you go back. Loaded again each time this page is shown.
   import { tick, untrack } from 'svelte';
   import Models from './Models.svelte';
   import Servers from './Servers.svelte';
   import Cloud from './Cloud.svelte';
   import { DOCS_URL, openExternal } from '../links';
   import type { Updates } from '../updates.svelte';
-  import { keysSent, placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
+  import { FULL_GRAPH, keysSent, ofGraph, placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
 
   let { api, updates = null, active = true, holdRelaunch = null, relaunchCaution = null, show = null, onshown, onbusy }: {
     api: PipelineApi | null; updates?: Updates | null; active?: boolean;
@@ -37,7 +37,7 @@
   let cloud = $state<CloudStatus | null>(null);
   let doctor = $state<Doctor | null>(null);
   let models = $state<ModelsListing | null>(null);   // null: an older pipeline without `models`, or not listed yet
-  let problems = $state<{ keys?: string; models?: string; servers?: string; cloud?: string; computer?: string }>({});
+  let problems = $state<{ keys?: string; models?: string; steps?: string; servers?: string; cloud?: string; computer?: string }>({});
   let loaded = $state(false);
   // a tab per purpose; App (the version and its updates) is the only one without a pipeline (in a browser)
   type Tab = 'models' | 'compute' | 'app';
@@ -58,17 +58,23 @@
   const older = (r: PromiseSettledResult<unknown>, cmd: string) => r.status === 'rejected' && new RegExp(`invalid choice: '${cmd}'`).test(String(r.reason));
   const reason = (r: PromiseSettledResult<unknown>) => r.status === 'rejected' ? String(r.reason) : undefined;
 
+  // the full graph's steps; null for a pipeline without a full graph (as Extract finds it), whose steps are every step
+  const fullSteps = async (api: PipelineApi) => (await api.graphs()).some((x) => x.file === FULL_GRAPH) ? api.graphSteps(FULL_GRAPH) : null;
   async function load(api: PipelineApi) {
-    const [k, c, h, cl, d, m] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor(), api.models()]);
+    const [k, c, h, cl, d, m, g] = await Promise.allSettled([api.keys(), api.cliKeys(), api.hosts(), api.cloud(), api.doctor(), api.models(), fullSteps(api)]);
     if (k.status === 'fulfilled') keys = k.value;
     cli = c.status === 'fulfilled' ? c.value : null;
     hosts = h.status === 'fulfilled' ? h.value : older(h, 'hosts') ? null : hosts;
     cloud = cl.status === 'fulfilled' ? cl.value : older(cl, 'cloud') ? null : cloud;
     if (d.status === 'fulfilled') doctor = d.value;
-    models = m.status === 'fulfilled' ? m.value : null;
+    // the full graph's steps: with it, Extract plans nothing else (its graph choice is only for a pipeline without one).
+    // Every step registered if the pipeline does not say which (before 0.1.6), or has no full graph; if asking failed,
+    // with why
+    models = m.status === 'fulfilled' ? ofGraph(m.value, g.status === 'fulfilled' ? g.value : null) : null;
     problems = {
       keys: [reason(k), older(c, 'keys') ? undefined : reason(c)].filter(Boolean).join('; ') || undefined,
       models: older(m, 'models') ? undefined : reason(m),
+      steps: m.status === 'fulfilled' ? reason(g)?.replace(/^(Error: )?(the pipeline failed: )?/, '') : undefined,
       servers: older(h, 'hosts') ? undefined : reason(h),
       cloud: older(cl, 'cloud') ? undefined : reason(cl),
       computer: reason(d),
@@ -121,7 +127,7 @@
   <div class="panel-body" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
     {#if tab === 'models' && api}
       {#if problems.keys}<p class="error top">Could not read the keys: {problems.keys}</p>{/if}
-      <Models {api} {keys} {cli} {models} problem={problems.models} onkeys={(now) => (keys = now)} onbusy={busy} />
+      <Models {api} {keys} {cli} {models} problem={problems.models} allSteps={problems.steps} onkeys={(now) => (keys = now)} onbusy={busy} />
       <p class="foot muted">Keys are kept in this computer's keychain, and each step gets only the keys it needs.</p>
     {:else if tab === 'compute' && api}
       <!-- what this computer can run: one line, with the steps it cannot and why only when there are some -->
