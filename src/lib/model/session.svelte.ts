@@ -4,7 +4,7 @@
 import { Bundle, extent } from './bundle';
 import { iou } from '../geometry';
 import {
-  FORMAT, ImportError, NOT_PERSON, RunUnknownError, UNKNOWN, editsFile, follow, fold, lastBatch, pairKey, readCorrectionsFile, unknownRefs,
+  FORMAT, ImportError, NOT_PERSON, RunUnknownError, UNKNOWN, editsFile, follow, fold, lastUndoable, live, newBatch, pairKey, readCorrectionsFile, unknownRefs,
   type AnnotationType, type CorrectionsFile, type Note, type Op,
 } from './corrections';
 import { View, type Tab } from './view.svelte';
@@ -56,8 +56,8 @@ export function coVisible(tracks: FaceTrack[]): [FaceTrack, FaceTrack][] {
   return pairs;
 }
 
-/** Now, or 1 ms after the newest op if that is not earlier: two commits never share a timestamp, so undo (which
- *  removes the ops sharing the newest one) never takes two commits made within the same millisecond. */
+/** Now, or 1 ms after the newest op if that is not earlier: a log's times only increase. Batches are named by `batch`
+ *  now, but logs from before it (v2) were batched by `at`, so two commits never share a timestamp there either. */
 export function stampAfter(prev: string | undefined, now = new Date()): string {
   const p = prev ? Date.parse(prev) : NaN;
   return new Date(!Number.isNaN(p) && p >= now.getTime() ? p + 1 : now.getTime()).toISOString();
@@ -69,7 +69,10 @@ export class Session {
   readonly view: View;
   readonly playback = new Playback();
 
-  ops = $state.raw<Op[]>([]);
+  /** The log as stored: every op appended, undone ones and the reverts that undid them included. */
+  log = $state.raw<Op[]>([]);
+  /** What the edits add up to: the log without undone batches and reverts. Every view and export reads this. */
+  readonly ops = $derived(live(this.log));
   readonly S = $derived(fold(this.ops));
   selection = $state<Selection | null>(null);
   tab = $state<Tab>('inspect');
@@ -125,7 +128,7 @@ export class Session {
     (bundle.layers.faces?.people ?? []).forEach((p, i) => this.#colour.set(p.id, PALETTE[i % PALETTE.length]));
   }
 
-  async load() { this.ops = await this.store.load(); }
+  async load() { this.log = await this.store.load(); }
 
   /** Load the py-feat side file once; views that need it call this and read `detail`. */
   needDetail(source: { file<T>(path: string): Promise<T> }) {
@@ -139,22 +142,21 @@ export class Session {
 
   // --- corrections ------------------------------------------------------------------------------------------------
 
-  /** Commit ops together (they share a timestamp, so undo removes them together). */
+  /** Commit ops together: one batch, which one undo takes back. */
   async commit(...ops: Op[]) {
-    const at = stampAfter(this.ops.at(-1)?.at);
-    const stamped = ops.map((op) => ({ ...op, at }) as Op);
-    const before = this.ops.length;
+    const stamped = newBatch(ops, stampAfter(this.log.at(-1)?.at), this.bundle.key);
+    const before = this.log.length;
     const count = await this.store.append(stamped);
     // another writer (another tab of this bundle) appended in between: show the stored log, which holds both
-    this.ops = count === before + stamped.length ? [...this.ops, ...stamped] : await this.store.load();
+    this.log = count === before + stamped.length ? [...this.log, ...stamped] : await this.store.load();
   }
 
+  /** Take back the newest edit still in effect, by appending a revert of its batch (the log never shrinks). */
   async undo() {
-    const stored = await this.store.load();
-    const n = lastBatch(stored);
-    if (!n) return;
-    await this.store.truncate(stored.length - n);
-    this.ops = stored.slice(0, stored.length - n);
+    this.log = await this.store.load();
+    const batch = lastUndoable(this.log);
+    if (!batch) return;
+    await this.commit({ op: 'revert', batches: [batch] });
     this.toast('Undone');
   }
 
@@ -187,7 +189,7 @@ export class Session {
 
   async replaceCorrections(ops: Op[]) {
     await this.store.replace(ops);
-    this.ops = await this.store.load();
+    this.log = await this.store.load();
     this.selection = null;
   }
 

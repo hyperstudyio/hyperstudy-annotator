@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { FORMAT, ImportError, NOT_PERSON, UNKNOWN, follow, fold, lastBatch, newType, readCorrectionsFile, typesIn, unknownRefs, type AnnotationType, type Op } from './corrections';
+import {
+  FORMAT, ImportError, NOT_PERSON, UNKNOWN, batchOf, follow, fold, lastUndoable, live, newBatch, newType, readCorrectionsFile, typesIn, unknownRefs,
+  upgrade, type AnnotationType, type Op,
+} from './corrections';
 
 const SHA = 'a'.repeat(64);
 
@@ -68,14 +71,55 @@ describe('fold', () => {
   });
 });
 
-test('undo removes exactly the ops committed together', () => {
-  const ops: Op[] = [
-    { op: 'person.rename', person: 'person:A', name: 'x', at: 't1' },
-    { op: 'person.create', person: 'person:New 1', name: 'y', at: 't2' },
-    { op: 'track.assign', track: 'face:4', person: 'person:New 1', at: 't2' },
-  ];
-  expect(lastBatch(ops)).toBe(2);
-  expect(lastBatch([])).toBe(0);
+describe('batches and undo', () => {
+  const rename = (name: string, batch: string): Op => ({ op: 'person.rename', person: 'person:A', name, batch });
+
+  test('undo takes back exactly the ops committed together, newest edit still in effect first', () => {
+    const ops: Op[] = [
+      rename('x', 'b1'),
+      { op: 'person.create', person: 'person:New 1', name: 'y', batch: 'b2' },
+      { op: 'track.assign', track: 'face:4', person: 'person:New 1', batch: 'b2' },
+    ];
+    expect(lastUndoable(ops)).toBe('b2');
+    const once = [...ops, { op: 'revert', batches: ['b2'], batch: 'r1' } as Op];
+    expect(live(once)).toEqual([ops[0]]);
+    expect(lastUndoable(once)).toBe('b1');   // the revert itself is not what the next undo takes
+    const twice = [...once, { op: 'revert', batches: ['b1'], batch: 'r2' } as Op];
+    expect(live(twice)).toEqual([]);
+    expect(lastUndoable(twice)).toBeNull();
+    expect(lastUndoable([])).toBeNull();
+  });
+
+  test('fold leaves out what was undone, so a name goes back to the one before', () => {
+    const ops: Op[] = [rename('x', 'b1'), rename('y', 'b2'), { op: 'revert', batches: ['b2'], batch: 'r' }];
+    expect(fold(ops).names['person:A']).toBe('x');
+  });
+
+  test('ops from before batches were committed together by sharing their time, and still undo together', () => {
+    const v2: Op[] = [
+      { op: 'person.rename', person: 'person:A', name: 'x', at: 't1' },
+      { op: 'person.create', person: 'person:New 1', name: 'y', at: 't2' },
+      { op: 'track.assign', track: 'face:4', person: 'person:New 1', at: 't2' },
+    ];
+    expect(batchOf(v2[1])).toBe('at:t2');
+    expect(lastUndoable(v2)).toBe('at:t2');
+    expect(live([...v2, { op: 'revert', batches: ['at:t2'], batch: 'r' }])).toEqual([v2[0]]);
+  });
+
+  test('a new batch names each op and shares one batch, keeping what each op says (an op\'s own id included)', () => {
+    const ops = newBatch([{ op: 'entity.include', id: 'face:3', included: false }, rename('x', 'ignored')], 't', 'run-1');
+    expect(ops[0]).toMatchObject({ op: 'entity.include', id: 'face:3', included: false, at: 't', base: 'run-1' });
+    expect(new Set(ops.map((o) => o.op_id)).size).toBe(2);
+    expect(new Set(ops.map((o) => o.batch)).size).toBe(1);
+    expect(ops[1].batch).not.toBe('ignored');
+    expect(newBatch(ops, 't')[0].batch).not.toBe(ops[0].batch);
+  });
+
+  test('a log from before op ids is named by place, the same way every time, and named ops keep their names', () => {
+    const ops: Op[] = [{ op: 'shot.caption', shot: 'shot:1', caption: 'a', at: 't' }, { ...rename('x', 'b'), op_id: 'kept' }];
+    expect(upgrade(ops)).toEqual([{ ...ops[0], op_id: 'v2-0', batch: 'at:t' }, ops[1]]);
+    expect(upgrade(ops)).toEqual(upgrade(ops));
+  });
 });
 
 describe('prototype v1 files', () => {
@@ -91,7 +135,7 @@ describe('prototype v1 files', () => {
       { op: 'entity.include', id: 'track:9', included: false, at: 't' },
       { op: 'annotation.type', type: { id: 'type:1', name: 'Mood', options: ['calm', 'tense'], target: 'person' }, at: 't' },
     ]), SHA);
-    expect(ops).toEqual([
+    expect(ops).toEqual(upgrade([
       { op: 'track.assign', track: 'face:126', person: 'person:Person O', at: 't' },
       { op: 'utterance.speaker', utt: 'utt:5', speaker: { kind: 'face', face: 'face:12' }, at: 't' },
       { op: 'utterance.speaker', utt: 'utt:6', speaker: { kind: 'offscreen', voice: 'voice:SPEAKER_00' }, at: 't' },
@@ -99,7 +143,7 @@ describe('prototype v1 files', () => {
       { op: 'person.not_person', person: 'person:Person Q', at: 't' },
       { op: 'entity.include', id: 'face:9', included: false, at: 't' },
       { op: 'annotation.type', type: { id: 'type:1', name: 'Mood', kind: 'category', options: ['calm', 'tense'], target: 'person' }, at: 't' },
-    ]);
+    ]));
   });
 
   test('a file for another video, or an op the bundle cannot hold, is refused', () => {
@@ -108,9 +152,16 @@ describe('prototype v1 files', () => {
     expect(() => readCorrectionsFile({ format: 'something/9', sha256: SHA, ops: [] }, SHA)).toThrow(/unknown corrections format/);
   });
 
-  test('this app\'s own files are read as they are', () => {
-    const ops: Op[] = [{ op: 'shot.caption', shot: 'shot:2', caption: 'two people talk', at: 't' }];
+  test('this app\'s own files are read as they are, reverts included; a v2 file\'s ops are named on the way in', () => {
+    const ops: Op[] = [
+      { op: 'shot.caption', shot: 'shot:2', caption: 'two people talk', at: 't', op_id: 'o1', batch: 'b1' },
+      { op: 'shot.caption', shot: 'shot:2', caption: 'no', at: 'u', op_id: 'o2', batch: 'b2' },
+      { op: 'revert', batches: ['b2'], at: 'v', op_id: 'o3', batch: 'b3' },
+    ];
+    expect(FORMAT).toBe('perception-corrections/3');
     expect(readCorrectionsFile({ format: FORMAT, sha256: SHA, ops }, SHA)).toEqual(ops);
+    const v2 = ops.slice(0, 1).map(({ op_id: _i, batch: _b, ...op }) => op as Op);
+    expect(readCorrectionsFile({ format: 'perception-corrections/2', sha256: SHA, ops: v2 }, SHA)).toEqual([{ ...v2[0], op_id: 'v2-0', batch: 'at:t' }]);
   });
 });
 

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { Bundle, type Layers } from './bundle';
-import { NOT_PERSON, RunUnknownError, UNKNOWN } from './corrections';
+import { NOT_PERSON, RunUnknownError, UNKNOWN, upgrade, type Op } from './corrections';
 import { MemoryStorage, SHA, face, makeBundle } from './fixture.test-helpers';
 import { Session, coVisible, stampAfter } from './session.svelte';
 import { View } from './view.svelte';
@@ -88,14 +88,27 @@ describe('speakers and the review queue', () => {
 });
 
 describe('the op log', () => {
-  test('undo removes the last commit as a whole', async () => {
-    const { s } = session();
+  test('undo takes back the last commit as a whole, by appending a revert: the log only grows', async () => {
+    const storage = new MemoryStorage();
+    const { s } = session(makeBundle({}, 'this-run'), storage);
     await s.commit({ op: 'person.rename', person: 'person:Person A', name: 'x' });
     await s.commit({ op: 'person.create', person: 'person:New 1', name: 'y' }, { op: 'track.assign', track: 'face:3', person: 'person:New 1' });
     expect(s.ops.length).toBe(3);
+    expect(s.ops[1]).toMatchObject({ base: 'this-run', batch: s.ops[2].batch });
+    expect(s.ops[0].batch).not.toBe(s.ops[1].batch);
     await s.undo();
     expect(s.ops.map((o) => o.op)).toEqual(['person.rename']);
-    expect(await s.store.load()).toEqual(s.ops);
+    const stored = await s.store.load();
+    expect(stored.map((o) => o.op)).toEqual(['person.rename', 'person.create', 'track.assign', 'revert']);
+    expect(stored[3]).toMatchObject({ op: 'revert', batches: [s.log[1].batch] });
+    // read back (a reload, another window): the same edits are in effect, and the next undo goes on from there
+    const { s: again } = session(makeBundle({}, 'this-run'), storage);
+    await again.load();
+    expect(again.ops).toEqual(s.ops);
+    await again.undo();
+    expect(again.ops).toEqual([]);
+    await again.undo();   // nothing left to take back: nothing appended
+    expect(again.log.length).toBe(5);
   });
 
   test('a commit made while another tab also saved keeps both', async () => {
@@ -197,7 +210,7 @@ describe('which run a corrections file was made on', () => {
 
   test('a file made on this run imports as it is', async () => {
     const { s } = session(makeBundle({}, 'this-run'));
-    expect(await s.parseCorrections(file([caption], 'this-run'), lineage({ other: makeBundle({}, 'other') }), load)).toEqual([caption]);
+    expect(await s.parseCorrections(file([caption], 'this-run'), lineage({ other: makeBundle({}, 'other') }), load)).toEqual(upgrade([caption as Op]));
   });
 
   test('a file from another run in the library is re-anchored when everything matches', async () => {
@@ -211,7 +224,7 @@ describe('which run a corrections file was made on', () => {
     s.carry = { from_bundle_id: 'v1', status: 'carried', carried: 3, created_at: '',
       unmatched: [{ index: 0, op: caption as never, reason: 'x', span: null }] };   // an earlier carry-over, since undone
     const ops = await s.parseCorrections(file([caption], 'other'), lineage({ other: makeBundle({}, 'other') }), load);
-    expect(ops).toEqual([{ ...caption, reanchored_from: { bundle: 'other', index: 0 } }]);
+    expect(ops).toEqual([{ ...upgrade([caption as Op])[0], reanchored_from: { bundle: 'other', index: 0 } }]);
     await s.replaceCorrections(ops);
     expect(s.notCarried).toEqual([]);   // the undone carry-over's list does not come back
   });
@@ -232,8 +245,8 @@ describe('which run a corrections file was made on', () => {
     const { s } = session(makeBundle({}, 'this-run'));
     const several = lineage({ other: makeBundle({}, 'other') });
     await expect(s.parseCorrections(file([caption]), several, load)).rejects.toBeInstanceOf(RunUnknownError);
-    expect(await s.parseCorrections(file([caption]), several, load, { thisRun: true })).toEqual([caption]);
-    expect(await s.parseCorrections(file([caption]), lineage({}), load)).toEqual([caption]);
+    expect(await s.parseCorrections(file([caption]), several, load, { thisRun: true })).toEqual(upgrade([caption as Op]));
+    expect(await s.parseCorrections(file([caption]), lineage({}), load)).toEqual(upgrade([caption as Op]));
   });
 });
 

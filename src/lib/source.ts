@@ -5,17 +5,16 @@
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { Unmatched } from './model/carryover';
-import { typesIn, type AnnotationType, type Op } from './model/corrections';
+import { live, typesIn, type AnnotationType, type Op } from './model/corrections';
 import type { BundleSummary, Manifest } from './types';
 
 /** The op log of one bundle. Every method returns what the store holds afterwards, so the caller can tell when
  *  another writer (another browser tab) changed the log in between. */
 export interface CorrectionStore {
   load(): Promise<Op[]>;
-  /** Append ops; resolves to the number of ops the log holds now. */
+  /** Append ops; resolves to the number of ops the log holds now. Undo is an append too (a `revert` op): a log never
+   *  shrinks, except by `replace`. */
   append(ops: Op[]): Promise<number>;
-  /** Keep the oldest `keep` ops (undo). */
-  truncate(keep: number): Promise<number>;
   /** Replace the whole log (importing a file). */
   replace(ops: Op[]): Promise<number>;
   /** Called when another writer changed the log (another tab of this page); returns an unsubscribe function. */
@@ -85,7 +84,6 @@ export const api = {
   readFile: (id: string, path: string) => invoke<string>('read_bundle_file', { id, path }),
   loadCorrections: (id: string) => invoke<Op[]>('load_corrections', { id }),
   appendCorrections: (id: string, ops: Op[]) => invoke<number>('append_corrections', { id, ops }),
-  truncateCorrections: (id: string, keep: number) => invoke<number>('truncate_corrections', { id, keep }),
   replaceCorrections: (id: string, ops: Op[]) => invoke<number>('replace_corrections', { id, ops }),
   findPrototypeCorrections: (id: string) => invoke<FoundFile | null>('find_prototype_corrections', { id }),
   readCorrectionsFile: (path: string) => invoke<string>('read_corrections_file', { path }),
@@ -117,7 +115,6 @@ export async function tauriSource(id: string): Promise<BundleSource> {
     corrections: {
       load: () => api.loadCorrections(id),
       append: (ops) => api.appendCorrections(id, ops),
-      truncate: (keep) => api.truncateCorrections(id, keep),
       replace: (ops) => api.replaceCorrections(id, ops),
     },
     async typesElsewhere() {
@@ -174,7 +171,6 @@ export class LocalCorrectionStore implements CorrectionStore {
   #write(ops: Op[]) { this.storage.setItem(this.key, JSON.stringify(ops)); return ops.length; }
   async load() { return this.#read(); }
   async append(ops: Op[]) { return this.#write([...this.#read(), ...ops]); }
-  async truncate(keep: number) { return this.#write(this.#read().slice(0, keep)); }
   async replace(ops: Op[]) { return this.#write(ops); }
   subscribe(onchange: () => void) {
     const listener = (e: StorageEvent) => { if (e.key === this.key) onchange(); };
@@ -205,12 +201,12 @@ function localLineage(base: string, previousUrl: string, videoUrl: string | null
     async record() { return read(); },
     async previous() {
       const prev = await httpSource(previousUrl, videoUrl);
-      const n = (await prev.corrections.load()).length;
-      return n && read()?.status !== 'declined' && !(await store.load()).length ? { id: previousUrl, label: `The bundle at ${previousUrl}`, corrections: n, open: async () => prev } : null;
+      const n = live(await prev.corrections.load()).length;
+      return n && read()?.status !== 'declined' && !live(await store.load()).length ? { id: previousUrl, label: `The bundle at ${previousUrl}`, corrections: n, open: async () => prev } : null;
     },
     async carry(from, ops, unmatched) {
       if (read()?.status === 'declined') throw new Error('this version was started without the earlier corrections (declined)');
-      if ((await store.load()).length) throw new Error('this version already has corrections of its own');
+      if (live(await store.load()).length) throw new Error('this version already has corrections of its own');
       const n = await store.append(ops);
       write({ from_bundle_id: from, status: 'carried', carried: ops.length, unmatched, created_at: new Date().toISOString() });
       return n;

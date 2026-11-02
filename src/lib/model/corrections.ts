@@ -1,9 +1,12 @@
 // Corrections: an append-only log of ops over a bundle, folded into the corrected state every view reads.
-// Ops reference bundle ids ("face:12", "person:Person C", "utt:5"). Ops committed together share `at`, and undo
-// removes them together. The prototype's v1 files (bare numbers and labels) are converted by importV1().
+// Ops reference bundle ids ("face:12", "person:Person C", "utt:5"). Ops committed together share a `batch`; undo
+// appends a `revert` of the newest batch still in effect, so the log only grows and can be shared by several writers
+// (HyperStudy's log of record, the desktop app syncing with it): an op is named by its `op_id` wherever it travels.
+// Logs and files from before batches (v2) are read with `batchOf` (their ops shared `at` instead) and `upgrade`.
+// The prototype's v1 files (bare numbers and labels) are converted by opFromV1().
 import type { Speaker } from '../types';
 
-export const FORMAT = 'perception-corrections/2';
+export const FORMAT = 'perception-corrections/3';
 /** Identities that are not machine clusters. Not "person:" ids, so they cannot collide with a bundle's. */
 export const UNKNOWN = 'unknown';        // faces the clusterer could not match (bundle person: null)
 export const NOT_PERSON = 'not_person';  // false detections, faces in pictures and on screens
@@ -31,9 +34,18 @@ function onlyWhatItsKindUses(t: AnnotationType) {
 }
 export interface Note { id: string; type: string; start: number; end: number; value: boolean | string | number | null; person: string | null }
 
-/** `carried_from`: an op carried over from an earlier version's log (a re-run), naming the op it copies there.
+/** `op_id`: the op's own name, unique in its log (not `id`: several ops have an `id` naming what they act on). `batch`: shared by the ops of one edit (one undo). `at`: when it was
+ *  made. `base`: the manifest sha256 of the bundle it was made on. `author`: who made it, where known (set by
+ *  HyperStudy from the signed-in user, never taken from a client). All optional: older logs and files lack them.
+ *  `carried_from`: an op carried over from an earlier version's log (a re-run), naming the op it copies there.
  *  `reanchored_from`: an op imported from a file made on another run, naming that run and the op's place in the file. */
-export type Op = { at?: string; carried_from?: { bundle: string; index: number }; reanchored_from?: { bundle: string; index: number } } & (
+export interface Envelope {
+  op_id?: string; batch?: string; at?: string; base?: string; author?: { id: string; name: string } | null;
+  carried_from?: { bundle: string; index: number }; reanchored_from?: { bundle: string; index: number };
+}
+export type Op = Envelope & (
+  | { op: 'revert'; batches: string[] }   // undo: the named batches no longer count
+
   | { op: 'person.create'; person: string; name: string }
   | { op: 'person.rename'; person: string; name: string }
   | { op: 'person.merge'; from: string; into: string }
@@ -91,7 +103,7 @@ export function fold(ops: Op[]): Corrected {
     uttText: {}, caption: {}, included: {}, category: {}, objNames: {}, objMergedInto: {}, objTrackIdentity: {},
     types: [], notes: new Map(),
   };
-  for (const op of ops) {
+  for (const op of live(ops)) {
     switch (op.op) {
       case 'person.create': S.created.push(op.person); S.names[op.person] = op.name; break;
       case 'person.rename': S.names[op.person] = op.name; break;
@@ -130,13 +142,34 @@ export function typesIn(logs: { key: string; title: string; ops: Op[] }[]): { ke
     .filter((x) => x.types.length);
 }
 
-/** Ops from the last commit: they share its timestamp. */
-export function lastBatch(ops: Op[]): number {
-  if (!ops.length) return 0;
-  const at = ops[ops.length - 1].at;
-  let n = 0;
-  while (n < ops.length && ops[ops.length - 1 - n].at === at) n++;
-  return n;
+/** The batch an op belongs to. Ops from before batches (v2 logs and files) were committed together by sharing `at`,
+ *  so that is their batch; the library's migration 5 stores the same value, so a stored log and a file agree. */
+export function batchOf(op: Op): string { return op.batch ?? `at:${op.at ?? ''}`; }
+
+/** The ops still in effect: every op but the reverts and the ops of the batches they revert. */
+export function live(ops: Op[]): Op[] {
+  if (!ops.some((o) => o.op === 'revert')) return ops;
+  const reverted = new Set(ops.flatMap((o) => (o.op === 'revert' ? o.batches : [])));
+  return ops.filter((o) => o.op !== 'revert' && !reverted.has(batchOf(o)));
+}
+
+/** The batch an undo takes back: the newest one still in effect; null when there is none. */
+export function lastUndoable(ops: Op[]): string | null {
+  const l = live(ops);
+  return l.length ? batchOf(l[l.length - 1]) : null;
+}
+
+/** One edit's ops, ready to append: each gets its own op_id, all one new batch, the time and the bundle they were made
+ *  on. Ids are random (no clock in them): the log's order is the order it was appended in. */
+export function newBatch(ops: Op[], at: string, base?: string | null): Op[] {
+  const batch = crypto.randomUUID();
+  return ops.map((op) => ({ ...op, op_id: crypto.randomUUID(), batch, at, ...(base ? { base } : {}) }) as Op);
+}
+
+/** Name the ops of a log or file from before op ids (v2, or v1 converted): the n-th op is `v2-<n>`, its batch
+ *  `batchOf`. Stable, so reading the same file twice names its ops the same way; ops that have an op_id keep it. */
+export function upgrade(ops: Op[]): Op[] {
+  return ops.map((op, i) => (op.op_id ? op : ({ ...op, op_id: `v2-${i}`, batch: batchOf(op) }) as Op));
 }
 
 // --- the prototype's v1 files ------------------------------------------------------------------------------------
@@ -227,11 +260,12 @@ export function editsFile(doc: any): CorrectionsFile {
   return { format: FORMAT, sha256: doc.video?.sha256, bundle: doc.bundle?.manifest_sha256 ?? undefined, exported_at: doc.exported_at, ops: doc.edits ?? [] };
 }
 
-/** Read an exported corrections file (v1 from the prototype, or this app's v2) for a bundle's video. */
+/** Read an exported corrections file (v1 from the prototype, this app's v2, or v3) for a bundle's video. Every op
+ *  comes out with an id and a batch; a v3 file's reverts are kept, so what it folds to is what was exported. */
 export function readCorrectionsFile(doc: CorrectionsFile, videoSha256: string): Op[] {
   if (doc.sha256 !== videoSha256) throw new ImportError('that file is for a different video');
-  if (doc.format === FORMAT) return doc.ops as Op[];
-  if (doc.format === 'perception-corrections/1') return doc.ops.map((o) => opFromV1(o as Record<string, any>));
+  if (doc.format === FORMAT || doc.format === 'perception-corrections/2') return upgrade(doc.ops as Op[]);
+  if (doc.format === 'perception-corrections/1') return upgrade(doc.ops.map((o) => opFromV1(o as Record<string, any>)));
   throw new ImportError(`unknown corrections format ${JSON.stringify(doc.format)}`);
 }
 

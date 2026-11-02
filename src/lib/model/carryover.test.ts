@@ -26,6 +26,21 @@ function rerun(tracks?: FaceTrack[]) {
 }
 
 describe('carryOver', () => {
+  test('only edits still in effect are carried, named by their place in the earlier log, as one new batch', () => {
+    const ops: Op[] = [
+      { op: 'person.rename', person: 'person:Person C', name: 'Carol', op_id: 'a', batch: 'b1' },
+      { op: 'shot.caption', shot: 'shot:1', caption: 'wrong', op_id: 'b', batch: 'b2' },
+      { op: 'revert', batches: ['b2'], op_id: 'c', batch: 'b3' },
+      { op: 'shot.caption', shot: 'shot:1', caption: 'the kitchen', op_id: 'd', batch: 'b4', base: 'v1' },
+    ];
+    const { ops: carried, unmatched } = carryOver(ops, old, rerun(), 'v1', 't');
+    expect(unmatched).toEqual([]);
+    expect(carried.map((o) => o.carried_from!.index)).toEqual([0, 3]);
+    expect(carried.map((o) => (o as { caption?: string }).caption ?? null)).toEqual([null, 'the kitchen']);
+    expect(new Set(carried.map((o) => o.batch)).size).toBe(1);
+    expect(carried.every((o) => o.at === 't' && o.op_id && !['a', 'd'].includes(o.op_id) && o.batch !== 'b1' && o.base !== 'v1')).toBe(true);
+  });
+
   test('faces, people, utterances, shots and voices are found under the re-run’s ids', () => {
     const ops: Op[] = [
       { op: 'person.rename', person: 'person:Person C', name: 'Carol' },

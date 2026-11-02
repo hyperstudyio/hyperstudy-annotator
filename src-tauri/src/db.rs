@@ -86,6 +86,19 @@ const MIGRATIONS: &[Migration] = &[Migration {
             started_at TEXT NOT NULL
         );
     "#,
+}, Migration {
+    version: 5,
+    name: "op ids and batches",
+    sql: r#"
+        -- perception-corrections/3: every op has an op_id and a batch, and undo appends a revert instead of deleting
+        -- rows, so a log can be shared and synced. Ops stored before this were batched by sharing `at`: that becomes
+        -- their batch ('at:' || at, as the frontend's batchOf reads a v2 log), and their op_id is 'v2-' || the row id,
+        -- unique in the library and never reused (AUTOINCREMENT). Not `id`: ops such as entity.include already have
+        -- one, naming what they act on.
+        UPDATE corrections
+           SET op = json_set(op, '$.op_id', 'v2-' || id, '$.batch', 'at:' || COALESCE(json_extract(op, '$.at'), ''))
+         WHERE json_extract(op, '$.op_id') IS NULL;
+    "#,
 }];
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -135,5 +148,40 @@ mod tests {
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM corrections WHERE bundle_id = 'b'", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
         conn.execute("INSERT INTO carryovers VALUES ('b', 'a', 'declined', 0, '[]', 'now')", []).unwrap();
+    }
+
+    #[test]
+    fn migration_5_names_every_stored_op_and_batches_them_by_their_time() {
+        let conn = Connection::open_in_memory().unwrap();
+        for m in &MIGRATIONS[..4] {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        conn.execute("INSERT INTO bundles VALUES ('b', 'm', 't', 'v', '0.1.0', '/d', '/s', 'now')", []).unwrap();
+        let ops = [
+            r#"{"op":"person.rename","person":"person:A","name":"Ann","at":"2026-10-01T00:00:00.000Z"}"#,
+            r#"{"op":"person.rename","person":"person:B","name":"Bo","at":"2026-10-01T00:00:00.000Z"}"#,   // same commit
+            r#"{"op":"shot.caption","shot":"shot:1","caption":"x"}"#,                                       // no time
+            r#"{"op":"entity.include","id":"face:3","included":false}"#,                                   // its own id
+            r#"{"op":"shot.caption","shot":"shot:2","caption":"y","op_id":"kept","batch":"kept-b"}"#,       // already named
+        ];
+        for op in ops {
+            conn.execute("INSERT INTO corrections (bundle_id, op, created_at) VALUES ('b', ?1, 'now')", [op]).unwrap();
+        }
+        migrate(&conn).unwrap();
+        let named: Vec<(String, String)> = conn
+            .prepare("SELECT json_extract(op, '$.op_id'), json_extract(op, '$.batch') FROM corrections ORDER BY id").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(named, [
+            ("v2-1".into(), "at:2026-10-01T00:00:00.000Z".into()),
+            ("v2-2".into(), "at:2026-10-01T00:00:00.000Z".into()),
+            ("v2-3".into(), "at:".into()),
+            ("v2-4".into(), "at:".into()),
+            ("kept".into(), "kept-b".into()),
+        ]);
+        let caption: String = conn.query_row("SELECT json_extract(op, '$.caption') FROM corrections WHERE id = 3", [], |r| r.get(0)).unwrap();
+        assert_eq!(caption, "x");   // the op itself is unchanged
+        let face: String = conn.query_row("SELECT json_extract(op, '$.id') FROM corrections WHERE id = 4", [], |r| r.get(0)).unwrap();
+        assert_eq!(face, "face:3");   // an op's own `id` (what it acts on) is not its op_id
     }
 }

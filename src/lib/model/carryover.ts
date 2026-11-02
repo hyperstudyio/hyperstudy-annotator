@@ -6,7 +6,7 @@
 // came from.
 import type { Bundle } from './bundle';
 import { extent } from './bundle';
-import { NOT_PERSON, UNKNOWN, type Op } from './corrections';
+import { NOT_PERSON, UNKNOWN, live, newBatch, type Op } from './corrections';
 import { iou, nearest } from '../geometry';
 import type { FaceTrack, Span } from '../types';
 
@@ -165,11 +165,14 @@ export function refsOf(op: Op): string[] {
   }
 }
 
-/** Re-anchor `ops` (the log of bundle `fromId`) onto `to`. With `at`, every carried op gets that time, so the
- *  carry-over is one batch that one undo takes back (the original times stay in the earlier log). */
+/** Re-anchor `ops` (the log of bundle `fromId`) onto `to`. Only the ops still in effect are carried (an undone edit
+ *  and the revert that undid it stay behind); indices are places in the earlier log as stored. With `at`, the carried
+ *  ops become one new batch made then (new op ids, so a copy is never mistaken for the op it copies), which one undo
+ *  takes back; the original times stay in the earlier log. */
 export function carryOver(ops: Op[], from: Bundle, to: Bundle, fromId: string, at?: string): CarryResult {
   const { map, reasons } = anchor(from, to);
-  const own = new Set(ops.flatMap((o) => (o.op === 'person.create' ? [o.person] : [])));
+  const effective = new Set(live(ops));
+  const own = new Set([...effective].flatMap((o) => (o.op === 'person.create' ? [o.person] : [])));
   const m = (id: string): string => {
     if (id === UNKNOWN || id === NOT_PERSON || own.has(id) || id.startsWith('objid:user:') || id.startsWith('note:')) return id;
     const to = map.get(id);
@@ -178,12 +181,13 @@ export function carryOver(ops: Op[], from: Bundle, to: Bundle, fromId: string, a
   };
   const out: Op[] = [], unmatched: Unmatched[] = [];
   ops.forEach((op, index) => {
+    if (!effective.has(op)) return;
     try {
       const moved = translate(op, m);
       if (op.op === 'person.distinct' && moved.op === 'person.distinct' && moved.a === moved.b) {
         throw new Mismatch(`${label(op.a)} and ${label(op.b)} are one person in the new version`);
       }
-      out.push({ ...moved, ...(at ? { at } : {}), carried_from: { bundle: fromId, index } });
+      out.push({ ...moved, carried_from: { bundle: fromId, index } });
     } catch (e) {
       if (!(e instanceof Mismatch)) throw e;
       const first = refsOf(op)[0];
@@ -202,7 +206,9 @@ export function carryOver(ops: Op[], from: Bundle, to: Bundle, fromId: string, a
     return false;
   });
   unmatched.sort((a, b) => a.index - b.index);
-  return { ops: kept, unmatched };
+  if (!at) return { ops: kept, unmatched };
+  const batch = newBatch(kept.map(({ op_id: _id, batch: _b, base: _base, ...op }) => op as Op), at, to.key);
+  return { ops: batch, unmatched };
 }
 
 /** What an op sets, for ops where a later one replaces an earlier one (fold is last-write-wins for these). Merges,

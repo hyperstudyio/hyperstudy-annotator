@@ -119,7 +119,8 @@ dialogs by hand, is still open).
      made on the run they are importing it into.
    - **Older ops keep loading.** Ops in SQLite and in `perception-corrections/2` files (and `/1`, through
      `opFromV1`) have no author or base version. They load with base version = the bundle whose log holds them and
-     author = unknown, never as unmatched or rejected. If the fields change the file format, it becomes `/3`, and
+     author = unknown, never as unmatched or rejected. If the fields change the file format, it becomes `/3` (done
+     2026-11-02, below), and
      `/2` is converted on import as `/1` is now.
    - **Schema change by migration.** Lineages and versions are a new migration (version 2) appended to
      `MIGRATIONS` in `db.rs`; version 1 is not edited.
@@ -188,6 +189,24 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
 - Not yet: the library listing versions under one video; checking the native app's offer by hand (as for port step 9);
   each op's author (needs a user identity in Settings) and base version (implicit in which log holds it, today).
   Importing a file into a re-run follows the rule above (2026-10-24).
+
+**Op ids and undo as an op (2026-11-02): `perception-corrections/3`**, the first step of HyperStudy's log of record
+(a log several people and the desktop app write must name its ops, and cannot be cut back by index).
+- Each op carries `op_id` (random, unique in its log; not `id`, which `entity.include`, `annotation.edit` and others
+  already use for what they act on), `batch` (shared by one edit's ops), `at`, and `base` (the manifest sha256 it was
+  made on); `author` is reserved for HyperStudy, which sets it from the signed-in user.
+- Undo appends `{op: 'revert', batches: [...]}` naming the newest batch still in effect; `live()` leaves out reverts
+  and what they name, and `fold`, Session's `ops`, exports and carry-over read only that. The stored log never shrinks
+  except by import (`replace`), so `truncate_corrections` is gone. Redo is not built (a revert of a revert would be it).
+- Ops from before: their batch is `'at:' || at` (they were batched by sharing `at`), read so by `batchOf` everywhere.
+  Migration 5 writes that batch and `op_id` `v2-<row id>` into every stored op; `/1` and `/2` files are named on import
+  (`upgrade`: `v2-<place in the file>`). The library's counts, the earlier version to carry from and the refusal to
+  carry onto a log with edits of its own count only ops in effect (`count_live`, the same rule in SQL), so an undone
+  carry-over can be carried again.
+- Checked: Rust and unit tests (85, 166), the browser tests (226); migration 5 on a copy of this Mac's library (267 ops
+  over four videos): every op unchanged but for the two fields, each video folds to the same state as before, and undoing
+  the newest old commit takes the same ops the old undo did; in Chrome on ooo-genz-clip1, an edit, undo, the edit again,
+  a reload (still in effect), undo, and an undo with nothing left (nothing appended).
 
 **Step 2 (2026-10-24): running the pipeline from the app, first part.** The library's *Run pipeline…* opens a
 dialog (`PipelineDialog.svelte`) that goes in order:
