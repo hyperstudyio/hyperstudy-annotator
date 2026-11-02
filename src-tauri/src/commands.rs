@@ -771,7 +771,9 @@ fn finish_remote(state: &AppState, p: &Pipeline, run: &str, host: &str, video: &
             let imported = into_library(state, run, video, |out| {
                 let out = out.to_string_lossy();
                 // a pod's run followed to its end is in this machine's store already, and its pod deleted: exported here
-                if host == pipeline::POD && p.one(&["status", run], "status").is_ok() {
+                let here = host == pipeline::POD
+                    && ended_here(run, p.one(&["status", run], "status").map_err(|e| e.to_string())).map_err(Error::Bundle)?.is_some();
+                if here {
                     let got = p.one(&["export", run, "--output", &out], "exported")?;
                     return got["path"].as_str().map(String::from).ok_or_else(|| Error::Bundle("the pipeline exported no bundle".into()));
                 }
@@ -831,9 +833,15 @@ pub fn seen_there(host: &str, run: &str, status: std::result::Result<Value, Stri
     }
 }
 
-/// How a pod's run ended, if this machine's own `status` of it (once its follower fetched it here) says it has.
-pub fn ended_here(status: Option<&Value>) -> Option<String> {
-    status?["status"].as_str().filter(|s| *s != "running").map(String::from)
+/// How a pod's run ended, as this machine's own `status` of it says (its follower fetched it here, then deleted the
+/// pod): Some, ended; None, not in this store (`no run RUN`: still on its pod, which is asked). Any other failure is
+/// an error: the pod, deleted after the fetch, could not say better, and would have the run taken for lost.
+pub fn ended_here(run: &str, status: std::result::Result<Value, String>) -> std::result::Result<Option<String>, String> {
+    match status {
+        Ok(s) => Ok(s["status"].as_str().filter(|s| *s != "running").map(String::from)),
+        Err(e) if e.trim_end().ends_with(&format!("no run {run}")) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// A pod whose run can no longer end there (its coordinator gone, or the run not on it): canceled, which imports what
@@ -893,10 +901,13 @@ pub async fn pipeline_remote_runs(app: AppHandle, state: State<'_, AppState>) ->
             let mut row = serde_json::to_value(&r).map_err(|e| Error::Bundle(e.to_string()))?;
             let seen = if r.state != "running" || followed { None }
                 // a pod's run that ended while its follower here was stopped after its fetch: in this store, its pod gone
-                else if let Some(status) = (r.host == pipeline::POD).then(|| ended_here(p.one(&["status", &r.run], "status").ok().as_ref())).flatten() {
-                    Some(Seen::Ended(status))
-                } else {
-                    Some(seen_there(&r.host, &r.run, p.one(&["remote", "status", &r.host, &r.run], "status").map_err(|e| e.to_string())))
+                else {
+                    let here = if r.host == pipeline::POD { ended_here(&r.run, p.one(&["status", &r.run], "status").map_err(|e| e.to_string())) } else { Ok(None) };
+                    Some(match here {
+                        Ok(Some(status)) => Seen::Ended(status),
+                        Ok(None) => seen_there(&r.host, &r.run, p.one(&["remote", "status", &r.host, &r.run], "status").map_err(|e| e.to_string())),
+                        Err(e) => Seen::Unreachable(e),   // this machine's own store could not say: asked again next time
+                    })
                 };
             let failed = |why: String, row: &mut Value| -> Result<()> {
                 crate::remote_runs::set_state(&state.db.lock().unwrap(), &r.run, "failed", Some(&why))?;
@@ -1055,10 +1066,13 @@ mod tests {
         assert!(matches!(seen_there("lab", RUN, err("run x's pod was deleted")), Seen::Unreachable(_)));
         assert!(matches!(seen_there("lab", RUN, err("no run 20261031-120000-000000 on this host")), Seen::Unreachable(_)));
         assert!(matches!(seen_there(pipeline::POD, RUN, err("could not reach root@1.2.3.4 (ssh exit 255)")), Seen::Unreachable(_)));
-        // a pod's run followed here to its end: this store's status says how it ended
-        assert_eq!(ended_here(Some(&json!({"status": "succeeded"}))), Some("succeeded".into()));
-        assert_eq!(ended_here(Some(&json!({"status": "running"}))), None);
-        assert_eq!(ended_here(None), None);
+        // a pod's run followed here to its end: this store's status says how it ended; only its "no run" sends the
+        // question to the pod (deleted after the fetch, it would say the run is lost): any other failure is said
+        assert_eq!(ended_here(RUN, Ok(json!({"status": "succeeded"}))), Ok(Some("succeeded".into())));
+        assert_eq!(ended_here(RUN, Ok(json!({"status": "running"}))), Ok(None));
+        assert_eq!(ended_here(RUN, err(&format!("no run {RUN}"))), Ok(None));
+        assert!(ended_here(RUN, err("uv sync failed: the lock is held")).is_err());
+        assert!(ended_here(RUN, err(&format!("no run {RUN} on this host"))).is_err());   // a server's words, not this store's
     }
 
     #[test]
