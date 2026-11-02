@@ -608,7 +608,7 @@
               {:else if on}
                 {#if needed}<span class="muted" id={`needed-${n.id}`}>Needed by {list(titlesOf(needed))}</span>{/if}
                 <!-- a machine that costs money is priced for its whole deadline: the most it can cost -->
-                {#if cost}<span>{steps.some((p) => machineCost(plan!, p)) ? 'Up to ' : ''}${cost.toFixed(2)}</span>{/if}
+                {#if cost}<span>{steps.some((p) => machineCost(plan!, p)) ? `Up to $${upToCent(cost).toFixed(2)}` : `$${cost.toFixed(2)}`}</span>{/if}
                 {#each steps.filter((p) => p.why_not) as p (p.id)}<span class="error">{p.why_not}</span>{/each}
                 {#each [...new Set(steps.flatMap((p) => p.missing_secrets))] as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
