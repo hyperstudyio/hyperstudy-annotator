@@ -279,14 +279,16 @@
   $effect(() => {
     const h = hosts, c = cloud;
     untrack(() => {
-      const asked: [string, string, () => Promise<unknown>][] = [
-        ...(h ?? []).map((x): [string, string, () => Promise<unknown>] => [`ssh-${x.name}`, machineId(x), () => api.probeHost(x.dest, sshOf(x))]),
-        ...(c?.runpod?.enabled ? [[POD, POD, () => checked(api.checkCloud('runpod'))] as [string, string, () => Promise<unknown>]] : []),
-        ...(c?.enabled ? [['cloud', 'cloud', () => checked(api.checkCloud('aws'))] as [string, string, () => Promise<unknown>]] : []),
+      // each machine, what it was of, its Test, and the commands a pipeline from before that Test does not know
+      type Asked = [string, string, () => Promise<unknown>, string];
+      const asked: Asked[] = [
+        ...(h ?? []).map((x): Asked => [`ssh-${x.name}`, machineId(x), () => api.probeHost(x.dest, sshOf(x)), 'probe|hosts']),
+        ...(c?.runpod?.enabled ? [[POD, POD, () => checked(api.checkCloud('runpod')), 'check|cloud'] as Asked] : []),
+        ...(c?.enabled ? [['cloud', 'cloud', () => checked(api.checkCloud('aws')), 'check|cloud'] as Asked] : []),
       ];
       // each machine's newest Test alone answers: an older, slower one (asked on an earlier load) never overwrites it
-      for (const [m, of, test] of asked) {
-        const said = test().then(() => true as const, (e) => /invalid choice/.test(String(e)) ? true as const
+      for (const [m, of, test, unknown] of asked) {
+        const said = test().then(() => true as const, (e) => new RegExp(`invalid choice: '(${unknown})'`).test(String(e)) ? true as const
           : String(e).replace(/^(Error: )?(the pipeline failed: )?/, '').replace(/\.$/, ''));
         (testOf[m] ??= latestOnly())(said, (ok) => {
           if (testedAs(m) !== of) return;   // removed, or added again elsewhere, while it was tested
