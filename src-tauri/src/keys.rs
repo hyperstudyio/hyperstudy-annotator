@@ -195,7 +195,17 @@ impl Keys {
     /// optional (the CLI also finds keys in files and the environment, and the plan names any a step lacks), and the
     /// Keys row says why (`status`), so the pipeline runs on rather than every command failing.
     pub fn for_cli(&self) -> Secrets {
-        match self.loaded(false) {
+        self.secrets(false)
+    }
+
+    /// Setup runs at launch and when the user chooses Try again. A failed keychain read may now succeed after an
+    /// unlock; ordinary commands keep using for_cli so they do not repeatedly prompt when access is denied.
+    pub fn for_setup(&self) -> Secrets {
+        self.secrets(true)
+    }
+
+    fn secrets(&self, again: bool) -> Secrets {
+        match self.loaded(again) {
             Ok(values) => Secrets(values.into_iter().collect()),
             Err(_) => Secrets::default(),
         }

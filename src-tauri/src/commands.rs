@@ -312,7 +312,7 @@ fn setup_version(mut p: Pipeline, db: &Mutex<Connection>, keys: &crate::keys::Ke
     on_start();
     // Model downloads need the same saved credentials as Settings checks and runs. Read on each attempt so a
     // token saved or replaced after a failed setup is used by Try again, without restarting the app.
-    p.secrets = keys.for_cli();
+    p.secrets = keys.for_setup();
     p.setup(on_step)?;
     library::set_setting(&db.lock().unwrap(), SETUP_DONE, &version)
 }
@@ -1127,6 +1127,28 @@ fi
             assert_eq!(steps[0]["ok"], true, "{name} did not reach setup");
             assert_eq!(library::get_setting(&db.lock().unwrap(), SETUP_DONE).unwrap().as_deref(), Some("test-version"));
             setup_version(make_pipeline(), &db, &keys, || panic!("completed setup ran again"), |_| {}).unwrap();
+
+            // A locked keychain at launch must not leave Try again using a cached read failure after it unlocks.
+            use crate::keys::Store;
+            struct LockedOnce(crate::keys::Memory, std::sync::atomic::AtomicBool);
+            impl Store for LockedOnce {
+                fn get(&self, name: &str) -> Result<Option<String>> {
+                    if self.1.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        return Err(Error::Bundle("keychain is locked".into()));
+                    }
+                    self.0.get(name)
+                }
+                fn set(&self, name: &str, value: &str) -> Result<()> { self.0.set(name, value) }
+                fn delete(&self, name: &str) -> Result<()> { self.0.delete(name) }
+            }
+            let store = crate::keys::Memory::default();
+            store.set(name, "test-saved-replacement").unwrap();
+            let keys = crate::keys::Keys::new(Box::new(LockedOnce(store, true.into())));
+            let db = Mutex::new(Connection::open_in_memory().unwrap());
+            crate::db::migrate(&db.lock().unwrap()).unwrap();
+            assert!(setup_version(make_pipeline(), &db, &keys, || {}, |_| {}).is_err());
+            assert!(keys.for_cli().0.is_empty()); // ordinary commands keep the cached failure, without prompting
+            setup_version(make_pipeline(), &db, &keys, || {}, |_| {}).unwrap();
         }
     }
 
