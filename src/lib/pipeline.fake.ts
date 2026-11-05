@@ -148,6 +148,7 @@ const script: PipelineMessage[] = [
 const KEYS = [
   { name: 'RUNPOD_API_KEY', label: 'RunPod', purpose: 'Cloud GPU pods', url: 'https://console.runpod.io/user/settings' },
   { name: 'ANTHROPIC_API_KEY', label: 'Anthropic', purpose: 'Shot captions (Claude)', url: 'https://console.anthropic.com/settings/keys' },
+  { name: 'OPENAI_API_KEY', label: 'OpenAI', purpose: 'Delivery captions', url: 'https://platform.openai.com/api-keys' },
   { name: 'HF_TOKEN', label: 'Hugging Face', purpose: 'Model downloads (gated models, higher limits)', url: 'https://huggingface.co/settings/tokens' },
 ];
 

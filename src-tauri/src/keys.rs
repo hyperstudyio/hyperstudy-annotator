@@ -26,6 +26,8 @@ pub const KNOWN: &[KnownKey] = &[
                url: "https://console.runpod.io/user/settings" },
     KnownKey { name: "ANTHROPIC_API_KEY", label: "Anthropic", purpose: "Shot captions (Claude)",
                url: "https://console.anthropic.com/settings/keys" },
+    KnownKey { name: "OPENAI_API_KEY", label: "OpenAI", purpose: "Delivery captions",
+               url: "https://platform.openai.com/api-keys" },
     KnownKey { name: "HF_TOKEN", label: "Hugging Face", purpose: "Model downloads (gated models, higher limits)",
                url: "https://huggingface.co/settings/tokens" },
 ];
@@ -217,6 +219,18 @@ mod tests {
         assert_eq!(keys.for_cli().0, vec![("RUNPOD_API_KEY".to_string(), SECRET.to_string())]);   // trimmed
         keys.remove("RUNPOD_API_KEY").unwrap();
         assert!(keys.for_cli().0.is_empty() && !keys.status().unwrap().iter().any(|s| s.stored));
+    }
+
+    #[test]
+    fn delivery_captions_key_can_be_saved_replaced_and_removed() {
+        let keys = Keys::new(Box::new(Memory::default()));
+        keys.set("OPENAI_API_KEY", "test-openai-key").unwrap();
+        assert!(keys.status().unwrap().iter().any(|k| k.name == "OPENAI_API_KEY" && k.stored));
+        keys.set("OPENAI_API_KEY", "test-openai-replacement").unwrap();
+        assert_eq!(keys.for_cli().0, vec![("OPENAI_API_KEY".into(), "test-openai-replacement".into())]);
+        assert!(!serde_json::to_string(&keys.status().unwrap()).unwrap().contains("test-openai"));
+        keys.remove("OPENAI_API_KEY").unwrap();
+        assert!(keys.for_cli().0.is_empty());
     }
 
     #[test]

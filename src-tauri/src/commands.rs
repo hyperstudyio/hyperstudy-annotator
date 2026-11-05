@@ -289,14 +289,9 @@ pub fn start_setup(app: AppHandle) -> Result<()> {
         };
         set_setup(&app, |s| s.installed = true);
         let result = (|| {
-            let p = pipeline_alone(&state)?;
-            let version = p.one(&["doctor"], "doctor")?["pipeline"]["version"].as_str().unwrap_or_default().to_string();
-            if library::get_setting(&state.db.lock().unwrap(), SETUP_DONE)?.as_deref() == Some(version.as_str()) {
-                return Ok(());
-            }
-            set_setup(&app, |s| { s.state = SetupState::Running; s.notice = notice.clone(); });
-            p.setup(|o| if o["type"] == "setup.step" { set_setup(&app, |s| s.steps.push(o.clone())) })?;
-            library::set_setting(&state.db.lock().unwrap(), SETUP_DONE, &version)
+            setup_version(pipeline_alone(&state)?, &state.db, &state.keys,
+                || set_setup(&app, |s| { s.state = SetupState::Running; s.notice = notice.clone(); }),
+                |o| if o["type"] == "setup.step" { set_setup(&app, |s| s.steps.push(o.clone())) })
         })();
         set_setup(&app, |s| match result {
             Ok(()) => { s.state = SetupState::Done; s.notice = notice; }
@@ -304,6 +299,22 @@ pub fn start_setup(app: AppHandle) -> Result<()> {
         });
     });
     Ok(())
+}
+
+/// Set up an installed version, recording it only after all steps succeed. Kept apart from Tauri so tests can
+/// exercise the startup/retry path with a real child process and an isolated key store.
+fn setup_version(mut p: Pipeline, db: &Mutex<Connection>, keys: &crate::keys::Keys,
+                 on_start: impl FnOnce(), on_step: impl FnMut(&Value)) -> Result<()> {
+    let version = p.one(&["doctor"], "doctor")?["pipeline"]["version"].as_str().unwrap_or_default().to_string();
+    if library::get_setting(&db.lock().unwrap(), SETUP_DONE)?.as_deref() == Some(version.as_str()) {
+        return Ok(());
+    }
+    on_start();
+    // Model downloads need the same saved credentials as Settings checks and runs. Read on each attempt so a
+    // token saved or replaced after a failed setup is used by Try again, without restarting the app.
+    p.secrets = keys.for_cli();
+    p.setup(on_step)?;
+    library::set_setting(&db.lock().unwrap(), SETUP_DONE, &version)
 }
 
 #[tauri::command]
@@ -1082,6 +1093,41 @@ mod tests {
 
     fn idle() -> (Mutex<SetupStatus>, Mutex<Option<String>>) {
         (Mutex::new(SetupStatus { state: SetupState::Done, installed: true, ..Default::default() }), Mutex::new(None))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_uses_saved_keys_and_reads_replacements_after_a_failure() {
+        // Only fake the external CLI: use the real startup setup, key cache, database and process environment.
+        // The child reports booleans only; no credential is printed or written to the library.
+        for name in ["HF_TOKEN", "ANTHROPIC_API_KEY", "RUNPOD_API_KEY", "OPENAI_API_KEY"] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("perception.txt");
+            let cli = dir.path().join("perception");
+            std::fs::write(&script, format!(r#"#!/bin/sh
+if [ "$2" = doctor ]; then
+    printf '%s\n' '{{"v":1,"type":"doctor","pipeline":{{"version":"test-version"}}}}'
+else
+    [ "${name}" = test-saved-replacement ] && ok=true || ok=false
+    printf '{{"v":1,"type":"setup.step","node":"test","what":"models","ok":%s,"message":"credential check"}}\n' "$ok"
+    printf '{{"v":1,"type":"setup","ok":%s}}\n' "$ok"
+fi
+"#)).unwrap();
+            assert!(std::process::Command::new("install").args(["-m", "755"]).arg(&script).arg(&cli).status().unwrap().success());
+            let make_pipeline = || Pipeline::installed(&cli, PathBuf::from("/usr/bin/true")).unwrap();
+            let db = Mutex::new(Connection::open_in_memory().unwrap());
+            crate::db::migrate(&db.lock().unwrap()).unwrap();
+            let keys = crate::keys::Keys::new(Box::new(crate::keys::Memory::default()));
+            keys.set(name, "test-old-key").unwrap();
+            assert!(setup_version(make_pipeline(), &db, &keys, || {}, |_| {}).is_err());
+            assert_eq!(library::get_setting(&db.lock().unwrap(), SETUP_DONE).unwrap(), None);
+            keys.set(name, "test-saved-replacement").unwrap();
+            let mut steps = vec![];
+            setup_version(make_pipeline(), &db, &keys, || {}, |o| steps.push(o.clone())).unwrap();
+            assert_eq!(steps[0]["ok"], true, "{name} did not reach setup");
+            assert_eq!(library::get_setting(&db.lock().unwrap(), SETUP_DONE).unwrap().as_deref(), Some("test-version"));
+            setup_version(make_pipeline(), &db, &keys, || panic!("completed setup ran again"), |_| {}).unwrap();
+        }
     }
 
     #[test]
