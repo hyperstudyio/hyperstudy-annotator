@@ -442,7 +442,7 @@ test("a feature whose run ended between its steps is not still running", () => {
 
 const stepInfo = (node: string, secrets: string[]) => ({ node, title: node, service: null, secrets, settings: [] });
 const kept = (name: string, label: string, stored: boolean) => ({ name, label, purpose: '', url: '', stored });
-const keptKeys = [kept('RUNPOD_API_KEY', 'RunPod', true), kept('ANTHROPIC_API_KEY', 'Anthropic', true), kept('HF_TOKEN', 'Hugging Face', false)];
+const keptKeys = [kept('RUNPOD_API_KEY', 'RunPod', true), kept('ANTHROPIC_API_KEY', 'Anthropic', true), kept('HF_TOKEN', 'Hugging Face', false), kept('OPENAI_API_KEY', 'OpenAI', false)];
 test('keysSent names the keys the steps declare that are set here, in the keychain or found by the pipeline', () => {
   const steps = [stepInfo('vlm.shot-captions@1.0.0', ['ANTHROPIC_API_KEY']), stepInfo('audio.diarize@1.1.0', ['HF_TOKEN']),
                  stepInfo('audio.prosody-captions@1.0.0', ['OPENAI_API_KEY'])];
