@@ -1,0 +1,11 @@
+{
+  "name": "annotator-package-consumer",
+  "private": true,
+  "type": "module",
+  "description": "A Vite + Svelte 5 app set up as HyperStudy's frontend is, built against the packed @hyperstudyio/annotator (scripts/check-package.sh).",
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "svelte": "5.57.3",
+    "vite": "7.3.1"
+  }
+}

@@ -27,8 +27,9 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npx vitest run
-      # the editor as HyperStudy installs it: svelte-package's build, checked by publint
-      - run: npm run package
+      # the editor as HyperStudy installs it: svelte-package's build, checked by publint, packed, installed into a
+      # Vite + Svelte app set up as HyperStudy's frontend is, and built there
+      - run: bash scripts/check-package.sh
 
   browser:
     name: Browser (Playwright in Chrome)

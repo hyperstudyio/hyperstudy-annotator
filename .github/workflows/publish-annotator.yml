@@ -42,6 +42,8 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npx vitest run
+      # the tarball installs and builds in an app set up as HyperStudy's is (packs exactly what will be published)
+      - run: bash scripts/check-package.sh
       # prepublishOnly builds dist (svelte-package) and checks it (publint); a prerelease goes to the `next` tag, so
       # `npm install @hyperstudyio/annotator` keeps getting the latest stable version
       - name: Publish
