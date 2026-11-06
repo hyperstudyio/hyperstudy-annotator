@@ -160,7 +160,7 @@ export class Session {
     this.toast('Undone');
   }
 
-  /** Read a corrections file (the prototype's v1 or this app's v2) and check it against this bundle. Ids are only
+  /** Read a corrections file (the prototype's v1, or this app's v2 or v3) and check it against this bundle. Ids are only
    *  meaningful on the run they were made on: a file from another run is re-anchored when that run is in the library
    *  and all of it matches, and refused otherwise; a file that does not say its run is refused when the video has
    *  several runs. Never imported onto ids that may name other faces. */

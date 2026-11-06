@@ -96,8 +96,8 @@ dialogs by hand, is still open).
    guessed. Bundles of one video form a lineage (same video sha256), so the library shows one entry per video with
    its versions. Needed before anyone annotates in earnest: it is also what makes corrections usable as labels for
    evaluating new model versions.
-   - **The stored log is never rewritten.** Only an explicit undo (truncate) or import (replace) changes a log, as
-     now. Carrying over appends the re-anchored ops to the *new* version's log, each pointing back to the op it came
+   - **The stored log is never rewritten.** Only import (`replace`) shrinks a log; undo appends a `revert`
+     (`perception-corrections/3`, 2026-11-02, below). Carrying over appends the re-anchored ops to the *new* version's log, each pointing back to the op it came
      from; the old version's log and bundle are left as they were. Because `corrections.bundle_id` cascades on
      delete, removing an old version must not be the only thing that kept an op: carried-over ops are copies, and
      the ops left for review are stored with the new version's carry-over record, which has no foreign key to the
