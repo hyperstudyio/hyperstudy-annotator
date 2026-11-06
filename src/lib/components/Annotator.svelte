@@ -6,7 +6,9 @@
   // the page is shown: a run on Extract imports its bundle here.
   import Viewer from './Viewer.svelte';
   import Popover from './ui/Popover.svelte';
-  import { LICENCE_TEXT, lastOpened, rememberOpened, strictest, type LibraryApi } from '../library';
+  import { lastOpened, rememberOpened, type LibraryApi } from '../library';
+  import { LICENCE_TEXT, strictest } from '../licences';
+  import { openExternal } from '../desktopLinks';
   import type { BundleSource } from '../source';
   import type { BundleSummary } from '../types';
 
@@ -88,7 +90,7 @@
   {/if}
   {#if source}
     {#key source}
-      <Viewer {source} {active} {onmodal} title={switcher} />
+      <Viewer {source} {active} {onmodal} title={switcher} {openExternal} />
     {/key}
   {:else}
     {#if currentBundle}<div class="bar">{@render switcher()}</div>{/if}

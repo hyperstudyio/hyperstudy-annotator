@@ -4,9 +4,12 @@
   import { Bundle } from '../model/bundle';
   import { Session } from '../model/session.svelte';
   import type { BundleSource } from '../source';
+  import type { OpenExternal } from '../links';
   import Workspace from './Workspace.svelte';
 
-  let { source, onback, active = true, onmodal, title }: { source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void; title?: Snippet } = $props();
+  let { source, onback, active = true, onmodal, title, openExternal }: {
+    source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void; title?: Snippet; openExternal?: OpenExternal;
+  } = $props();
   let session = $state<Session | null>(null);
   let error = $state<string | null>(null);
 
@@ -23,7 +26,7 @@
 </script>
 
 {#if session}
-  <Workspace {session} {source} {onback} {active} {onmodal} {title} />
+  <Workspace {session} {source} {onback} {active} {onmodal} {title} {openExternal} />
 {:else}
   <div class="loading">
     {#if error}<p class="error">{error}</p>{#if onback}<button onclick={onback}>Back to all videos</button>{/if}

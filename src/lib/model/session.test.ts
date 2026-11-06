@@ -5,7 +5,7 @@ import { NOT_PERSON, RunUnknownError, UNKNOWN, upgrade, type Op } from './correc
 import { MemoryStorage, SHA, face, makeBundle } from './fixture.test-helpers';
 import { Session, coVisible, stampAfter } from './session.svelte';
 import { View } from './view.svelte';
-import { LocalCorrectionStore, localTypesElsewhere } from '../source';
+import { LocalCorrectionStore, localTypesElsewhere } from '../webSource';
 import type { AnnotationType } from './corrections';
 
 function session(bundle = makeBundle(), storage = new MemoryStorage()) {

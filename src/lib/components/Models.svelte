@@ -9,8 +9,8 @@
   import KeyRow from './KeyRow.svelte';
   import HfAccess from './HfAccess.svelte';
   import { accessOf, gatedModels, repoOf } from '../hfAccess';
-  import { openExternal } from '../links';
-  import { LICENCE_TEXT } from '../library';
+  import { openExternal } from '../desktopLinks';
+  import { LICENCE_TEXT } from '../licences';
   import { downloadSize, modelNote } from '../models';
   import { loadDefaults, saveDefault } from '../stepDefaults';
   import { choiceLabel, choiceName, keyRows, oncePerModel, stepGroups, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';

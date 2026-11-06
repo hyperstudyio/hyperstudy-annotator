@@ -13,7 +13,7 @@
   // and imported (Rust: remote_runs), and one that failed says why until put away.
   import { untrack } from 'svelte';
   import { latestOnly } from '../latest';
-  import { openExternal } from '../links';
+  import { openExternal } from '../desktopLinks';
   import type { RunStatus } from './Rail.svelte';
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';

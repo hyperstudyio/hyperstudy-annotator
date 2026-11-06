@@ -2,14 +2,14 @@
   // ⓘ beside a timeline group's name: the models behind what it draws, each with a page to read about it when one is
   // known, and what its licence allows (the bundle's own licence text on hover). Nothing when no model made the group
   // (your own annotations).
-  import { useSession } from '../../model/context';
+  import { useOpenExternal, useSession } from '../../model/context';
   import { groupModels } from '../../models';
-  import { LICENCE_TEXT } from '../../library';
-  import { openExternal } from '../../links';
+  import { LICENCE_TEXT } from '../../licences';
   import Popover from '../ui/Popover.svelte';
 
   let { group, title }: { group: string; title: string } = $props();
   const s = useSession();
+  const openExternal = useOpenExternal();
   const models = $derived(groupModels(s.bundle.layers, group));
   const caution = (mode: string) => mode === 'academic-only' || mode === 'needs-review';
 </script>

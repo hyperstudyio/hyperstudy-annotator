@@ -6,9 +6,9 @@
 // (a perception-corrections/2 file is `{ format, sha256, bundle, ops: edits }`).
 import { follow, NOT_PERSON, UNKNOWN, type AnnotationType, type Note, type Op } from './corrections';
 import { Session } from './session.svelte';
-import { strictest } from '../library';
+import { strictest } from '../licences';
 import type {
-  BodiesLayer, BundleSummary, FaceTrack, FacesLayer, FacingEvent, FacingLayer, FileEntry, GazeEvent, GazeLayer,
+  BodiesLayer, FaceTrack, FacesLayer, FacingEvent, FacingLayer, FileEntry, GazeEvent, GazeLayer,
   GestureEvent, GesturesLayer, HandsLayer, LayerBase, LicenceMode, Manifest, ObjectIdentity, ObjectsLayer, ObjectTrack,
   Person, Producer, ProsodyLayer, Shot, ShotsLayer, SoundEvent, SoundsLayer, Speaker, SpeakersLayer, TextItem, TextLayer,
   TranscriptLayer, Utterance,
@@ -192,7 +192,7 @@ export function annotated(s: Session, { title, exportedAt = new Date() }: { titl
     },
     bundle: {
       manifest_sha256: b.key ?? null, format: M.format, schema_version: M.schema_version, created_at: M.created_at, pipeline: M.pipeline,
-      strictest_licence: strictest({ layers: licences } as BundleSummary),   // reads only the layers' licences
+      strictest_licence: strictest({ layers: licences }),   // reads only the layers' licences
       layers: provenance,
     },
     layers,

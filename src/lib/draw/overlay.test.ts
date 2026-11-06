@@ -3,7 +3,7 @@ import { drawOverlay, Smoothed } from './overlay';
 import { MemoryStorage, makeBundle } from '../model/fixture.test-helpers';
 import { Session } from '../model/session.svelte';
 import { View, defaultView, type OverlayKey, type OverlayStyle } from '../model/view.svelte';
-import { LocalCorrectionStore } from '../source';
+import { LocalCorrectionStore } from '../webSource';
 
 /** A canvas that records each face box drawn: its colour, width and opacity at the moment it was stroked. */
 function recorder() {

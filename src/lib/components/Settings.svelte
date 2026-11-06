@@ -15,7 +15,7 @@
   import Models from './Models.svelte';
   import Servers from './Servers.svelte';
   import Cloud from './Cloud.svelte';
-  import { DOCS_URL, openExternal } from '../links';
+  import { DOCS_URL, openExternal } from '../desktopLinks';
   import type { Updates } from '../updates.svelte';
   import { FULL_GRAPH, keysSent, ofGraph, placeName, type CliKeys, type CloudStatus, type Doctor, type Host, type KeyStatus, type ModelsListing, type PipelineApi } from '../pipeline';
 

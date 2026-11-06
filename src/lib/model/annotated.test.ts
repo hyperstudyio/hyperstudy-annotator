@@ -5,7 +5,7 @@ import { FORMAT, NOT_PERSON, UNKNOWN, fold, readCorrectionsFile, type Op } from 
 import { MemoryStorage, SHA, makeBundle } from './fixture.test-helpers';
 import { Session } from './session.svelte';
 import { View } from './view.svelte';
-import { LocalCorrectionStore } from '../source';
+import { LocalCorrectionStore } from '../webSource';
 import type { LicenceMode, ObjectsLayer } from '../types';
 
 const producer = { stage: 't', stage_version: '0', models: [{ id: 'm', source: null, revision: null, licence: null, licence_mode: 'commercial-ok' as const }],

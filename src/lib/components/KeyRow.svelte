@@ -6,7 +6,7 @@
   // it accepts it (one request that costs nothing); a key that is part of something else's setup (a cloud provider's)
   // is removed with it, not on its own (`removable`).
   import { tooOld, type CheckResult, type KeyStatus, type PipelineApi } from '../pipeline';
-  import { openExternal } from '../links';
+  import { openExternal } from '../desktopLinks';
 
   let { api, k, elsewhere = null, label = 'API key', removable = true, onchange, onbusy }: {
     api: PipelineApi; k: KeyStatus;

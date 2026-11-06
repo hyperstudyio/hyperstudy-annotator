@@ -8,6 +8,7 @@
   import { provideSession } from '../model/context';
   import type { Session } from '../model/session.svelte';
   import type { BundleSource } from '../source';
+  import type { OpenExternal } from '../links';
   import { DRAWER_W } from '../model/view.svelte';
   import Header from './Header.svelte';
   import VideoStage from './VideoStage.svelte';
@@ -22,11 +23,13 @@
   // the video stops, and the keys go to what is on screen instead. `onmodal`: a dialog here waits for its answer
   // (CarryOffer), so what the app shows around the workspace is out of reach too, as the workspace is.
   // `title`: what the header shows for the video's name (the desktop app's switcher between videos); its name else.
-  let { session: s, source, onback, active = true, onmodal, title }: {
+  // `openExternal`: how a page outside the annotator opens (a model's page); a new browser tab unless the app says.
+  let { session: s, source, onback, active = true, onmodal, title, openExternal }: {
     session: Session; source: BundleSource; onback?: () => void; active?: boolean; onmodal?: (open: boolean) => void; title?: Snippet;
+    openExternal?: OpenExternal;
   } = $props();
   // svelte-ignore state_referenced_locally
-  provideSession(s, source);
+  provideSession(s, source, openExternal);
   const pb = $derived(s.playback);
   const TIMELINE_MIN_H = 120, VIDEO_MIN_H = 220;
 

@@ -3,7 +3,7 @@ import { arrange, buildGroups, captionTags, rowHeight, shownDims, speakerForDrop
 import { fitPps, scrollToKeep, tickStep, timeAtX, LABEL_W } from './scale';
 import { Session } from '../model/session.svelte';
 import { View, defaultView } from '../model/view.svelte';
-import { LocalCorrectionStore } from '../source';
+import { LocalCorrectionStore } from '../webSource';
 import { MemoryStorage, makeBundle } from '../model/fixture.test-helpers';
 import type { ProsodyLayer } from '../types';
 

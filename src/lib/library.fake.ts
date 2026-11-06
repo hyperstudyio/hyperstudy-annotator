@@ -3,7 +3,7 @@
 // with none. Without /devdata (CI) the bundles list, and opening one says it could not be loaded. Edits are saved
 // after the same wait, as the app's are after a round trip to its database (so what shows while one saves is tested).
 import type { LibraryApi } from './library';
-import { httpSource } from './source';
+import { httpSource } from './webSource';
 import type { BundleSummary } from './types';
 
 const bundle = (id: string, title: string, layers: BundleSummary['layers'], video_path: string | null, corrections = 0): BundleSummary => ({
