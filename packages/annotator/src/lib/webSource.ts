@@ -75,15 +75,36 @@ async function sha256Hex(text: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** A path a bundle names (a layer, a side file, an asset such as a crop), checked as the desktop app's
+ *  `bundle::safe_path` checks it: plain relative segments only. In a URL that also rules out what a browser would
+ *  read as leaving the bundle: backslashes, percent-escaped dots, slashes or backslashes, and a query or fragment.
+ *  A bundle can come from anyone (a study member's upload), and a path out of it would be fetched with the viewer's
+ *  cookies. Returns the path; throws for any other. */
+export function bundlePath(path: string): string {
+  const plain = path !== '' && !/[\\?#]|%(2e|2f|5c)/i.test(path)
+    && path.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+  if (!plain || /^[a-z][a-z0-9+.-]*:/i.test(path)) throw new Error(`not a path inside the bundle: ${JSON.stringify(path)}`);
+  return path;
+}
+
+/** Every path the manifest names, checked before anything is fetched from it. */
+function checkManifestPaths(manifest: Manifest) {
+  for (const entry of Object.values(manifest.layers ?? {})) {
+    bundlePath(entry.file);
+    for (const side of entry.side_files ?? []) bundlePath(side.file);
+  }
+}
+
 export async function httpSource(bundleUrl: string, videoUrl: string | null, previousUrl: string | null = null): Promise<BundleSource> {
   const base = bundleUrl.replace(/\/$/, '');
   const res = await fetch(`${base}/manifest.json`);
   if (!res.ok) throw new Error(`no manifest at ${base} (${res.status})`);
   const manifestText = await res.text();
   const manifest = JSON.parse(manifestText) as Manifest;
+  checkManifestPaths(manifest);
   const store = new LocalCorrectionStore(manifest.video.sha256, localStorage, previousUrl ? base : undefined);
   const getJson = async <T>(path: string) => {
-    const r = await fetch(`${base}/${path}`);
+    const r = await fetch(`${base}/${bundlePath(path)}`);
     if (!r.ok) throw new Error(`${path}: ${r.status}`);
     return (await r.json()) as T;
   };
@@ -102,7 +123,7 @@ export async function httpSource(bundleUrl: string, videoUrl: string | null, pre
       return entry ? getJson<T>(entry.file) : null;
     },
     file: getJson,
-    assetUrl: (path) => `${base}/${path}`,
+    assetUrl: (path) => `${base}/${bundlePath(path)}`,
     async findPrototypeCorrections() {
       // the bake-off layout: runs/<clip>/bundle next to runs/<clip>/perception_corrections.json
       const path = `${base.replace(/\/[^/]+$/, '')}/perception_corrections.json`;

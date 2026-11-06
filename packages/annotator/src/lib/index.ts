@@ -10,7 +10,7 @@ export { default as Popover } from './components/ui/Popover.svelte';
 
 // Where a bundle comes from, and where its edits are kept
 export type { BundleSource, CarryRecord, CorrectionStore, EarlierVersion, FoundFile, Lineage, TypesElsewhere } from './source';
-export { LocalCorrectionStore, httpSource, localTypesElsewhere } from './webSource';
+export { LocalCorrectionStore, bundlePath, httpSource, localTypesElsewhere } from './webSource';
 
 // The model: a bundle, an open session on it, its edit log and the annotated result
 export { Bundle } from './model/bundle';

@@ -6,7 +6,9 @@ them (who a face is, who speaks, what was said), and annotate the video on its t
 
 The editor sees a bundle only through a `BundleSource`: where the manifest, layers and assets come from, the video's
 URL, and the `CorrectionStore` that keeps the edits (an append-only op log, `perception-corrections/3`). Each app
-supplies its own; `httpSource` (a bundle served over HTTP, edits in localStorage) is the reference.
+supplies its own; `httpSource` (a bundle served over HTTP, edits in localStorage) is the reference. A bundle can come
+from anyone, so a source checks every path it names (layers, side files, assets) with `bundlePath` before fetching
+it, as `httpSource` does: plain relative segments only, as the desktop app's `bundle::safe_path` allows.
 
 ```svelte
 <script>
