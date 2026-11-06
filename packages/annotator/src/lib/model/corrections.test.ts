@@ -90,6 +90,12 @@ describe('batches and undo', () => {
     expect(lastUndoable([])).toBeNull();
   });
 
+  test('a revert that names no batches (a malformed or later-shaped op) takes nothing back and does not stop the log loading', () => {
+    const ops = [rename('Ann', 'b1'), { op: 'revert', batch: 'r1', ops: ['o1'] }, { op: 'revert', batch: 'r2', batches: [7, 'b9'] }] as unknown as Op[];
+    expect(live(ops)).toEqual([ops[0]]);
+    expect(fold(ops).names['person:A']).toBe('Ann');
+  });
+
   test('a revert of a revert is a redo: the batch it took back is in effect again, and reverting the redo undoes it', () => {
     const ops: Op[] = [rename('Ann', 'b1'), { op: 'revert', batches: ['b1'], batch: 'r1' }];
     expect(fold(ops).names['person:A']).toBeUndefined();

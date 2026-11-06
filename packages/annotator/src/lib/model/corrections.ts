@@ -154,7 +154,9 @@ export function live(ops: Op[]): Op[] {
   const reverted = new Set<string>();
   for (let i = ops.length - 1; i >= 0; i--) {
     const o = ops[i];
-    if (o.op === 'revert' && !reverted.has(batchOf(o))) for (const b of o.batches) reverted.add(b);
+    if (o.op !== 'revert' || reverted.has(batchOf(o))) continue;
+    // a revert without a list of batches (malformed, or a later shape) takes nothing back, as the library counts it
+    for (const b of Array.isArray(o.batches) ? o.batches : []) if (typeof b === 'string') reverted.add(b);
   }
   return ops.filter((o) => o.op !== 'revert' && !reverted.has(batchOf(o)));
 }

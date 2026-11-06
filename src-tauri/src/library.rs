@@ -491,6 +491,15 @@ mod tests {
     }
 
     #[test]
+    fn a_revert_that_names_no_batches_takes_nothing_back() {
+        // the frontend's live() test of the same name: a malformed or later-shaped revert counts for nothing
+        let ops = [json!({"op": "person.rename", "person": "person:A", "name": "Ann", "batch": "b1"}),
+                   json!({"op": "revert", "batch": "r1", "ops": ["o1"]}),
+                   json!({"op": "revert", "batch": "r2", "batches": [7, "b9"]})];
+        assert_eq!(live_count(&ops), 1);
+    }
+
+    #[test]
     fn corrections_append_undo_and_replace_in_order() {
         let (conn, data, src) = setup();
         let (id, manifest, dst) = prepare_import(src.path(), data.path()).unwrap();
