@@ -199,7 +199,10 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
   and what they name, and `fold`, Session's `ops`, exports and carry-over read only that. The stored log never shrinks
   except by import (`replace`), so `truncate_corrections` is gone. A revert counts only while no later revert in effect
   names its batch, so a revert of a revert is a redo (2026-11-06; read newest first). The app offers no redo yet; a
-  shared log can hold one.
+  shared log can hold one. **To settle before any writer offers redo** (PR #63's review): a redone batch keeps its
+  place in the log, so redoing an edit undone before a carry-over puts it back *older* than the carried ops, and
+  `fold`'s last-write-wins lets them win, against "carried ops never override newer edits". Either redo appends
+  fresh copies of the batch, or carry-over is refused while the log has an undone batch that could be redone.
 - Ops from before: their batch is `'at:' || at` (they were batched by sharing `at`), read so by `batchOf` everywhere.
   Migration 5 writes that batch and `op_id` `v2-<row id>` into every stored op; `/1` and `/2` files are named on import
   (`upgrade`: `v2-<place in the file>`). The library's counts, the earlier version to carry from and the refusal to

@@ -13,12 +13,15 @@ GitHub or anywhere else, and each version records the commit and workflow that b
 3. **The first version, from your computer**, in this repository on a checkout of main with this package merged:
 
    ```sh
-   npm login                                   # opens the browser
-   npm publish --workspace @hyperstudyio/annotator --dry-run   # what would be published: dist/, README, LICENSE
-   npm publish --workspace @hyperstudyio/annotator             # asks for your 2FA code
+   npm ci
+   bash scripts/check-package.sh /tmp/annotator-pack   # builds, packs, checks it in a HyperStudy-like app, keeps it
+   npm login                                           # opens the browser
+   npm publish /tmp/annotator-pack/hyperstudyio-annotator-0.1.0.tgz --ignore-scripts --access public --dry-run
+   npm publish /tmp/annotator-pack/hyperstudyio-annotator-0.1.0.tgz --ignore-scripts --access public   # asks for 2FA
    ```
 
-   `prepublishOnly` builds `dist/` and checks it with publint first; `publishConfig.access` makes it public.
+   This publishes the tarball the check built and tested, as the workflow does, rather than a fresh build. The dry
+   run lists what would be published: `dist/`, the README, the licence and `package.json`.
 4. **Trust the workflow** (npmjs.com → the package → Settings → Trusted Publisher → GitHub Actions):
    organization `hyperstudyio`, repository `hyperstudy-annotator`, workflow `publish-annotator.yml`, no environment.
    Allow `npm publish`. A new connection must publish once within 2 days or it expires, so release soon after
