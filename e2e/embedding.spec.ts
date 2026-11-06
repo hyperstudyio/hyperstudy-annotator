@@ -21,6 +21,7 @@ test('the annotator styles only itself: the embedding page keeps its own buttons
   // the annotator's own, from its root alone
   expect(await style('.viewer', 'font-size')).toBe('13px');
   expect(await style('.viewer', 'color')).toBe('rgb(224, 224, 224)');                    // --color-text-primary
+  expect(await style('.viewer', 'background-color')).toBe('rgb(18, 18, 18)');            // its own, not the page's
   const trigger = page.getByRole('button', { name: 'What the video shows' });
   expect(await trigger.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)');   // a plain button
   expect(await trigger.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(176, 176, 176)');

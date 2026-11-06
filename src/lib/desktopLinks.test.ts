@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { OPENABLE } from './links';
+import { OPENABLE } from '@hyperstudyio/annotator';
 
 test('the hosts the page opens are exactly the ones the desktop app allows it to open', () => {
   const caps = JSON.parse(readFileSync(new URL('../../src-tauri/capabilities/default.json', import.meta.url), 'utf8'));

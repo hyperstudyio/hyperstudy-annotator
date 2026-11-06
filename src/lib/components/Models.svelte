@@ -10,11 +10,10 @@
   import HfAccess from './HfAccess.svelte';
   import { accessOf, gatedModels, repoOf } from '../hfAccess';
   import { openExternal } from '../desktopLinks';
-  import { LICENCE_TEXT } from '../licences';
-  import { downloadSize, modelNote } from '../models';
+  import { LICENCE_TEXT, downloadSize, modelNote } from '@hyperstudyio/annotator';
+  import type { LicenceMode } from '@hyperstudyio/annotator';
   import { loadDefaults, saveDefault } from '../stepDefaults';
   import { choiceLabel, choiceName, keyRows, oncePerModel, stepGroups, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
-  import type { LicenceMode } from '../types';
   let { api, keys, cli, models, problem = null, allSteps = null, onkeys, onbusy }: {
     api: PipelineApi; keys: KeyStatus[]; cli: CliKeys | null;
     /** the models and steps; null: not known (an older pipeline, or the listing failed: `problem`) */

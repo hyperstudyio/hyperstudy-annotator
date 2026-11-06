@@ -9,11 +9,10 @@
   // offline|bad-download> the app's updates against one for the releases (updates.fake.ts).
   import Rail, { type Page, type RunStatus, type UpdateBadge } from './lib/components/Rail.svelte';
   import Annotator from './lib/components/Annotator.svelte';
-  import Viewer from './lib/components/Viewer.svelte';
+  import { Viewer, httpSource } from '@hyperstudyio/annotator';
+  import type { BundleSource } from '@hyperstudyio/annotator';
   import Settings, { type SettingsSection } from './lib/components/Settings.svelte';
-  import type { BundleSource } from './lib/source';
   import { inTauri } from './lib/tauriSource';
-  import { httpSource } from './lib/webSource';
   import { openExternal } from './lib/desktopLinks';
   import PipelineDialog from './lib/components/PipelineDialog.svelte';
   import { tauriPipeline, type PipelineApi, type SetupStatus } from './lib/pipeline';

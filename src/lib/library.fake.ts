@@ -3,8 +3,8 @@
 // with none. Without /devdata (CI) the bundles list, and opening one says it could not be loaded. Edits are saved
 // after the same wait, as the app's are after a round trip to its database (so what shows while one saves is tested).
 import type { LibraryApi } from './library';
-import { httpSource } from './webSource';
-import type { BundleSummary } from './types';
+import { httpSource } from '@hyperstudyio/annotator';
+import type { BundleSummary } from '@hyperstudyio/annotator';
 
 const bundle = (id: string, title: string, layers: BundleSummary['layers'], video_path: string | null, corrections = 0): BundleSummary => ({
   id, title, video_sha256: 'f'.repeat(64), schema_version: '0.1.0', created_at: '2026-10-20T14:02:00Z', imported_at: '2026-10-21T09:15:00Z',

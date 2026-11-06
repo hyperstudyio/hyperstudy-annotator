@@ -9,7 +9,24 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "types": ["svelte", "vite/client", "node"]
+    "types": [
+      "svelte",
+      "vite/client",
+      "node"
+    ],
+    "paths": {
+      "@hyperstudyio/annotator": [
+        "./packages/annotator/src/lib/index.ts"
+      ],
+      "@hyperstudyio/annotator/*": [
+        "./packages/annotator/src/lib/*"
+      ]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "packages/annotator/src/**/*.ts",
+    "packages/annotator/src/**/*.svelte"
+  ]
 }

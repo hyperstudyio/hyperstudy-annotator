@@ -1,7 +1,8 @@
 // Pages outside the app. In the desktop app they open in the user's browser (the opener plugin, allowed for the
 // annotator's openable hosts only in capabilities/default.json: a test keeps the two lists the same); in a browser
 // (development and testing), in a new tab.
-import { browserOpen, openable, type OpenExternal } from './links';
+import { browserOpen, openable } from '@hyperstudyio/annotator';
+import type { OpenExternal } from '@hyperstudyio/annotator';
 import { inTauri } from './tauriSource';
 
 export const DOCS_URL = 'https://docs.hyperstudy.io/annotator';

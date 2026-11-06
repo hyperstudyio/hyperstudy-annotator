@@ -14,3 +14,5 @@ playwright-report/
 src-tauri/binaries/
 # the docs demo's video, bundle and screenshots (scripts/docs-demo: made again from the scene)
 scripts/docs-demo/out/
+# svelte-package build output (npm run package)
+.svelte-kit/

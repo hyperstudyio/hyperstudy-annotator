@@ -113,7 +113,8 @@
 <style>
   /* the annotator's root (annotator.css): no box of its own, so the viewer lays out in its parent as before */
   .annotator-root { display: contents; }
-  .viewer { height: 100%; display: flex; flex-direction: column; min-width: 0; }
+  /* its own background: in the desktop app the body has it too, but a page that embeds the viewer need not */
+  .viewer { height: 100%; display: flex; flex-direction: column; min-width: 0; background: var(--color-bg-base); }
   /* Both tracks are minmax(0, ...): a grid track sized by its content would grow with the widest unwrapped line in it
      (a shot caption, the timeline's own zoomed width) and the timeline's scale, which is fitted to its width, would
      change with whatever is on screen (the drag-range bug). */

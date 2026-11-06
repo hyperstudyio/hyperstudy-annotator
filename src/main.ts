@@ -1,5 +1,5 @@
 import { mount } from 'svelte';
-import './lib/annotator.css';
+import '@hyperstudyio/annotator/annotator.css';
 import './app.css';
 import App from './App.svelte';
 

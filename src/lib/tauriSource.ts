@@ -1,10 +1,8 @@
 // The desktop app's source: an imported bundle, through the app's commands; corrections in the app's SQLite database.
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import type { Unmatched } from './model/carryover';
-import { typesIn, type Op } from './model/corrections';
-import type { BundleSource, CarryRecord, FoundFile } from './source';
-import type { BundleSummary, Manifest } from './types';
+import { typesIn } from '@hyperstudyio/annotator';
+import type { Unmatched, Op, BundleSource, CarryRecord, FoundFile, BundleSummary, Manifest } from '@hyperstudyio/annotator';
 
 export const inTauri = () => '__TAURI_INTERNALS__' in window;
 

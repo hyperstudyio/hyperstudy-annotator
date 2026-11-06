@@ -35,5 +35,5 @@
 {/if}
 
 <style>
-  .loading { padding: 24px; }
+  .loading { padding: 24px; height: 100%; background: var(--color-bg-base); }
 </style>

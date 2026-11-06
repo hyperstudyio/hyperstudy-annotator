@@ -1,9 +1,8 @@
 // The library the Annotator page lists: the bundles imported into the app. The page is given one of these: the app's
 // (Tauri commands and its file dialogs), or in a browser's ?library-demo a scripted stand-in (library.fake.ts), so the
 // page can be tried and tested without the app.
-import type { BundleSource } from './source';
+import type { BundleSource, BundleSummary } from '@hyperstudyio/annotator';
 import { api, tauriSource } from './tauriSource';
-import type { BundleSummary } from './types';
 
 export interface LibraryApi {
   list(): Promise<BundleSummary[]>;
