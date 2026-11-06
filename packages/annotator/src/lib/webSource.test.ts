@@ -7,7 +7,9 @@ afterEach(() => { vi.unstubAllGlobals(); });
 test('a path a bundle names is used only as plain segments inside the bundle, as the desktop app\'s safe_path allows', () => {
   for (const ok of ['layers/faces.json', 'assets/crops/person_3.jpg', 'a-b_c.d/e']) expect(bundlePath(ok)).toBe(ok);
   for (const bad of ['', '/etc/passwd', '../x', 'layers/../../api/x', './x', 'a//b', 'a/', 'a\\..\\b', '%2e%2e/x', 'a%2Fb',
-    'a%5cb', 'x?y', 'x#y', 'https://evil.example/x']) {
+    'a%5cb', 'x?y', 'x#y', 'https://evil.example/x',
+    // what the URL parser removes (tab, newline, CR anywhere) or trims (whitespace at the ends) would turn into `..`
+    '.\t./x', '.\n./x', 'a/.\r.', 'a/.. ', ' ../x', '.. /x', 'a\u0000b', 'a\u007fb']) {
     expect(() => bundlePath(bad), bad).toThrow(/not a path inside the bundle/);
   }
 });

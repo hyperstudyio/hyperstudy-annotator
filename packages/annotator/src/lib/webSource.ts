@@ -77,14 +77,27 @@ async function sha256Hex(text: string) {
 
 /** A path a bundle names (a layer, a side file, an asset such as a crop), checked as the desktop app's
  *  `bundle::safe_path` checks it: plain relative segments only. In a URL that also rules out what a browser would
- *  read as leaving the bundle: backslashes, percent-escaped dots, slashes or backslashes, and a query or fragment.
- *  A bundle can come from anyone (a study member's upload), and a path out of it would be fetched with the viewer's
- *  cookies. Returns the path; throws for any other. */
+ *  read as leaving the bundle: backslashes, percent-escaped dots, slashes or backslashes, a query or fragment, a
+ *  scheme, and whitespace or control characters (the URL parser removes tabs and newlines anywhere and trims the
+ *  ends, so `.\t.` or a trailing `.. ` would become `..`). A bundle can come from anyone (a study member's upload),
+ *  and a path out of it would be fetched with the viewer's cookies. Returns the path; throws for any other. */
 export function bundlePath(path: string): string {
-  const plain = path !== '' && !/[\\?#]|%(2e|2f|5c)/i.test(path)
+  const plain = path !== '' && !/[\s\u0000-\u001f\u007f\\?#]|%(2e|2f|5c)/i.test(path)
     && path.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
   if (!plain || /^[a-z][a-z0-9+.-]*:/i.test(path)) throw new Error(`not a path inside the bundle: ${JSON.stringify(path)}`);
   return path;
+}
+
+/** `path` under the bundle at `base`, checked by `bundlePath` and then once more as the browser will read it: the URL
+ *  it resolves to must be on the bundle's origin and under its folder. Returns the URL to fetch. */
+function inBundle(base: string, path: string): string {
+  const url = `${base}/${bundlePath(path)}`;
+  const at = globalThis.location?.href ?? 'http://bundle.invalid/';   // a relative base resolves against the page
+  const dir = new URL(`${base}/`, at), resolved = new URL(url, at);
+  if (resolved.origin !== dir.origin || !resolved.pathname.startsWith(dir.pathname)) {
+    throw new Error(`not a path inside the bundle: ${JSON.stringify(path)}`);
+  }
+  return url;
 }
 
 /** Every path the manifest names, checked before anything is fetched from it. */
@@ -104,7 +117,7 @@ export async function httpSource(bundleUrl: string, videoUrl: string | null, pre
   checkManifestPaths(manifest);
   const store = new LocalCorrectionStore(manifest.video.sha256, localStorage, previousUrl ? base : undefined);
   const getJson = async <T>(path: string) => {
-    const r = await fetch(`${base}/${bundlePath(path)}`);
+    const r = await fetch(inBundle(base, path));
     if (!r.ok) throw new Error(`${path}: ${r.status}`);
     return (await r.json()) as T;
   };
@@ -123,7 +136,7 @@ export async function httpSource(bundleUrl: string, videoUrl: string | null, pre
       return entry ? getJson<T>(entry.file) : null;
     },
     file: getJson,
-    assetUrl: (path) => `${base}/${bundlePath(path)}`,
+    assetUrl: (path) => inBundle(base, path),
     async findPrototypeCorrections() {
       // the bake-off layout: runs/<clip>/bundle next to runs/<clip>/perception_corrections.json
       const path = `${base.replace(/\/[^/]+$/, '')}/perception_corrections.json`;
