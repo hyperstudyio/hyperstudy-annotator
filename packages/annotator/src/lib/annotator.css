@@ -1,7 +1,9 @@
 /* The annotator's look, scoped to its root (`.hs-annotator`): the workspace, its dialogs and the panels it opens on the
-   page's body carry the class, so these rules reach nothing of the page that embeds them. `:where()` adds no
-   specificity, so they weigh exactly what bare element and class rules would, and a component's own styles win. */
-:where(.hs-annotator) {
+   page's body carry the class, so these rules reach nothing of the page that embeds them.
+   The root rule weighs one class, so a page's rules for bare elements or `*` cannot undo it on the root (HyperStudy's
+   `* { box-sizing: inherit }` then inherits border-box from it). Every rule inside is wrapped in `:where()`, which
+   adds no specificity: each weighs what the bare element or class rule would, so a component's own styles win. */
+.hs-annotator {
   --color-primary: #4caf50; --color-primary-light: rgba(76, 175, 80, .14);
   --color-danger: #f44336; --color-caution: #fbbf24; --color-caution-light: rgba(251, 191, 36, .12); --color-info: #4f9eff;
   --color-bg-base: #121212; --color-bg-surface: #1c1c1c; --color-bg-elevated: #252525; --color-bg-card: #2c2c2c; --color-bg-hover: #333;
@@ -10,8 +12,9 @@
   --label-w: 170px;
   color-scheme: dark;
   background: var(--color-bg-base); color: var(--color-text-primary); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-sizing: border-box;
 }
-:where(.hs-annotator), :where(.hs-annotator) * { box-sizing: border-box; }
+:where(.hs-annotator) * { box-sizing: border-box; }
 :where(.hs-annotator) button { font: inherit; color: inherit; background: var(--color-bg-card); border: 1px solid var(--color-border-strong); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 :where(.hs-annotator) button:hover:not(:disabled) { background: var(--color-bg-hover); }
 :where(.hs-annotator) button:disabled { opacity: .45; cursor: default; }

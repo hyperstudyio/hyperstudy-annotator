@@ -34,3 +34,32 @@ test('the annotator styles only itself: the embedding page keeps its own buttons
   expect(await panel.evaluate((el) => getComputedStyle(el).getPropertyValue('--color-bg-card').trim())).toBe('#2c2c2c');
   expect(await panel.evaluate((el) => getComputedStyle(el).fontSize)).toBe('13px');
 });
+
+// HyperStudy's global rules (frontend/src/app.css) that match elements the annotator has, loaded after annotator.css
+// (the worst order: a rule of equal weight wins by coming last). A page's own rules for bare elements such as
+// `button {}` are not defended against: the annotator's base rules weigh what bare element rules do, so that
+// components' own styles always win (the package README says so).
+test("HyperStudy's global rules do not reach into the annotator, whichever stylesheet comes last", async ({ page }) => {
+  await openSynthetic(page);
+  await page.getByRole('button', { name: 'What the video shows' }).click();
+  await page.getByRole('dialog', { name: 'What the video shows' }).waitFor();
+  const look = () => page.evaluate(() => {
+    const at = (sel: string, ...props: string[]) => {
+      const cs = getComputedStyle(document.querySelector(sel)!);
+      return props.map((p) => `${sel} ${p}: ${cs.getPropertyValue(p)}`);
+    };
+    return [
+      ...at('.viewer', 'box-sizing'),
+      ...at('.viewer h1', 'font-size', 'line-height'),
+      ...at('[aria-label="What the video shows"].trigger, button[aria-label="What the video shows"]', 'box-sizing', 'border-radius', 'padding', 'background-color'),
+      ...at('.viewer select', 'box-sizing', 'border-radius', 'padding'),
+      ...at('[role="dialog"][aria-label="What the video shows"]', 'box-sizing'),
+    ];
+  });
+  const before = await look();
+  await page.addStyleTag({ content: `
+    *, *:before, *:after { box-sizing: inherit; }
+    h1 { font-size: 3.2em; line-height: 1.1; }
+  ` });
+  expect(await look()).toEqual(before);
+});

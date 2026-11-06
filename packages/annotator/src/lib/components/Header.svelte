@@ -94,7 +94,7 @@
 
 <style>
   header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--color-bg-surface); border-bottom: 1px solid var(--color-border-default); min-width: 0; }
-  h1 { font-size: 15px; margin: 0; font-weight: 600; white-space: nowrap; }
+  h1 { font-size: 15px; line-height: inherit; margin: 0; font-weight: 600; white-space: nowrap; }   /* not a host page's h1 */
   .gap { flex: 1; }
   .banner { display: flex; align-items: center; gap: 10px; padding: 6px 16px; background: var(--color-primary-light); border-bottom: 1px solid var(--color-border-default); flex-wrap: wrap; }
   .error-banner { background: var(--color-caution-light); }
