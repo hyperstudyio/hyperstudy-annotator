@@ -17,6 +17,7 @@
   import Drawer from './Drawer.svelte';
   import Lightbox from './Lightbox.svelte';
   import Toast from './Toast.svelte';
+  import '../annotator.css';
   import CarryOffer from './CarryOffer.svelte';
 
   // `active`: on screen. An app that hides the workspace and keeps it (the desktop app's other pages) sets it false:
@@ -91,23 +92,27 @@
 
 <svelte:window {onkeydown} />
 
-<div class="viewer" inert={s.modal}>
-  <Header {onback} {title} />
-  <div class="workspace" style="--drawer-w:{drawerW}">
-    <section class="stage">
-      <VideoStage src={source.videoUrl} />
-      <Transport />
-    </section>
-    <Drawer onresize={(dx, w0) => s.view.setDrawerW(w0 + dx)} onresizeend={() => s.view.save()} onresetwidth={() => { s.view.setDrawerW(null); s.view.save(); }} />
-    <Timeline onresizeheight={(dy, h0) => s.view.setTimelineH(Math.max(TIMELINE_MIN_H, Math.min(window.innerHeight - VIDEO_MIN_H, h0 + dy)))}
-      onresetheight={() => { s.view.setTimelineH(null); s.view.save(); }} />
+<div class="hs-annotator annotator-root">
+  <div class="viewer" inert={s.modal}>
+    <Header {onback} {title} />
+    <div class="workspace" style="--drawer-w:{drawerW}">
+      <section class="stage">
+        <VideoStage src={source.videoUrl} />
+        <Transport />
+      </section>
+      <Drawer onresize={(dx, w0) => s.view.setDrawerW(w0 + dx)} onresizeend={() => s.view.save()} onresetwidth={() => { s.view.setDrawerW(null); s.view.save(); }} />
+      <Timeline onresizeheight={(dy, h0) => s.view.setTimelineH(Math.max(TIMELINE_MIN_H, Math.min(window.innerHeight - VIDEO_MIN_H, h0 + dy)))}
+        onresetheight={() => { s.view.setTimelineH(null); s.view.save(); }} />
+    </div>
   </div>
+  <Lightbox />
+  <Toast />
+  <CarryOffer />
 </div>
-<Lightbox />
-<Toast />
-<CarryOffer />
 
 <style>
+  /* the annotator's root (annotator.css): no box of its own, so the viewer lays out in its parent as before */
+  .annotator-root { display: contents; }
   .viewer { height: 100%; display: flex; flex-direction: column; min-width: 0; }
   /* Both tracks are minmax(0, ...): a grid track sized by its content would grow with the widest unwrapped line in it
      (a shot caption, the timeline's own zoomed width) and the timeline's scale, which is fitted to its width, would

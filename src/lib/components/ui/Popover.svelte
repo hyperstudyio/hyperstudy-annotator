@@ -67,7 +67,7 @@
     {@render button()}{#if chevron}<span class="chev" aria-hidden="true"></span>{/if}
   </button>
   {#if open}
-    <div class="panel" bind:this={panelEl} use:toBody style:width="{Math.min(width, window.innerWidth - 16)}px" style:top={at.top === null ? undefined : `${at.top}px`} style:bottom={at.bottom === null ? undefined : `${at.bottom}px`}
+    <div class="hs-annotator panel" bind:this={panelEl} use:toBody style:width="{Math.min(width, window.innerWidth - 16)}px" style:top={at.top === null ? undefined : `${at.top}px`} style:bottom={at.bottom === null ? undefined : `${at.bottom}px`}
       style:left="{at.left}px" style:max-height="{at.max}px" role="dialog" aria-label={label} tabindex="-1" use:focusFirst
       {onkeydown} {onfocusout}>
       {@render children(close)}

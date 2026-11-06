@@ -53,7 +53,7 @@
 <svelte:window onpointerdown={outside} onresize={place} onscrollcapture={place} />
 
 {#if n && type && at}
-  <div class="note-menu" bind:this={panel} use:toBody role="dialog" aria-label={`${type.name} annotation`} tabindex="-1"
+  <div class="hs-annotator note-menu" bind:this={panel} use:toBody role="dialog" aria-label={`${type.name} annotation`} tabindex="-1"
     style:width="{Math.min(WIDTH, window.innerWidth - 16)}px" style:left="{at.left}px" style:max-height="{at.max}px"
     style:top={at.top === null ? undefined : `${at.top}px`} style:bottom={at.bottom === null ? undefined : `${at.bottom}px`}
     {onkeydown} {onfocusout}>

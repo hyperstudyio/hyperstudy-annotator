@@ -28,7 +28,7 @@
 {#if session}
   <Workspace {session} {source} {onback} {active} {onmodal} {title} {openExternal} />
 {:else}
-  <div class="loading">
+  <div class="hs-annotator loading">
     {#if error}<p class="error">{error}</p>{#if onback}<button onclick={onback}>Back to all videos</button>{/if}
     {:else}<p class="muted">Loading {source.title}…</p>{/if}
   </div>
