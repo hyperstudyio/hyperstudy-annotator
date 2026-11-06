@@ -146,10 +146,16 @@ export function typesIn(logs: { key: string; title: string; ops: Op[] }[]): { ke
  *  so that is their batch; the library's migration 5 stores the same value, so a stored log and a file agree. */
 export function batchOf(op: Op): string { return op.batch ?? `at:${op.at ?? ''}`; }
 
-/** The ops still in effect: every op but the reverts and the ops of the batches they revert. */
+/** The ops still in effect: every op but the reverts and the ops of the batches they revert. A revert counts only while
+ *  no later revert in effect names its own batch, so a revert of a revert is a redo. Read newest first: a revert can
+ *  name only batches before it, so each one's standing is settled before the batches it names are reached. */
 export function live(ops: Op[]): Op[] {
   if (!ops.some((o) => o.op === 'revert')) return ops;
-  const reverted = new Set(ops.flatMap((o) => (o.op === 'revert' ? o.batches : [])));
+  const reverted = new Set<string>();
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const o = ops[i];
+    if (o.op === 'revert' && !reverted.has(batchOf(o))) for (const b of o.batches) reverted.add(b);
+  }
   return ops.filter((o) => o.op !== 'revert' && !reverted.has(batchOf(o)));
 }
 

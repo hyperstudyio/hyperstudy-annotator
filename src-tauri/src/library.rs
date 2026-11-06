@@ -247,18 +247,28 @@ fn count_corrections(conn: &Connection, bundle_id: &str) -> Result<usize> {
     Ok(n as usize)
 }
 
-/// How many ops are in effect: not reverts, and not in a batch a revert names (the frontend's `live`). An op's batch
-/// is read as the frontend's `batchOf` reads it: `batch`, else `'at:' || at` (ops from before batches); a revert names
-/// the batches it undoes in `batches`.
+/// How many ops of a bundle's log are in effect (the frontend's `live`, by the same rule).
 fn count_live(conn: &Connection, bundle_id: &str) -> Result<usize> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM corrections c
-          WHERE c.bundle_id = ?1 AND json_extract(c.op, '$.op') IS NOT 'revert'
-            AND COALESCE(json_extract(c.op, '$.batch'), 'at:' || COALESCE(json_extract(c.op, '$.at'), '')) NOT IN (
-                SELECT j.value FROM corrections r, json_each(r.op, '$.batches') j
-                 WHERE r.bundle_id = ?1 AND json_extract(r.op, '$.op') = 'revert')",
-        params![bundle_id], |r| r.get(0))?;
-    Ok(n as usize)
+    Ok(live_count(&load_corrections(conn, bundle_id)?))
+}
+
+/// An op's batch, as the frontend's `batchOf` reads it: `batch`, else `'at:' || at` (ops from before batches).
+fn batch_of(op: &Value) -> String {
+    op["batch"].as_str().map(String::from).unwrap_or_else(|| format!("at:{}", op["at"].as_str().unwrap_or("")))
+}
+
+/// Ops in effect: not reverts, and not in a batch a revert in effect names (in `batches`). A revert counts only while
+/// no later revert in effect names its own batch, so a revert of a revert is a redo; read newest first, since a revert
+/// names only batches before it.
+fn live_count(ops: &[Value]) -> usize {
+    let is_revert = |op: &Value| op["op"].as_str() == Some("revert");
+    let mut reverted = std::collections::HashSet::new();
+    for op in ops.iter().rev() {
+        if is_revert(op) && !reverted.contains(&batch_of(op)) {
+            reverted.extend(op["batches"].as_array().into_iter().flatten().filter_map(|b| b.as_str().map(String::from)));
+        }
+    }
+    ops.iter().filter(|op| !is_revert(op) && !reverted.contains(&batch_of(op))).count()
 }
 
 // --- settings ---
@@ -501,6 +511,13 @@ mod tests {
         let undo2 = json!({"op": "revert", "batches": ["b1"], "op_id": "u2", "batch": "u2", "at": "t5"});
         append_corrections(&conn, &id, &[undo2]).unwrap();
         assert_eq!(get(&conn, &id).unwrap().corrections, 0);   // both ops of the first edit, by one revert
+        // a revert of a revert is a redo: the first edit's two ops count again, and reverting the redo takes them back
+        let redo = json!({"op": "revert", "batches": ["u2"], "op_id": "u3", "batch": "u3", "at": "t6"});
+        append_corrections(&conn, &id, &[redo]).unwrap();
+        assert_eq!(get(&conn, &id).unwrap().corrections, 2);
+        let undo_redo = json!({"op": "revert", "batches": ["u3"], "op_id": "u4", "batch": "u4", "at": "t7"});
+        append_corrections(&conn, &id, &[undo_redo]).unwrap();
+        assert_eq!(get(&conn, &id).unwrap().corrections, 0);
 
         assert_eq!(replace_corrections(&conn, &id, &[op(7), op(8)]).unwrap(), 2);
         assert_eq!(load_corrections(&conn, &id).unwrap(), vec![op(7), op(8)]);

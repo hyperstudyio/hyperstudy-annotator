@@ -197,11 +197,13 @@ adds `carryovers`; the carried ops are copies appended to the new version's log,
   made on); `author` is reserved for HyperStudy, which sets it from the signed-in user.
 - Undo appends `{op: 'revert', batches: [...]}` naming the newest batch still in effect; `live()` leaves out reverts
   and what they name, and `fold`, Session's `ops`, exports and carry-over read only that. The stored log never shrinks
-  except by import (`replace`), so `truncate_corrections` is gone. Redo is not built (a revert of a revert would be it).
+  except by import (`replace`), so `truncate_corrections` is gone. A revert counts only while no later revert in effect
+  names its batch, so a revert of a revert is a redo (2026-11-06; read newest first). The app offers no redo yet; a
+  shared log can hold one.
 - Ops from before: their batch is `'at:' || at` (they were batched by sharing `at`), read so by `batchOf` everywhere.
   Migration 5 writes that batch and `op_id` `v2-<row id>` into every stored op; `/1` and `/2` files are named on import
   (`upgrade`: `v2-<place in the file>`). The library's counts, the earlier version to carry from and the refusal to
-  carry onto a log with edits of its own count only ops in effect (`count_live`, the same rule in SQL), so an undone
+  carry onto a log with edits of its own count only ops in effect (`count_live`, the same rule in Rust), so an undone
   carry-over can be carried again.
 - Checked: Rust and unit tests (85, 166), the browser tests (226); migration 5 on a copy of this Mac's library (267 ops
   over four videos): every op unchanged but for the two fields, each video folds to the same state as before, and undoing

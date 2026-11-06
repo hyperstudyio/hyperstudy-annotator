@@ -90,6 +90,20 @@ describe('batches and undo', () => {
     expect(lastUndoable([])).toBeNull();
   });
 
+  test('a revert of a revert is a redo: the batch it took back is in effect again, and reverting the redo undoes it', () => {
+    const ops: Op[] = [rename('Ann', 'b1'), { op: 'revert', batches: ['b1'], batch: 'r1' }];
+    expect(fold(ops).names['person:A']).toBeUndefined();
+    const redone = [...ops, { op: 'revert', batches: ['r1'], batch: 'r2' } as Op];
+    expect(live(redone)).toEqual([ops[0]]);
+    expect(fold(redone).names['person:A']).toBe('Ann');
+    expect(lastUndoable(redone)).toBe('b1');
+    const undoneAgain = [...redone, { op: 'revert', batches: ['r2'], batch: 'r3' } as Op];
+    expect(live(undoneAgain)).toEqual([]);
+    // two reverts naming the same batch: taking back one leaves the other in effect
+    const twice = [rename('Ann', 'b1'), { op: 'revert', batches: ['b1'], batch: 'r1' } as Op, { op: 'revert', batches: ['b1'], batch: 'r2' } as Op];
+    expect(live([...twice, { op: 'revert', batches: ['r1'], batch: 'r3' } as Op])).toEqual([]);
+  });
+
   test('fold leaves out what was undone, so a name goes back to the one before', () => {
     const ops: Op[] = [rename('x', 'b1'), rename('y', 'b2'), { op: 'revert', batches: ['b2'], batch: 'r' }];
     expect(fold(ops).names['person:A']).toBe('x');
