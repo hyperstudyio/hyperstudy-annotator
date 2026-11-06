@@ -4,18 +4,36 @@
   "description": "The HyperStudy Annotator's editor: view and correct a perception bundle's tracks, and annotate a video on its timeline.",
   "license": "MIT",
   "type": "module",
-  "repository": { "type": "git", "url": "git+https://github.com/hyperstudyio/hyperstudy-annotator.git", "directory": "packages/annotator" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hyperstudyio/hyperstudy-annotator.git",
+    "directory": "packages/annotator"
+  },
   "homepage": "https://docs.hyperstudy.io/annotator",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "package": "svelte-package && publint",
+    "prepublishOnly": "npm run package",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
-  "files": ["dist", "!dist/**/*.test.*", "!dist/**/*.test-helpers.*"],
-  "sideEffects": ["**/*.css"],
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/**/*.test-helpers.*"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
   "svelte": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "svelte": "./dist/index.js", "default": "./dist/index.js" },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "svelte": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
     "./annotator.css": "./dist/annotator.css"
   },
   "peerDependencies": {

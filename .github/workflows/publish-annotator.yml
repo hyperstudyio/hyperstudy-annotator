@@ -1,0 +1,52 @@
+# Publishes the editor package, @hyperstudyio/annotator (packages/annotator), to npm. Pushing a tag annotator-vX.Y.Z
+# (the version in packages/annotator/package.json, on a commit on main) checks and tests it, builds it, and publishes
+# it with npm's trusted publishing: npm trusts this workflow file (set on the package's page on npmjs.com), so no
+# token is stored anywhere, and the published version carries provenance (which commit and workflow built it).
+# The app's own release (v*.*.*, release.yml) is separate; this tag does not match it. See packages/annotator/RELEASING.md.
+name: Publish annotator package
+
+on:
+  push:
+    tags: ['annotator-v*.*.*']
+
+permissions:
+  contents: read
+  id-token: write   # the OIDC token npm exchanges for a one-time publish credential
+
+jobs:
+  publish:
+    name: Publish @hyperstudyio/annotator
+    runs-on: ubuntu-latest   # trusted publishing accepts GitHub-hosted runners only
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # origin/main, for the check below
+      - name: Only a commit on main is published
+        run: |
+          git merge-base --is-ancestor HEAD origin/main || { echo "$(git rev-parse --short HEAD) is not on main: merge it first" >&2; exit 1; }
+      - name: The tag is the package's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          printf '%s' "$TAG" | grep -Eq '^annotator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not an annotator version tag: $TAG" >&2; exit 1; }
+          v=$(node -p 'require("./packages/annotator/package.json").version')
+          [ "annotator-v$v" = "$TAG" ] || { echo "packages/annotator/package.json says $v, not ${TAG#annotator-v}" >&2; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      # trusted publishing needs npm 11.5.1 or later; pinned rather than whatever Node 24 bundles
+      - run: npm install -g npm@11.11.0 && npm --version
+      - run: npm ci
+      - run: npm run check
+      - run: npx vitest run
+      # prepublishOnly builds dist (svelte-package) and checks it (publint); a prerelease goes to the `next` tag, so
+      # `npm install @hyperstudyio/annotator` keeps getting the latest stable version
+      - name: Publish
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in *-*) npm publish --workspace @hyperstudyio/annotator --tag next;;
+                         *)   npm publish --workspace @hyperstudyio/annotator;; esac
