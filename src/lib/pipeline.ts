@@ -564,14 +564,12 @@ export function keyRows(keys: KeyStatus[], cli: CliKeys | null): (KeyStatus & { 
   return keys.map((k) => ({ ...k, elsewhere: k.stored ? null : cli?.keys.find((c) => c.name === k.name)?.source ?? null }));
 }
 
-/** Keys the pipeline reads that the app does not keep, by the name a person knows them by. */
-const OTHER_KEYS: Record<string, string> = { OPENAI_API_KEY: 'OpenAI' };
 /** The keys a run coordinated on a lab server would take with it (remote_run: those its steps declare, at run time or
  *  to download gated weights), among those set here (in the keychain, or found by the CLI), by their labels. */
 export function keysSent(steps: StepInfo[] | null, keys: KeyStatus[], cli: CliKeys | null): string[] {
   const declared = new Set((steps ?? []).flatMap((s) => s.secrets));
   const set = new Set([...keys.filter((k) => k.stored).map((k) => k.name), ...(cli?.keys ?? []).map((k) => k.name)]);
-  return [...declared].filter((k) => set.has(k)).map((k) => keys.find((x) => x.name === k)?.label ?? OTHER_KEYS[k] ?? k)
+  return [...declared].filter((k) => set.has(k)).map((k) => keys.find((x) => x.name === k)?.label ?? k)
     .sort((a, b) => a.localeCompare(b));
 }
 
