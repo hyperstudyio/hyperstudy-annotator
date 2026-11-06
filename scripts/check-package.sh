@@ -12,8 +12,10 @@ npm run package --workspace @hyperstudyio/annotator
 (cd "$root/packages/annotator" && npm pack --silent --pack-destination "$work" >/dev/null)
 cp -R "$root/scripts/package-consumer" "$work/app"
 cd "$work/app"
-npm install --no-audit --no-fund --silent
-npm install --no-audit --no-fund --silent --no-save "$work"/hyperstudyio-annotator-*.tgz
+# from its lockfile, and no package's install scripts run: nothing unpinned runs here (the publish workflow runs this
+# check too, in a job without its publish credential)
+npm ci --ignore-scripts --no-audit --no-fund --silent
+npm install --ignore-scripts --no-audit --no-fund --silent --no-save "$work"/hyperstudyio-annotator-*.tgz
 npx vite build --logLevel warn
 grep -q 'hs-annotator' dist/assets/*.css || { echo "annotator.css is not in the consumer's build" >&2; exit 1; }
 echo "The packed package installs and builds in a HyperStudy-like app."

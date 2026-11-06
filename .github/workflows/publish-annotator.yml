@@ -3,6 +3,10 @@
 # it with npm's trusted publishing: npm trusts this workflow file (set on the package's page on npmjs.com), so no
 # token is stored anywhere, and the published version carries provenance (which commit and workflow built it).
 # The app's own release (v*.*.*, release.yml) is separate; this tag does not match it. See packages/annotator/RELEASING.md.
+#
+# Two jobs: `verify` runs the checks and tests, which execute the repository's and its dependencies' code, without the
+# publish credential; `publish` holds it (id-token: write) and runs only a locked install, with no install scripts,
+# and the publish itself.
 name: Publish annotator package
 
 on:
@@ -11,12 +15,11 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # the OIDC token npm exchanges for a one-time publish credential
 
 jobs:
-  publish:
-    name: Publish @hyperstudyio/annotator
-    runs-on: ubuntu-latest   # trusted publishing accepts GitHub-hosted runners only
+  verify:
+    name: Check the tag, test and pack
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -37,13 +40,31 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # trusted publishing needs npm 11.5.1 or later; pinned rather than whatever Node 24 bundles
-      - run: npm install -g npm@11.11.0 && npm --version
       - run: npm ci
       - run: npm run check
       - run: npx vitest run
       # the tarball installs and builds in an app set up as HyperStudy's is (packs exactly what will be published)
       - run: bash scripts/check-package.sh
+
+  publish:
+    name: Publish @hyperstudyio/annotator
+    needs: verify
+    runs-on: ubuntu-latest   # trusted publishing accepts GitHub-hosted runners only
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token npm exchanges for a one-time publish credential
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # no dependency cache here: what this job installs comes from the registry by the lockfile, nothing restored
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # trusted publishing needs npm 11.5.1 or later; pinned rather than whatever Node 24 bundles
+      - run: npm install -g npm@11.11.0 && npm --version
+      - run: npm ci --ignore-scripts
       # prepublishOnly builds dist (svelte-package) and checks it (publint); a prerelease goes to the `next` tag, so
       # `npm install @hyperstudyio/annotator` keeps getting the latest stable version
       - name: Publish
