@@ -52,7 +52,9 @@ jobs:
             implements them, and most real defects here undo one of them rather than being ordinary bugs.
 
             This is a Tauri 2 desktop app (Rust in src-tauri/, Svelte 5 runes in src/) that views and
-            corrects perception track bundles. Weight your attention in this order:
+            corrects perception track bundles. The editor itself is the package packages/annotator
+            (@hyperstudyio/annotator), which HyperStudy also embeds: it must not import Tauri or anything
+            from src/, and its styles stay under .hs-annotator. Weight your attention in this order:
 
             1. **Nothing that must not leave the lab.** Study videos, frames and face crops are often
                copyrighted or identifiable; keys and tokens are secrets. None may appear in code, fixtures,
