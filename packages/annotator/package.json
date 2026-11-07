@@ -1,6 +1,6 @@
 {
   "name": "@hyperstudyio/annotator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The HyperStudy Annotator's editor: view and correct a perception bundle's tracks, and annotate a video on its timeline.",
   "license": "MIT",
   "type": "module",
