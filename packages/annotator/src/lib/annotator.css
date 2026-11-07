@@ -1,0 +1,39 @@
+/* The annotator's look, scoped to its root (`.hs-annotator`): the workspace, its dialogs and the panels it opens on the
+   page's body carry the class, so these rules reach nothing of the page that embeds them.
+   The root rule weighs one class, so a page's rules for bare elements or `*` cannot undo it on the root (HyperStudy's
+   `* { box-sizing: inherit }` then inherits border-box from it). Every rule inside is wrapped in `:where()`, which
+   adds no specificity: each weighs what the bare element or class rule would, so a component's own styles win. */
+.hs-annotator {
+  --color-primary: #4caf50; --color-primary-light: rgba(76, 175, 80, .14);
+  --color-danger: #f44336; --color-caution: #fbbf24; --color-caution-light: rgba(251, 191, 36, .12); --color-info: #4f9eff;
+  --color-bg-base: #121212; --color-bg-surface: #1c1c1c; --color-bg-elevated: #252525; --color-bg-card: #2c2c2c; --color-bg-hover: #333;
+  --color-border-default: #333; --color-border-strong: #444;
+  --color-text-primary: #e0e0e0; --color-text-secondary: #b0b0b0; --color-text-muted: #999;
+  --label-w: 170px;
+  color-scheme: dark;
+  background: var(--color-bg-base); color: var(--color-text-primary); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-sizing: border-box;
+}
+:where(.hs-annotator) * { box-sizing: border-box; }
+:where(.hs-annotator) button { font: inherit; color: inherit; background: var(--color-bg-card); border: 1px solid var(--color-border-strong); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+:where(.hs-annotator) button:hover:not(:disabled) { background: var(--color-bg-hover); }
+:where(.hs-annotator) button:disabled { opacity: .45; cursor: default; }
+:where(.hs-annotator) button.primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+:where(.hs-annotator) button.on { border-color: var(--color-primary); background: var(--color-primary-light); }
+:where(.hs-annotator) .muted { color: var(--color-text-muted); }
+:where(.hs-annotator) .error { color: var(--color-danger); }
+:where(.hs-annotator) kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--color-border-strong); border-radius: 3px; padding: 0 4px; color: var(--color-text-secondary); }
+:where(.hs-annotator) input:not([type]), :where(.hs-annotator) input[type=text], :where(.hs-annotator) input[type=password],
+:where(.hs-annotator) input[type=number], :where(.hs-annotator) select, :where(.hs-annotator) textarea { font: inherit; color: inherit; background: #1f1f1f; border: 1px solid var(--color-border-strong); border-radius: 6px; padding: 4px 8px; }
+:where(.hs-annotator) textarea { width: 100%; resize: vertical; min-height: 54px; }
+:where(.hs-annotator) button.link { background: none; border: 0; padding: 0; color: var(--color-info); border-radius: 0; }
+:where(.hs-annotator) button.link:hover:not(:disabled) { background: none; text-decoration: underline; }
+/* A quiet action (a row's check or remove, a toolbar's menu): plain text until hovered. */
+:where(.hs-annotator) button.plain { background: none; border-color: transparent; color: var(--color-text-secondary); }
+:where(.hs-annotator) button.plain:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); }
+:where(.hs-annotator) button.plain.danger:hover:not(:disabled) { background: none; color: var(--color-danger); }
+/* A row in a pop-up panel (Popover): a choice, a checkbox, or an action at its foot. */
+:where(.hs-annotator) .menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 5px; padding: 6px 10px; }
+:where(.hs-annotator) .menu-item:hover:not(:disabled), :where(.hs-annotator) .menu-item:focus-visible { background: var(--color-bg-hover); outline: none; }
+:where(.hs-annotator) .menu-item:disabled { color: var(--color-text-muted); }
+:where(.hs-annotator) .menu-sep { height: 1px; background: var(--color-border-default); margin: 4px 6px; }

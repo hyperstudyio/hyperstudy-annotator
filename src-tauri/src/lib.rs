@@ -45,7 +45,6 @@ pub fn run() {
             commands::read_layer,
             commands::load_corrections,
             commands::append_corrections,
-            commands::truncate_corrections,
             commands::replace_corrections,
             commands::read_bundle_file,
             commands::find_prototype_corrections,

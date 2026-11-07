@@ -1,8 +1,8 @@
 // The library the Annotator page lists: the bundles imported into the app. The page is given one of these: the app's
 // (Tauri commands and its file dialogs), or in a browser's ?library-demo a scripted stand-in (library.fake.ts), so the
 // page can be tried and tested without the app.
-import { api, tauriSource, type BundleSource } from './source';
-import type { BundleSummary, LicenceMode } from './types';
+import type { BundleSource, BundleSummary } from '@hyperstudyio/annotator';
+import { api, tauriSource } from './tauriSource';
 
 export interface LibraryApi {
   list(): Promise<BundleSummary[]>;
@@ -29,17 +29,6 @@ export function tauriLibrary(): LibraryApi {
     open: (b) => tauriSource(b.id),
   };
 }
-
-/** The strictest licence among a bundle's layers: what anyone using the whole bundle must keep to. */
-const ORDER: LicenceMode[] = ['commercial-ok', 'api-terms', 'needs-review', 'academic-only'];
-export const strictest = (b: BundleSummary): LicenceMode =>
-  Object.values(b.layers).reduce((a, m) => (ORDER.indexOf(m) > ORDER.indexOf(a) ? m : a), 'commercial-ok' as LicenceMode);
-
-/** A licence as people say it. */
-export const LICENCE_TEXT: Record<LicenceMode, string> = {
-  'commercial-ok': 'Commercial use allowed', 'api-terms': "Under the API provider's terms",
-  'needs-review': 'Licence under review', 'academic-only': 'Academic use only',
-};
 
 /** The bundle last opened on this computer: the Annotator opens it again when it is shown (a convenience; storage may be
  *  unavailable, and then the newest bundle opens). */

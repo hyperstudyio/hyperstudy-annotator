@@ -1,7 +1,7 @@
 // Running the perception pipeline from the app (src-tauri/src/pipeline.rs drives `perception --json`, whose
 // protocol is docs/cli-json.md in hyperstudy-perception): the pipeline, its setup, the graphs, a plan, then a run's messages.
 // The dialog only sees PipelineApi; browser mode's ?pipeline-demo uses a scripted stand-in (pipeline.fake.ts).
-import type { BundleSummary } from './types';
+import type { BundleSummary } from '@hyperstudyio/annotator';
 
 export interface Download { id: string; source: string | null; size_gb: number | null; gated: boolean; licence_mode: string }
 export interface PlanNode {

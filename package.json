@@ -4,16 +4,21 @@
   "version": "0.0.5",
   "license": "MIT",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json && npm run check -w @hyperstudyio/annotator",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "package": "npm run package -w @hyperstudyio/annotator"
   },
   "dependencies": {
+    "@hyperstudyio/annotator": "0.1.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2.7.2",

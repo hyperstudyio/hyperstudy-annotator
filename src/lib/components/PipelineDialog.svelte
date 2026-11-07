@@ -12,8 +12,8 @@
   // in the library yet are listed under the video: one still running can be shown again, one that has ended is fetched
   // and imported (Rust: remote_runs), and one that failed says why until put away.
   import { untrack } from 'svelte';
-  import { latestOnly } from '../latest';
-  import { openExternal } from '../links';
+  import { latestOnly } from '@hyperstudyio/annotator';
+  import { openExternal } from '../desktopLinks';
   import type { RunStatus } from './Rail.svelte';
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';

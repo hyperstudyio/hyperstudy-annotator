@@ -8,7 +8,7 @@
   // server's Test reaches it again (`hosts check`). Each server says whether whole runs started there may take your keys
   // (`hosts keys`), naming the ones they would get and who can read them there, whether it is on or off: it is what is
   // agreed to.
-  import { openExternal } from '../links';
+  import { openExternal } from '../desktopLinks';
   import { hostSummary, tooOld, type Host, type HostAction, type HostProbe, type PipelineApi, type SshOverrides } from '../pipeline';
   let { api, hosts, sent, onchange, onbusy }: {
     api: PipelineApi; hosts: Host[];

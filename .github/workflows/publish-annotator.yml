@@ -1,0 +1,96 @@
+# Publishes the editor package, @hyperstudyio/annotator (packages/annotator), to npm. Pushing a tag annotator-vX.Y.Z
+# (the version in packages/annotator/package.json, on a commit on main) checks and tests it, builds and packs it, and
+# publishes that tarball with npm's trusted publishing: npm trusts this workflow file (set on the package's page on
+# npmjs.com), so no token is stored anywhere, and the published version carries provenance (which commit and workflow
+# built it). The app's own release (v*.*.*, release.yml) is separate; this tag does not match it.
+# See packages/annotator/RELEASING.md.
+#
+# Two jobs. `verify` runs everything that executes the repository's or its dependencies' code (the checks, the tests,
+# the build) without the publish credential, and keeps the tarball scripts/check-package.sh installed and built. Only
+# `publish` holds the credential (id-token: write), and it runs no code of the repository's or its dependencies': no
+# checkout, no install, no build. It publishes that one tarball, with install and lifecycle scripts off, so what goes
+# to npm is exactly what was checked.
+name: Publish annotator package
+
+on:
+  push:
+    tags: ['annotator-v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Check the tag, test, build and pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      dist_tag: ${{ steps.version.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # origin/main, for the check below
+      - name: Only a commit on main is published
+        run: |
+          git merge-base --is-ancestor HEAD origin/main || { echo "$(git rev-parse --short HEAD) is not on main: merge it first" >&2; exit 1; }
+      - name: The tag is the package's version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          printf '%s' "$TAG" | grep -Eq '^annotator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not an annotator version tag: $TAG" >&2; exit 1; }
+          v=$(node -p 'require("./packages/annotator/package.json").version')
+          [ "annotator-v$v" = "$TAG" ] || { echo "packages/annotator/package.json says $v, not ${TAG#annotator-v}" >&2; exit 1; }
+          # a prerelease goes to the `next` dist-tag, so `npm install @hyperstudyio/annotator` keeps the latest stable
+          case "$TAG" in *-*) echo "dist_tag=next" >> "$GITHUB_OUTPUT";; *) echo "dist_tag=latest" >> "$GITHUB_OUTPUT";; esac
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npx vitest run
+      # builds (svelte-package, publint), packs, installs the tarball into an app set up as HyperStudy's is, builds that,
+      # and keeps the tarball in pack/
+      - run: bash scripts/check-package.sh "$RUNNER_TEMP/pack"
+      - name: The tarball is the tagged version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -- "$RUNNER_TEMP"/pack/*.tgz
+          [ "$#" -eq 1 ] || { echo "expected one tarball, found $#" >&2; exit 1; }
+          v=$(tar -xOzf "$1" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          [ "annotator-v$v" = "$TAG" ] || { echo "the tarball is $v, not ${TAG#annotator-v}" >&2; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: annotator-package
+          path: ${{ runner.temp }}/pack/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish @hyperstudyio/annotator
+    needs: verify
+    runs-on: ubuntu-latest   # trusted publishing accepts GitHub-hosted runners only
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token npm exchanges for a one-time publish credential
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # trusted publishing needs npm 11.5.1 or later; pinned rather than whatever Node 24 bundles
+      - run: npm install -g --ignore-scripts npm@11.11.0 && npm --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: annotator-package
+          path: pack
+      - name: Publish the checked tarball
+        env:
+          DIST_TAG: ${{ needs.verify.outputs.dist_tag }}
+        run: |
+          set -- pack/*.tgz
+          [ "$#" -eq 1 ] || { echo "expected one tarball, found $#" >&2; exit 1; }
+          npm publish "$1" --ignore-scripts --access public --tag "$DIST_TAG"

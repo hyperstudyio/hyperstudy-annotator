@@ -24,7 +24,7 @@ pub struct BundleSummary {
     pub layers: BTreeMap<String, String>,
     /// where the video was last verified, if the file is still there
     pub video_path: Option<String>,
-    /// how many ops the bundle's corrections log holds
+    /// how many edits of the bundle's corrections log are in effect (undone ones and the reverts not counted)
     pub corrections: usize,
     /// the bundle's identity: its manifest's sha256 (exported corrections files name it)
     pub manifest_sha256: String,
@@ -67,7 +67,7 @@ fn summary(conn: &Connection, r: Row) -> Result<BundleSummary> {
         .map(|(k, v)| (k.clone(), v["licence_mode"].as_str().unwrap_or("").to_string())).collect()).unwrap_or_default();
     Ok(BundleSummary {
         video_path: video_path(conn, &r.video_sha256)?,
-        corrections: count_corrections(conn, &r.id)?,
+        corrections: count_live(conn, &r.id)?,
         manifest_sha256: r.manifest_sha256,
         created_at: manifest["created_at"].as_str().map(String::from),
         id: r.id, title: r.title, video_sha256: r.video_sha256, schema_version: r.schema_version,
@@ -230,14 +230,6 @@ pub fn append_corrections(conn: &Connection, bundle_id: &str, ops: &[Value]) -> 
     count_corrections(conn, bundle_id)
 }
 
-/// Keep only the oldest `keep` ops (undo removes the newest).
-pub fn truncate_corrections(conn: &Connection, bundle_id: &str, keep: usize) -> Result<usize> {
-    conn.execute("DELETE FROM corrections WHERE bundle_id = ?1 AND id NOT IN
-                    (SELECT id FROM corrections WHERE bundle_id = ?1 ORDER BY id LIMIT ?2)",
-                 params![bundle_id, keep as i64])?;
-    count_corrections(conn, bundle_id)
-}
-
 /// Replace the whole log (importing a corrections file).
 pub fn replace_corrections(conn: &Connection, bundle_id: &str, ops: &[Value]) -> Result<usize> {
     get_row(conn, bundle_id)?;
@@ -248,9 +240,35 @@ pub fn replace_corrections(conn: &Connection, bundle_id: &str, ops: &[Value]) ->
     count_corrections(conn, bundle_id)
 }
 
+/// How many ops the log holds, reverts and undone ops included: what `append` returns, so the frontend can tell
+/// whether another writer appended in between.
 fn count_corrections(conn: &Connection, bundle_id: &str) -> Result<usize> {
     let n: i64 = conn.query_row("SELECT COUNT(*) FROM corrections WHERE bundle_id = ?1", params![bundle_id], |r| r.get(0))?;
     Ok(n as usize)
+}
+
+/// How many ops of a bundle's log are in effect (the frontend's `live`, by the same rule).
+fn count_live(conn: &Connection, bundle_id: &str) -> Result<usize> {
+    Ok(live_count(&load_corrections(conn, bundle_id)?))
+}
+
+/// An op's batch, as the frontend's `batchOf` reads it: `batch`, else `'at:' || at` (ops from before batches).
+fn batch_of(op: &Value) -> String {
+    op["batch"].as_str().map(String::from).unwrap_or_else(|| format!("at:{}", op["at"].as_str().unwrap_or("")))
+}
+
+/// Ops in effect: not reverts, and not in a batch a revert in effect names (in `batches`). A revert counts only while
+/// no later revert in effect names its own batch, so a revert of a revert is a redo; read newest first, since a revert
+/// names only batches before it.
+fn live_count(ops: &[Value]) -> usize {
+    let is_revert = |op: &Value| op["op"].as_str() == Some("revert");
+    let mut reverted = std::collections::HashSet::new();
+    for op in ops.iter().rev() {
+        if is_revert(op) && !reverted.contains(&batch_of(op)) {
+            reverted.extend(op["batches"].as_array().into_iter().flatten().filter_map(|b| b.as_str().map(String::from)));
+        }
+    }
+    ops.iter().filter(|op| !is_revert(op) && !reverted.contains(&batch_of(op))).count()
 }
 
 // --- settings ---
@@ -323,7 +341,8 @@ pub fn get_carryover(conn: &Connection, id: &str) -> Result<Option<Carryover>> {
 }
 
 /// Checks before a carry-over is recorded: another version of the same video, this bundle without corrections of its
-/// own, and not started fresh. An undone carry-over (record 'carried', log empty) can be carried again or declined.
+/// own in effect, and not started fresh. An undone carry-over (record 'carried', nothing in effect) can be carried again
+/// or declined: everything in the log then is reverted, so carried ops cannot override a newer edit.
 fn check_carry(conn: &Connection, id: &str, from_id: &str) -> Result<()> {
     let (this, from) = (get_row(conn, id)?, get_row(conn, from_id)?);
     if id == from_id || this.video_sha256 != from.video_sha256 {
@@ -332,7 +351,7 @@ fn check_carry(conn: &Connection, id: &str, from_id: &str) -> Result<()> {
     if get_carryover(conn, id)?.is_some_and(|c| c.status == "declined") {
         return Err(Error::Bundle("this version was started without the earlier corrections (declined)".into()));
     }
-    if count_corrections(conn, id)? > 0 {
+    if count_live(conn, id)? > 0 {
         return Err(Error::Bundle("this version already has corrections of its own".into()));
     }
     Ok(())
@@ -472,18 +491,42 @@ mod tests {
     }
 
     #[test]
+    fn a_revert_that_names_no_batches_takes_nothing_back() {
+        // the frontend's live() test of the same name: a malformed or later-shaped revert counts for nothing
+        let ops = [json!({"op": "person.rename", "person": "person:A", "name": "Ann", "batch": "b1"}),
+                   json!({"op": "revert", "batch": "r1", "ops": ["o1"]}),
+                   json!({"op": "revert", "batch": "r2", "batches": [7, "b9"]})];
+        assert_eq!(live_count(&ops), 1);
+    }
+
+    #[test]
     fn corrections_append_undo_and_replace_in_order() {
         let (conn, data, src) = setup();
         let (id, manifest, dst) = prepare_import(src.path(), data.path()).unwrap();
         record_import(&conn, src.path(), &id, &manifest, &dst).unwrap();
-        let op = |n: u32| json!({"op": "person.rename", "person": "person:Person A", "name": format!("n{n}"), "at": format!("t{n}")});
+        let op = |n: u32| json!({"op": "person.rename", "person": "person:Person A", "name": format!("n{n}"), "at": format!("t{n}"),
+                                 "op_id": format!("o{n}"), "batch": if n < 3 { "b1" } else { "b3" }});   // 1 and 2: one edit
 
         assert_eq!(append_corrections(&conn, &id, &[op(1), op(2)]).unwrap(), 2);
         assert_eq!(append_corrections(&conn, &id, &[op(3)]).unwrap(), 3);
         assert_eq!(load_corrections(&conn, &id).unwrap(), vec![op(1), op(2), op(3)]);
+        assert_eq!(get(&conn, &id).unwrap().corrections, 3);
 
-        assert_eq!(truncate_corrections(&conn, &id, 1).unwrap(), 1);   // undo keeps the oldest
-        assert_eq!(load_corrections(&conn, &id).unwrap(), vec![op(1)]);
+        // undo is an append: the log grows by the revert, and what is in effect shrinks by the batch it names
+        let undo = json!({"op": "revert", "batches": ["b3"], "op_id": "u1", "batch": "u1", "at": "t4"});
+        assert_eq!(append_corrections(&conn, &id, &[undo.clone()]).unwrap(), 4);
+        assert_eq!(load_corrections(&conn, &id).unwrap(), vec![op(1), op(2), op(3), undo]);
+        assert_eq!(get(&conn, &id).unwrap().corrections, 2);
+        let undo2 = json!({"op": "revert", "batches": ["b1"], "op_id": "u2", "batch": "u2", "at": "t5"});
+        append_corrections(&conn, &id, &[undo2]).unwrap();
+        assert_eq!(get(&conn, &id).unwrap().corrections, 0);   // both ops of the first edit, by one revert
+        // a revert of a revert is a redo: the first edit's two ops count again, and reverting the redo takes them back
+        let redo = json!({"op": "revert", "batches": ["u2"], "op_id": "u3", "batch": "u3", "at": "t6"});
+        append_corrections(&conn, &id, &[redo]).unwrap();
+        assert_eq!(get(&conn, &id).unwrap().corrections, 2);
+        let undo_redo = json!({"op": "revert", "batches": ["u3"], "op_id": "u4", "batch": "u4", "at": "t7"});
+        append_corrections(&conn, &id, &[undo_redo]).unwrap();
+        assert_eq!(get(&conn, &id).unwrap().corrections, 0);
 
         assert_eq!(replace_corrections(&conn, &id, &[op(7), op(8)]).unwrap(), 2);
         assert_eq!(load_corrections(&conn, &id).unwrap(), vec![op(7), op(8)]);
@@ -599,13 +642,16 @@ mod tests {
         let (v1, _a) = import_version(&conn, data.path(), b"video", "2026-10-01T00:00:00Z");
         let (v2, _b) = import_version(&conn, data.path(), b"video", "2026-10-10T00:00:00Z");
         append_corrections(&conn, &v1, &[json!({"op": "a"})]).unwrap();
-        let carried = [json!({"op": "a", "carried_from": {"bundle": v1, "index": 0}})];
-        carry_over(&conn, &v2, &v1, &carried, &json!([])).unwrap();
-        truncate_corrections(&conn, &v2, 0).unwrap();                              // undo takes the whole carry-over
-        assert_eq!(carry_over(&conn, &v2, &v1, &carried, &json!([])).unwrap(), 1);
-        truncate_corrections(&conn, &v2, 0).unwrap();
+        let carried = |b: &str| [json!({"op": "a", "batch": b, "carried_from": {"bundle": v1, "index": 0}})];
+        let undo = |b: &str| json!({"op": "revert", "batches": [b], "batch": format!("undo-{b}")});
+        carry_over(&conn, &v2, &v1, &carried("c1"), &json!([])).unwrap();
+        assert!(carry_over(&conn, &v2, &v1, &carried("c2"), &json!([])).unwrap_err().to_string().contains("of its own"));
+        append_corrections(&conn, &v2, &[undo("c1")]).unwrap();                    // undo takes the whole carry-over
+        assert_eq!(get(&conn, &v2).unwrap().corrections, 0);
+        assert_eq!(carry_over(&conn, &v2, &v1, &carried("c2"), &json!([])).unwrap(), 3);   // the log keeps the undone ops
+        append_corrections(&conn, &v2, &[undo("c2")]).unwrap();
         decline_carryover(&conn, &v2, &v1).unwrap();
-        assert!(carry_over(&conn, &v2, &v1, &carried, &json!([])).unwrap_err().to_string().contains("declined"));
+        assert!(carry_over(&conn, &v2, &v1, &carried("c3"), &json!([])).unwrap_err().to_string().contains("declined"));
     }
 
     #[test]

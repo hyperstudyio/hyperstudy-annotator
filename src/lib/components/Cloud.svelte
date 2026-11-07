@@ -9,7 +9,7 @@
   // RunPod also runs whole pipelines on a pod made for the run (Run on, on Extract): it says whether those runs may take
   // your keys (`cloud keys runpod`), naming the ones they would get and who can read them there, on or off.
   import KeyRow from './KeyRow.svelte';
-  import { openExternal } from '../links';
+  import { openExternal } from '../desktopLinks';
   import { keyRows, provider, tooOld, type CheckResult, type CliKeys, type CloudProviderName, type CloudStatus, type KeyStatus, type PipelineApi } from '../pipeline';
 
   let { api, cloud, keys, cli, sent, onchange, onkeys, onbusy }: {

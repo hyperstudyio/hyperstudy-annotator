@@ -2,7 +2,7 @@
 // browser, where Tauri is absent. The real path is tested in Rust against the real CLI (pipeline.rs).
 import { POD } from './pipeline';
 import type { CheckResult, CloudStatus, Doctor, GraphPreset, Host, KeyStatus, ModelInfo, Plan, PipelineApi, PipelineMessage, RemoteRun, SetupStatus, SetupStep, SshOverrides, StepInfo } from './pipeline';
-import type { BundleSummary } from './types';
+import type { BundleSummary } from '@hyperstudyio/annotator';
 
 const doctor: Doctor = {
   platform: 'darwin/arm64', cpu_cores: 14, memory_gb: 128, accelerators: ['cpu', 'mps'], vram_gb: 128,

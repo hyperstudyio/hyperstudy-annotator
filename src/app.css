@@ -1,27 +1,6 @@
-:root {
-  --color-primary: #4caf50; --color-primary-light: rgba(76, 175, 80, .14);
-  --color-danger: #f44336; --color-caution: #fbbf24; --color-caution-light: rgba(251, 191, 36, .12); --color-info: #4f9eff;
-  --color-bg-base: #121212; --color-bg-surface: #1c1c1c; --color-bg-elevated: #252525; --color-bg-card: #2c2c2c; --color-bg-hover: #333;
-  --color-border-default: #333; --color-border-strong: #444;
-  --color-text-primary: #e0e0e0; --color-text-secondary: #b0b0b0; --color-text-muted: #999;
-  --label-w: 170px;
-  color-scheme: dark;
-}
-* { box-sizing: border-box; }
+/* The desktop app's own rules. The annotator's look (its colours, controls and type) is the package's
+   annotator.css, scoped to .hs-annotator, which the app's body carries, so the app's pages share it. */
 html, body, #app { height: 100%; margin: 0; }
-body { background: var(--color-bg-base); color: var(--color-text-primary); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-button { font: inherit; color: inherit; background: var(--color-bg-card); border: 1px solid var(--color-border-strong); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
-button:hover:not(:disabled) { background: var(--color-bg-hover); }
-button:disabled { opacity: .45; cursor: default; }
-button.primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
-button.on { border-color: var(--color-primary); background: var(--color-primary-light); }
-.muted { color: var(--color-text-muted); }
-.error { color: var(--color-danger); }
-kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--color-border-strong); border-radius: 3px; padding: 0 4px; color: var(--color-text-secondary); }
-input:not([type]), input[type=text], input[type=password], input[type=number], select, textarea { font: inherit; color: inherit; background: #1f1f1f; border: 1px solid var(--color-border-strong); border-radius: 6px; padding: 4px 8px; }
-textarea { width: 100%; resize: vertical; min-height: 54px; }
-button.link { background: none; border: 0; padding: 0; color: var(--color-info); border-radius: 0; }
-button.link:hover:not(:disabled) { background: none; text-decoration: underline; }
 /* A page's own heading (Extract, Annotator, Settings), and the sentence under it that says what the page is for. */
 .page-title { font-size: 20px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
 .page-lead { margin: 4px 0 0; color: var(--color-text-secondary); max-width: 64ch; }
@@ -35,12 +14,3 @@ button.link:hover:not(:disabled) { background: none; text-decoration: underline;
 .set-rows { list-style: none; margin: 0; padding: 0; }
 .set-rows > li { padding: 9px 0; border-top: 1px solid var(--color-border-default); }
 .set-rows > li:first-child { border-top: 0; }
-/* An action on one row (check it, replace its key, remove it): plain text, so a part's own action (Add…) leads. */
-button.plain { background: none; border-color: transparent; color: var(--color-text-secondary); }
-button.plain:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); }
-button.plain.danger:hover:not(:disabled) { background: none; color: var(--color-danger); }
-/* A row in a pop-up panel (Popover): a choice, a checkbox, or an action at its foot. */
-.menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 5px; padding: 6px 10px; }
-.menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--color-bg-hover); outline: none; }
-.menu-item:disabled { color: var(--color-text-muted); }
-.menu-sep { height: 1px; background: var(--color-border-default); margin: 4px 6px; }

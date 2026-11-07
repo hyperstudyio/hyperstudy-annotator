@@ -6,7 +6,7 @@
   // review takes time. Once every model is granted it is one line, with the steps a click away. A pipeline from before
   // the per-model check keeps the key's own Test.
   import { tick, untrack } from 'svelte';
-  import { openExternal } from '../links';
+  import { openExternal } from '../desktopLinks';
   import { NEW_TOKEN_URL, SIGN_IN_URL, accessOf, allGranted, grantedBy, pageOf, perModel, shortName } from '../hfAccess';
   import { olderCli, tooOld, type CheckResult, type KeyStatus, type PipelineApi } from '../pipeline';
 

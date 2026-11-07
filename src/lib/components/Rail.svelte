@@ -13,7 +13,7 @@
   // browser. Extract's icon carries the run: a ring that fills as its steps finish, then a dot for how it ended, so a
   // run can go on while you annotate. A newer version of the app adds an Update item, which leads to Settings; it
   // carries its download the same way.
-  import { DOCS_URL, openExternal } from '../links';
+  import { DOCS_URL, openExternal } from '../desktopLinks';
 
   let { page, run, update = null, onnavigate, onupdate }: {
     page: Page; run: RunStatus | null; update?: UpdateBadge | null; onnavigate: (p: Page) => void; onupdate?: () => void;

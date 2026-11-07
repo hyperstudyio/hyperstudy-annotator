@@ -153,11 +153,6 @@ pub fn append_corrections(state: State<'_, AppState>, id: String, ops: Vec<Value
 }
 
 #[tauri::command]
-pub fn truncate_corrections(state: State<'_, AppState>, id: String, keep: usize) -> Result<usize> {
-    library::truncate_corrections(&state.db.lock().unwrap(), &id, keep)
-}
-
-#[tauri::command]
 pub fn replace_corrections(state: State<'_, AppState>, id: String, ops: Vec<Value>) -> Result<usize> {
     library::replace_corrections(&state.db.lock().unwrap(), &id, &ops)
 }

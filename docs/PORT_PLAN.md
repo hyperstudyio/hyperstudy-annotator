@@ -29,6 +29,8 @@ Search the code for `TODO: [ANNOTATOR-PORT]` to find steps that are not finished
    (`track 126` to `face:126`, `Person O` to `person:Person O`), the session's queries. Unit tests.
 2. **Persistence.** Corrections through Tauri commands (`load/append/truncate/replace_corrections`), or
    `localStorage` in browser mode. Undo removes the newest batch (ops committed together share `at`).
+   *Since 2026-11-02 (`perception-corrections/3`, BACKEND_PLAN): ops share a `batch`, and undo appends a `revert`;
+   `truncate_corrections` is gone.*
 3. **Layout.** Header (counts, undo, import, export), stage, drawer with tabs (Inspect, Review, People; Annotate and
    Data were folded into the timeline later: BACKEND_PLAN decisions), splitters for the drawer width and timeline height, the `\` key.
 4. **Overlay.** Faces (by person, dashed when excluded, candidate numbers), objects, skeletons, hands, landmarks,
