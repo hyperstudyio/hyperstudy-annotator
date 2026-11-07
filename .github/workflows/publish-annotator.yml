@@ -42,8 +42,9 @@ jobs:
           printf '%s' "$TAG" | grep -Eq '^annotator-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "not an annotator version tag: $TAG" >&2; exit 1; }
           v=$(node -p 'require("./packages/annotator/package.json").version')
           [ "annotator-v$v" = "$TAG" ] || { echo "packages/annotator/package.json says $v, not ${TAG#annotator-v}" >&2; exit 1; }
-          # a prerelease goes to the `next` dist-tag, so `npm install @hyperstudyio/annotator` keeps the latest stable
-          case "$TAG" in *-*) echo "dist_tag=next" >> "$GITHUB_OUTPUT";; *) echo "dist_tag=latest" >> "$GITHUB_OUTPUT";; esac
+          # a prerelease goes to the `next` dist-tag, so `npm install @hyperstudyio/annotator` keeps the latest stable.
+          # Decided on the version, not the tag: the tag's own "annotator-" has a hyphen in it.
+          case "$v" in *-*) echo "dist_tag=next" >> "$GITHUB_OUTPUT";; *) echo "dist_tag=latest" >> "$GITHUB_OUTPUT";; esac
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -91,6 +92,7 @@ jobs:
         env:
           DIST_TAG: ${{ needs.verify.outputs.dist_tag }}
         run: |
-          set -- pack/*.tgz
+          # ./ makes it a file: npm reads "pack/<name>.tgz" as GitHub shorthand (owner/repo) and tries git
+          set -- ./pack/*.tgz
           [ "$#" -eq 1 ] || { echo "expected one tarball, found $#" >&2; exit 1; }
           npm publish "$1" --ignore-scripts --access public --tag "$DIST_TAG"
