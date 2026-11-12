@@ -461,6 +461,18 @@ describe('words on the timeline', () => {
     expect(s.wordsOf(u)[1]).toMatchObject({ w: 'my', start: 1, end: 1.5 });
   });
 
+  test('a word edited leaves the rest of the text as it is, where the text and the timed words differ', async () => {
+    // the transcriber's segment text has a comma and a capital its words do not
+    const b = timed();
+    const t = b.layers.transcript!;
+    const { s } = session(makeBundle({ transcript: { ...t, utterances: t.utterances.map((u) => (u.id === 'utt:0' ? { ...u, text: 'Hello there, friend.' } : u)) } }));
+    const u = s.bundle.utt.get('utt:0')!;
+    expect(s.wordsOf(u).map((w) => w.w)).toEqual(['Hello', 'there,', 'friend.']);
+    expect(s.wordsOf(u)[1]).toMatchObject({ start: 1, end: 1.5 });
+    await s.editWord(u, 2, 'friends.');
+    expect(s.ops.at(-1)).toMatchObject({ op: 'utterance.text', text: 'Hello there, friends.' });
+  });
+
   test('an utterance without word times has none to show', () => {
     const { s } = session();
     expect(s.wordsOf(s.bundle.utterances[0])).toEqual([]);

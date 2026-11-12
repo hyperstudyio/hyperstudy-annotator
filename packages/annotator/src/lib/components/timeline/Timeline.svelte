@@ -65,7 +65,11 @@
   let resizingTimeline = $state(false);
   // ⌘ or ⇧ held, for the cursor to say what a press on the timeline would do to the clip
   let held = $state<'move' | 'extend' | null>(null);
-  const heldKeys = (e: KeyboardEvent) => { held = e.metaKey ? 'move' : e.shiftKey ? 'extend' : null; };
+  // the key that moves the clip: ⌘ on a Mac, Ctrl elsewhere (Linux's Super key is the window manager's; a Mac's
+  // Ctrl-click is a right-click), as ⌘←/→ is Ctrl+←/→ there
+  const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+  const moveKey = (e: KeyboardEvent | PointerEvent) => (MAC ? e.metaKey : e.ctrlKey || e.metaKey);
+  const heldKeys = (e: KeyboardEvent) => { held = moveKey(e) ? 'move' : e.shiftKey ? 'extend' : null; };
 
   const timeOf = (e: PointerEvent) => timeAtX(e.clientX, content!.getBoundingClientRect().left, pps, duration);
 
@@ -119,11 +123,11 @@
   function clipKeysDown(e: PointerEvent) {
     tookClick = false;
     const from = pb.clip, el = e.target as Element;
-    if (e.button !== 0 || !from || !(e.shiftKey || e.metaKey) || el.closest('.lane-label, .ruler-label, .lane-resize, .grip')) return;
+    if (e.button !== 0 || !from || !(e.shiftKey || moveKey(e)) || el.closest('.lane-label, .ruler-label, .lane-resize, .grip')) return;
     e.preventDefault(); e.stopPropagation();
     tookClick = true;
     const t = timeOf(e), base = { x: e.clientX, t0: t, at: null, times: clipTimes(), moved: false, px: e.clientX, py: e.clientY, keyed: true };
-    if (e.metaKey) { gesture = { kind: 'clip', mode: 'move', from: { ...from }, span: { ...from }, ...base }; return; }
+    if (moveKey(e)) { gesture = { kind: 'clip', mode: 'move', from: { ...from }, span: { ...from }, ...base }; return; }
     const seg = el.closest<HTMLElement>('.bar[data-start]');
     const near: RetimeMode = t - from.start < from.end - t ? 'start' : 'end';
     let span: Span, mode: RetimeMode;
@@ -273,15 +277,27 @@
   async function openWord(utt: string, index: number) {
     const u = s.bundle.utt.get(utt), w = u ? s.wordsOf(u)[index] : undefined, el = scroller;
     if (!u || !w || !el) return;
-    // in view first: Tab can go on to a word scrolled out of sight
+    // the utterance selected first, and its scrolling to it done (the effect below), so the word's is the last
+    if (!s.isSel('utt', utt)) { s.select('utt', utt, { seek: false }); await tick(); }
+    // in view: Tab can go on to a word scrolled out of sight
     const x = w.start * pps, vw = el.clientWidth - LABEL_W;
-    if (x < el.scrollLeft || x + (w.end - w.start) * pps > el.scrollLeft + vw) { el.scrollLeft = Math.max(0, x - vw / 3); await tick(); }
+    if (x < el.scrollLeft || x + (w.end - w.start) * pps > el.scrollLeft + vw) el.scrollLeft = Math.max(0, x - vw / 3);
     const bar = content?.querySelector<HTMLElement>(`.bar[data-key="${CSS.escape(wordKey(utt, index))}"]`);
     if (!bar) return;
-    if (!s.isSel('utt', utt)) s.select('utt', utt, { seek: false });
+    const r = bar.getBoundingClientRect(), sr = el.getBoundingClientRect();
+    if (r.top < sr.top + 24 || r.bottom > sr.bottom) el.scrollTop += r.top - sr.top - sr.height / 2;   // the Words row, scrolled to
     pb.setClip(w);   // the frame where it is said; Space after Enter plays it
-    const r = bar.getBoundingClientRect();
-    wordEdit = { utt, index, value: w.w, x: r.left, y: r.top, w: r.width, h: r.height };
+    wordEdit = { utt, index, value: w.w, x: 0, y: 0, w: 0, h: 0 };
+    placeWord();
+  }
+  /** The input over its word, wherever the timeline has scrolled to; closed (kept) once the word is out of sight. */
+  function placeWord() {
+    const e = wordEdit, el = scroller;
+    if (!e || !el) return;
+    const bar = content?.querySelector<HTMLElement>(`.bar[data-key="${CSS.escape(wordKey(e.utt, e.index))}"]`);
+    const r = bar?.getBoundingClientRect(), sr = el.getBoundingClientRect();
+    if (!r || r.right < sr.left + LABEL_W || r.left > sr.right || r.bottom < sr.top || r.top > sr.bottom) { closeWord('keep'); return; }
+    e.x = r.left; e.y = r.top; e.w = r.width; e.h = r.height;
   }
   async function closeWord(how: 'keep' | 'cancel' | 'next' | 'prev') {
     const e = wordEdit;
@@ -410,7 +426,7 @@
     <label class="zoom">Zoom <input type="range" min="1" max={ZOOM_MAX} step="0.01" bind:value={zoom} title="Zoom (or pinch on the timeline)" onchange={(e) => e.currentTarget.blur()} /></label>
   </div>
 
-  <div class="tl-scroll" bind:this={scroller} bind:clientWidth={scrollerW} onscroll={() => { scrollLeft = scroller!.scrollLeft; if (wordEdit) closeWord('keep'); }}>
+  <div class="tl-scroll" bind:this={scroller} bind:clientWidth={scrollerW} onscroll={() => { scrollLeft = scroller!.scrollLeft; placeWord(); }}>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="tl-content" class:clip-move={!!pb.clip && held === 'move'} class:clip-extend={!!pb.clip && held === 'extend'} bind:this={content}
       style="width:{LABEL_W + duration * pps}px" onpointerdowncapture={clipKeysDown}>

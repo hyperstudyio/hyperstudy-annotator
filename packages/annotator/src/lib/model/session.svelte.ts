@@ -281,14 +281,14 @@ export class Session {
     return p.predicted.kind !== 'face' || (p.margin ?? 0) < UNCERTAIN_GAP;
   }
   uttText(u: Utterance) { return this.S.uttText[u.id] ?? u.text; }
-  /** An utterance's words where they are spoken: as heard, or its corrected text placed on those times (words.ts).
-   *  None for a bundle without word times. */
+  /** An utterance's words where they are spoken: its text in effect (corrected or not) placed on the times of the
+   *  words as heard (words.ts). Always the text, never the timed words' own spelling: a transcriber's segment text
+   *  can differ from its words in punctuation or case, and a word edited on the timeline must leave the rest of the
+   *  text as it was. None for a bundle without word times. */
   wordsOf(u: Utterance): TimedWord[] {
     const r = u.words, all = this.bundle.words;
     if (!r || !all.length) return [];
-    const heard = all.slice(r[0], r[1] + 1).map((x) => ({ w: x.w, start: x.start, end: x.end }));
-    const text = this.S.uttText[u.id];
-    return text === undefined ? heard : alignWords(heard, text);
+    return alignWords(all.slice(r[0], r[1] + 1).map((x) => ({ w: x.w, start: x.start, end: x.end })), this.uttText(u));
   }
   /** Correct one word of an utterance (on the timeline): its whole text is the edit, as Inspect's is. Several words
    *  split it, none deletes it. False when nothing changed. */

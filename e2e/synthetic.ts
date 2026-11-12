@@ -24,18 +24,31 @@ const LAYERS: Record<string, unknown> = {
     { id: 'sound:1', label: 'laughter', start: 6, end: 7, sources: ['pe-a-frame'], agreement: false, score: 0.4 },
   ] },
 };
-const MANIFEST = {
+// With `speech`: two utterances, word-timed (the first one long, half a second a word, so that zoomed in it is wider
+// than the timeline), and a speaker prediction for the first, as the pipeline gives it (with how it was made, `via`).
+const NUMBERS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const WORDS = [...NUMBERS.map((w, i) => ({ w, start: 1 + i / 2, end: 1.5 + i / 2 })), { w: 'and', start: 11, end: 11.5 }, { w: 'more', start: 11.5, end: 12 }];
+const SPEECH: Record<string, unknown> = {
+  transcript: { ...base('transcript'), voices: [{ id: 'voice:0' }], words: WORDS, utterances: [
+    { id: 'utt:0', start: 1, end: 7, shot: 'shot:0', voice: 'voice:0', text: NUMBERS.join(' '), words: [0, 11] },
+    { id: 'utt:1', start: 11, end: 12, shot: 'shot:1', voice: 'voice:0', text: 'and more', words: [12, 13] },
+  ] },
+  speakers: { ...base('speakers'), utterances: [{ utt: 'utt:0', predicted: { kind: 'face', face: 'face:1', via: 'mouth' },
+    candidates: [{ face: 'face:1', score: 0.8 }, { face: 'face:0', score: 0.2 }], margin: 0.6, second_opinion_agrees: null }] },
+};
+const manifest = (layers: Record<string, unknown>) => ({
   format: 'hyperstudy-perception-bundle', schema_version: '0.1.0', created_at: '2026-10-28T00:00:00+00:00',
   pipeline: { name: 'hyperstudy-perception', version: 'test' },
   video: { sha256: 'e'.repeat(64), duration: 20, fps: 25, width: 1920, height: 1080, filename: 'synthetic.mp4' },
-  layers: Object.fromEntries(Object.keys(LAYERS).map((n) => [n, { file: `layers/${n}.json`, sha256: '0'.repeat(64), bytes: 1, licence_mode: 'commercial-ok', stage: 't' }])),
-};
+  layers: Object.fromEntries(Object.keys(layers).map((n) => [n, { file: `layers/${n}.json`, sha256: '0'.repeat(64), bytes: 1, licence_mode: 'commercial-ok', stage: 't' }])),
+});
 
-/** The viewer on the synthetic bundle, its timeline drawn. */
-export async function openSynthetic(page: Page) {
+/** The viewer on the synthetic bundle, its timeline drawn; with `speech`, a transcript and its speakers too. */
+export async function openSynthetic(page: Page, { speech = false } = {}) {
+  const layers = speech ? { ...LAYERS, ...SPEECH } : LAYERS;
   await page.route('**/synthetic/bundle/**', (route) => {
     const path = new URL(route.request().url()).pathname.replace(/^.*\/synthetic\/bundle\//, '');
-    const body = path === 'manifest.json' ? MANIFEST : LAYERS[path.replace(/^layers\/|\.json$/g, '')];
+    const body = path === 'manifest.json' ? manifest(layers) : layers[path.replace(/^layers\/|\.json$/g, '')];
     return body ? route.fulfill({ json: body }) : route.fulfill({ status: 404 });
   });
   await page.goto('/?bundle=/synthetic/bundle');
