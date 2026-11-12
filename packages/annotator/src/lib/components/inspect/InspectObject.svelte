@@ -3,6 +3,7 @@
   import { fmt } from '../../geometry';
   import type { ObjectTrack } from '../../types';
   import ObjectHeading from './ObjectHeading.svelte';
+  import Details from './Details.svelte';
   import { lookedAtBy } from './lookedAt';
 
   let { object: o }: { object: ObjectTrack } = $props();
@@ -20,15 +21,19 @@
 </script>
 
 <ObjectHeading identity={i}>
-  detected as “{o.label}” · shot {(s.bundle.shotNumber(o.shot) ?? 0) + 1} · {fmt(o.start)}–{fmt(o.end)} ·
-  <button class="link" onclick={() => s.playback.playClip(o)}>play</button> · <button class="link" onclick={() => (s.renaming = `${i}@panel`)}>rename</button>
+  {fmt(o.start)}–{fmt(o.end)} · shot {(s.bundle.shotNumber(o.shot) ?? 0) + 1} · <button class="link" onclick={() => s.playback.playClip(o)}>play</button>
 </ObjectHeading>
-<h3>Which object is this?</h3>
-<div class="row">This is
-  <select aria-label="Which object this is" onchange={(e) => { assign(e.currentTarget.value); e.currentTarget.blur(); }}>
+<div class="row which">
+  <select aria-label="Which object this is" title="Which object this is: changes this appearance only" onchange={(e) => { assign(e.currentTarget.value); e.currentTarget.blur(); }}>
     {#each s.objectIdentities as x (x)}<option value={x} selected={x === i}>{s.objName(x)}</option>{/each}
     <option value="__new">New object…</option>
   </select>
+  <button class="link" onclick={() => s.select('objid', i, { seek: false })}>Open {s.objName(i)}</button>
 </div>
-<div class="meta">Changes this appearance only. <button class="link" onclick={() => s.select('objid', i, { seek: false })}>Edit every {s.objName(i)} instead</button></div>
-{#if looked}<h3>Looked at by (estimated)</h3><div class="meta">{looked}</div>{/if}
+<Details kind="object" summary={`detected as “${o.label}”`}>
+  <div class="meta">Detected as “{o.label}”.{#if looked} Looked at by {looked} (estimated).{/if}</div>
+</Details>
+
+<style>
+  .which { margin-top: 12px; }
+</style>

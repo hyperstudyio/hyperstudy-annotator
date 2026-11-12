@@ -1,5 +1,5 @@
-import { expect, test } from 'vitest';
-import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysSent, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, ofGraph, upToCent, stepGroups, stepsOf, tickFeature, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
+import { describe, expect, test } from 'vitest';
+import { blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, sends, spendingCap, tick, unagreed, defaultFeatures, duration, foldRun, picked, placeLabel, placeName, placesFor, schedule, settingsFor, runnable, totalEstimate, keyRows, keysSent, keysText, featureOf, featureRows, neededFeature, untickFeature, withMoves, featureState, oncePerModel, ofGraph, upToCent, stepGroups, stepsOf, tickFeature, givesOf, listed, neededFor, type ModelInfo, type NodeState, type Plan, type PlanNode, type PipelineMessage, type Setting, type StepInfo, type Ticked } from './pipeline';
 
 const ev = (node: string | null, kind: string, message = ''): PipelineMessage => ({ v: 1, type: 'event', run: 'r1', node, kind, message, at: '' });
 
@@ -471,4 +471,25 @@ test('an amount said as at most goes up to the cent, as the cap Rust raises does
   expect(upToCent(0.84)).toBe(0.84);       // on the cent: stays
   expect(upToCent(0.1 + 0.2)).toBe(0.3);   // 0.30000000000000004: the cent it is
   expect(upToCent(0)).toBe(0);
+});
+
+describe('what a key is needed for', () => {
+  // as perception 0.1.6 lists them: Object names is part of Objects, so it is said once, as Objects
+  const step = (node: string, title: string, secrets: string[], part_of: string | null = null): StepInfo =>
+    ({ node, title, service: secrets.includes('ANTHROPIC_API_KEY') ? 'Anthropic API' : null, secrets, settings: [], part_of });
+  const steps = [step('audio.asr@1.1.0', 'Speech transcript', []), step('vlm.shot-captions-objects@1.0.0', 'Shot captions', ['ANTHROPIC_API_KEY']),
+    step('vision.objects@2.0.0', 'Objects', ['ANTHROPIC_API_KEY']), step('vision.objects-names@1.0.0', 'Object names', ['ANTHROPIC_API_KEY'], 'vision.objects'),
+    step('vision.objects-track@1.0.0', 'Object tracks', ['HF_TOKEN'], 'vision.objects')];
+  test('the shot captions are where on-screen text comes from; a feature is named once', () => {
+    expect(neededFor(steps, 'ANTHROPIC_API_KEY')).toEqual(['scene descriptions', 'on-screen text', 'objects']);
+    expect(listed(neededFor(steps, 'ANTHROPIC_API_KEY'))).toBe('scene descriptions, on-screen text and objects');
+    expect(givesOf('vlm.shot-captions@1.0.0')).toBe('scene descriptions and on-screen text');
+    expect(givesOf('vision.face-track@1.4.0')).toBeNull();
+  });
+  test('a feature that needs the key only in one of its parts is still named, as itself', () => {
+    const parts = [step('vision.objects@2.0.0', 'Objects', []), step('vision.objects-names@1.0.0', 'Object names', ['ANTHROPIC_API_KEY'], 'vision.objects')];
+    expect(neededFor(parts, 'ANTHROPIC_API_KEY')).toEqual(['objects']);
+    expect(neededFor([step('vision.objects-names@1.0.0', 'Object names', ['ANTHROPIC_API_KEY'], 'vision.objects')], 'ANTHROPIC_API_KEY')).toEqual(['object names']);   // its feature not listed
+    expect(neededFor(steps, 'OPENAI_API_KEY')).toEqual([]);
+  });
 });

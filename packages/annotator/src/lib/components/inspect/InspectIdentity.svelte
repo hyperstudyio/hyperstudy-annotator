@@ -20,18 +20,17 @@
 </script>
 
 <ObjectHeading identity={i}>
-  {plural(tracks.length, 'appearance')} · {tracks.reduce((a, o) => a + o.end - o.start, 0).toFixed(1)} s ·
+  {tracks.reduce((a, o) => a + o.end - o.start, 0).toFixed(1)} s on screen ·
   <button class="link" onclick={() => (s.renaming = `${i}@panel`)}>rename</button>
 </ObjectHeading>
-<h3>Same object as</h3>
-<div class="row">
+<div class="row" style="margin-top:14px">
   <select aria-label="Same object as" onchange={(e) => { merge(e.currentTarget.value); e.currentTarget.blur(); }}>
-    <option value="">Choose an object…</option>
+    <option value="">Same object as…</option>
     {#each s.objectIdentities.filter((x) => x !== i) as x (x)}<option value={x}>{s.objName(x)}</option>{/each}
   </select>
 </div>
 {#if looked}<h3>Looked at by (estimated)</h3><div class="meta">{looked}</div>{/if}
-<h3>Appearances</h3>
+<h3>{plural(tracks.length, 'appearance')}</h3>
 <div class="list">
   {#each tracks as o (o.id)}
     <button class="item" class:done={!s.includedObject(o)} onclick={() => s.select('object', o.id)}>

@@ -47,8 +47,11 @@ export interface Shot extends Span {
 }
 export interface ShotsLayer extends LayerBase { shots: Shot[] }
 
-export interface Utterance extends Span { id: string; text: string; shot: string; voice: string | null }
-export interface TranscriptLayer extends LayerBase { voices: { id: string }[]; utterances: Utterance[] }
+/** `words`: its first and last word in the layer's `words`, inclusive (absent from bundles without word times). */
+export interface Utterance extends Span { id: string; text: string; shot: string; voice: string | null; words?: [number, number] }
+/** A word as the transcriber heard it, where it is spoken. */
+export interface TranscriptWord extends Span { w: string; voice?: string | null }
+export interface TranscriptLayer extends LayerBase { voices: { id: string }[]; utterances: Utterance[]; words?: TranscriptWord[] }
 
 /** Who speaks an utterance. Machine predictions and corrections share this shape. */
 export type Speaker =

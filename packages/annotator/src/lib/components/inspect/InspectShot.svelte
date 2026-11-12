@@ -11,9 +11,12 @@
 </script>
 
 <h2>Shot {shot.index + 1} of {s.bundle.shots.length}</h2>
-<div class="meta">{fmt(shot.start)}–{fmt(shot.end)} <button class="link" onclick={() => s.playback.playClip(shot)}>Play</button></div>
-<h3 title={`Written by ${model}`}>Caption</h3>
-<textarea rows="6" aria-label="Shot caption" value={caption}
+<div class="meta">{fmt(shot.start)}–{fmt(shot.end)} · <button class="link" onclick={() => s.playback.playClip(shot)}>play</button></div>
+<textarea rows="6" aria-label="Shot caption" title={`Written by ${model}`} placeholder="No caption: this run had no Anthropic key, or captions were off" value={caption}
   onchange={(e) => { const v = e.currentTarget.value; if (v !== caption) s.commit({ op: 'shot.caption', shot: shot.id, caption: v }); }}></textarea>
-{#if shot.caption?.setting}<div class="meta">Setting: {shot.caption.setting}</div>{/if}
-{#if shot.caption?.mood}<div class="meta">Mood: {shot.caption.mood}</div>{/if}
+{#if shot.caption?.setting || shot.caption?.mood}<div class="meta tags">{[shot.caption.setting, shot.caption.mood].filter(Boolean).join(' · ')}</div>{/if}
+
+<style>
+  textarea { margin-top: 10px; width: 100%; }
+  .tags { margin-top: 6px; }
+</style>

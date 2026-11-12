@@ -1,7 +1,10 @@
 <script lang="ts">
-  // The timeline under the video. Interactions, as settled in the prototype's review:
-  //   click a segment: select it and loop it (click again to stop)   drag across empty space: loop that range
+  // The timeline under the video. Interactions, as settled in the prototype's review (and testers', 2026-11):
+  //   click a segment: select it as the clip (Space plays it, looping)  drag across empty space: that range is the clip
   //   click empty space: move the playhead                            drag along the time ruler: scrub
+  //   drag the clip's band on the ruler: move it; drag its ends: change its length (snapping as annotations do)
+  //   with a clip, anywhere: ⇧-click / ⇧-drag its nearer end there (⇧-click a segment: take it in); ⌘-drag: move it
+  //   Words row: click a word, it is the clip; double-click it to correct it (Tab on to the next word)
   //   drag speech onto a person's row: change the speaker              drag across an annotation row: add a span
   //   pinch (ctrl+wheel): zoom about the pointer                      drag a label's grip: reorder groups / rows
   //   drag a row's bottom edge: resize it                             drag the top edge: timeline height
@@ -12,7 +15,7 @@
   import { GROUP_KEYS } from '../../model/view.svelte';
   import { arrange, buildGroups, rowHeight, speakerForDrop, ROW_H, type Bar, type Row } from '../../timeline/rows';
   import { LABEL_W, ZOOM_MAX, fitPps, scrollToKeep, tickStep, timeAtX } from '../../timeline/scale';
-  import { SNAP_PX, partAt, retime, snap, type RetimeMode } from '../../timeline/retime';
+  import { MIN_LEN_S, SNAP_PX, partAt, retime, snap, type RetimeMode } from '../../timeline/retime';
   import type { Span } from '../../types';
   import { fmt } from '../../geometry';
   import { plural, NEUTRAL } from '../../model/session.svelte';
@@ -22,6 +25,7 @@
   import NoteMenu from './NoteMenu.svelte';
   import RowLabel from './RowLabel.svelte';
   import PlotCanvas from './PlotCanvas.svelte';
+  import { CMD, cmdKey } from '../../platformKeys';
 
   let { onresizeheight, onresetheight }: { onresizeheight: (dy: number, start: number) => void; onresetheight: () => void } = $props();
   const s = useSession();
@@ -51,13 +55,20 @@
     | { kind: 'speech'; utt: string; text: string; colour: string; x: number; y: number; moved: boolean; over: string | null; px: number; py: number }
     | { kind: 'reorder'; what: 'group' | 'row'; id: string; group: string; at: number | null; lineY: number | null }
     | { kind: 'resize'; id: string; y: number; h0: number; now: number }
-    | { kind: 'retime'; note: string; mode: RetimeMode; x: number; t0: number; from: Span; span: Span; at: number | null; times: number[]; moved: boolean; px: number; py: number };
+    | { kind: 'retime'; note: string; mode: RetimeMode; x: number; t0: number; from: Span; span: Span; at: number | null; times: number[]; moved: boolean; px: number; py: number }
+    // `keyed`: started with ⇧ or ⌘ anywhere on the timeline (not on the band), so even a click changes the clip
+    | { kind: 'clip'; mode: RetimeMode; x: number; t0: number; from: Span; span: Span; at: number | null; times: number[]; moved: boolean; px: number; py: number; keyed: boolean };
   let gesture = $state<Gesture | null>(null);
   // an annotation dropped where it was dragged, drawn there until its edit is in the log: the log's times change only
   // once the store has the edit, which in the app is a round trip to its database, so the bar would show its old
   // place in between
   let landing = $state.raw<{ note: string; span: Span } | null>(null);   // raw: compared by identity when cleared
   let resizingTimeline = $state(false);
+  // ⌘ or ⇧ held, for the cursor to say what a press on the timeline would do to the clip
+  let held = $state<'move' | 'extend' | null>(null);
+  // the key that moves the clip: ⌘ on a Mac, Ctrl elsewhere, as ⌘←/→ is Ctrl+←/→ there (platformKeys.ts)
+  const moveKey = cmdKey;
+  const heldKeys = (e: KeyboardEvent) => { held = moveKey(e) ? 'move' : e.shiftKey ? 'extend' : null; };
 
   const timeOf = (e: PointerEvent) => timeAtX(e.clientX, content!.getBoundingClientRect().left, pps, duration);
 
@@ -90,6 +101,47 @@
     const times = [...s.bundle.shots.flatMap((x) => [x.start, x.end]), pb.time,
       ...[...s.S.notes.values()].filter((x) => x.id !== n.id).flatMap((x) => [x.start, x.end])];
     gesture = { kind: 'retime', note: n.id, mode: partAt(e.clientX - r.left, r.width), x: e.clientX, t0: timeOf(e), from, span: from, at: null, times, moved: false, px: e.clientX, py: e.clientY };
+  }
+  /** What a clip's end snaps to: shot cuts, utterances' and annotations' ends. */
+  const clipTimes = () => [...s.bundle.shots.flatMap((x) => [x.start, x.end]), ...s.bundle.utterances.flatMap((u) => [u.start, u.end]),
+    ...[...s.S.notes.values()].flatMap((x) => [x.start, x.end])];
+  /** The clip's band on the ruler: its middle moves it, its ends change its length. */
+  function clipDown(e: PointerEvent) {
+    const from = pb.clip;
+    if (e.button !== 0 || !from) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    gesture = { kind: 'clip', mode: partAt(e.clientX - r.left, r.width), x: e.clientX, t0: timeOf(e), from: { ...from }, span: { ...from }, at: null,
+      times: clipTimes(), moved: false, px: e.clientX, py: e.clientY, keyed: false };
+  }
+  // A click on a segment that a ⇧ or ⌘ gesture took is not also a selection (a segment's click comes after pointerup).
+  // Only a pointer's click is the gesture's: one from the keyboard (Enter or Space on a focused segment, detail 0) is
+  // always a selection, even when a gesture left this set (a ⇧-click on empty space, or a drag let go off the segment,
+  // makes no click on a segment to clear it). The next press sets it again either way.
+  let tookClick = false;
+  /** With a clip, anywhere on the timeline, before the row or the segment under the pointer gets it:
+   *  ⇧-click or ⇧-drag: the nearer end goes to the pointer (on a segment: the clip grows to take it in), as an editor's
+   *  extend-selection; ⌘-drag: the whole clip moves. */
+  function clipKeysDown(e: PointerEvent) {
+    tookClick = false;
+    const from = pb.clip, el = e.target as Element;
+    if (e.button !== 0 || !from || !(e.shiftKey || moveKey(e)) || el.closest('.lane-label, .ruler-label, .lane-resize, .grip')) return;
+    e.preventDefault(); e.stopPropagation();
+    tookClick = true;
+    const t = timeOf(e), base = { x: e.clientX, t0: t, at: null, times: clipTimes(), moved: false, px: e.clientX, py: e.clientY, keyed: true };
+    if (moveKey(e)) { gesture = { kind: 'clip', mode: 'move', from: { ...from }, span: { ...from }, ...base }; return; }
+    const seg = el.closest<HTMLElement>('.bar[data-start]');
+    const near: RetimeMode = t - from.start < from.end - t ? 'start' : 'end';
+    let span: Span, mode: RetimeMode;
+    if (seg) {
+      const b = { start: Number(seg.dataset.start), end: Number(seg.dataset.end) };
+      span = { start: Math.min(from.start, b.start), end: Math.max(from.end, b.end) };
+      mode = b.end > from.end ? 'end' : b.start < from.start ? 'start' : near;
+    } else {
+      mode = near;
+      span = mode === 'start' ? { start: Math.min(t, from.end - MIN_LEN_S), end: from.end } : { start: from.start, end: Math.max(t, from.start + MIN_LEN_S) };
+    }
+    gesture = { kind: 'clip', mode, from: span, span, ...base };
   }
   function gripDown(e: PointerEvent, what: 'group' | 'row', id: string, group: string) {
     e.preventDefault(); e.stopPropagation();
@@ -139,12 +191,14 @@
         break;
       }
       case 'resize': g.now = Math.round(g.h0 + e.clientY - g.y); break;
-      case 'retime': {
+      case 'retime': case 'clip': {
         if (!g.moved && Math.abs(e.clientX - g.x) < DRAG_PX) return;
         g.moved = true; g.px = e.clientX; g.py = e.clientY;
         const moved = retime(g.mode, g.from, timeOf(e) - g.t0, duration);
         const snapped = e.altKey ? { span: moved, at: null } : snap(g.mode, moved, g.times, SNAP_PX / pps, duration);
         g.span = snapped.span; g.at = snapped.at;
+        // trimming a paused clip: the frame at the end being dragged (Play still starts the clip from its start)
+        if (g.kind === 'clip' && g.mode !== 'move' && pb.paused) pb.seek(g.span[g.mode], { keepClip: true });
         break;
       }
     }
@@ -163,13 +217,13 @@
       case 'range': {
         if (!g.moved) { pb.seek(g.start); break; }
         const end = timeOf(e), a = Math.min(g.start, end), b = Math.max(g.start, end);
-        if (b - a >= RANGE_MIN_S) pb.playClip({ start: a, end: b });
+        if (b - a >= RANGE_MIN_S) pb.setClip({ start: a, end: b });
         break;
       }
       case 'speech': {
         const u = s.bundle.utt.get(g.utt);
         if (!u) break;
-        if (!g.moved) { s.select('utt', u.id); s.clickPlay(); break; }
+        if (!g.moved) { s.select('utt', u.id); s.selectClip(); break; }
         const drop = g.over ? rowById.get(g.over)?.drop : undefined;
         if (!drop) break;
         const speaker = speakerForDrop(s, u, drop);
@@ -190,7 +244,7 @@
       }
       case 'resize': if (g.now !== g.h0) s.view.setHeight(g.id, g.now); break;
       case 'retime': {
-        if (!g.moved) { s.select('note', g.note); s.clickPlay(); break; }   // a click: as any bar
+        if (!g.moved) { s.select('note', g.note); s.selectClip(); break; }   // a click: as any bar
         if (g.span.start !== g.from.start || g.span.end !== g.from.end) {
           const mine = { note: g.note, span: g.span };   // another drop while this one saves has its own
           landing = mine;
@@ -200,14 +254,78 @@
         s.select('note', g.note, { seek: false });
         break;
       }
+      case 'clip': {
+        // a plain click on the band: the playhead, within the clip; a ⇧-click: the clip reaches it
+        if (!g.moved && !g.keyed) { pb.seek(timeOf(e), { keepClip: true }); break; }
+        if (!g.moved && g.mode === 'move') break;   // ⌘-click: nothing to move
+        pb.reshapeClip(g.span, g.mode === 'move' ? undefined : g.mode);
+        break;
+      }
     }
   }
 
-  function barClick(bar: Bar) {
+  function barClick(bar: Bar, e: MouseEvent) {
+    const took = tookClick;
+    tookClick = false;
+    if (took && e.detail > 0) return;   // ⇧ or ⌘ on a segment changed the clip instead
     if (!bar.sel || bar.drag || bar.retime) return;   // speech and annotations are handled on pointerup (a click, or a drag)
+    if (bar.clip) { s.select(bar.sel.kind, bar.sel.id, { seek: false }); pb.setClip(bar.clip); return; }   // a word: just it
     s.select(bar.sel.kind, bar.sel.id);
-    s.clickPlay();
+    s.selectClip();
   }
+
+  // --- correcting a word on the timeline: double-click it; Enter keeps it, Esc does not, Tab and ⇧Tab keep it and go
+  // on to the next or previous word (the next utterance's, at its end), as a subtitle editor does ----------------------
+  let wordEdit = $state<{ utt: string; index: number; value: string; x: number; y: number; w: number; h: number } | null>(null);
+  const wordKey = (utt: string, index: number) => `${utt}#${index}`;
+  async function openWord(utt: string, index: number) {
+    const u = s.bundle.utt.get(utt), w = u ? s.wordsOf(u)[index] : undefined, el = scroller;
+    if (!u || !w || !el) return;
+    // the utterance selected first, and its scrolling to it done (the effect below), so the word's is the last
+    if (!s.isSel('utt', utt)) { s.select('utt', utt, { seek: false }); await tick(); }
+    // in view: Tab can go on to a word scrolled out of sight
+    const x = w.start * pps, vw = el.clientWidth - LABEL_W;
+    if (x < el.scrollLeft || x + (w.end - w.start) * pps > el.scrollLeft + vw) el.scrollLeft = Math.max(0, x - vw / 3);
+    const bar = content?.querySelector<HTMLElement>(`.bar[data-key="${CSS.escape(wordKey(utt, index))}"]`);
+    if (!bar) return;
+    const r = bar.getBoundingClientRect(), sr = el.getBoundingClientRect();
+    if (r.top < sr.top + 24 || r.bottom > sr.bottom) el.scrollTop += r.top - sr.top - sr.height / 2;   // the Words row, scrolled to
+    pb.setClip(w);   // the frame where it is said; Space after Enter plays it
+    wordEdit = { utt, index, value: w.w, x: 0, y: 0, w: 0, h: 0 };
+    placeWord();
+  }
+  /** The input over its word, wherever the timeline has scrolled to; closed (kept) once the word is out of sight. */
+  function placeWord() {
+    const e = wordEdit, el = scroller;
+    if (!e || !el) return;
+    const bar = content?.querySelector<HTMLElement>(`.bar[data-key="${CSS.escape(wordKey(e.utt, e.index))}"]`);
+    const r = bar?.getBoundingClientRect(), sr = el.getBoundingClientRect();
+    if (!r || r.right < sr.left + LABEL_W || r.left > sr.right || r.bottom < sr.top || r.top > sr.bottom) { closeWord('keep'); return; }
+    e.x = r.left; e.y = r.top; e.w = r.width; e.h = r.height;
+  }
+  async function closeWord(how: 'keep' | 'cancel' | 'next' | 'prev') {
+    const e = wordEdit;
+    if (!e) return;
+    wordEdit = null;   // first: the input's blur, as it goes, finds nothing left to close
+    const u = s.bundle.utt.get(e.utt);
+    if (!u) return;
+    const before = s.wordsOf(u).length;
+    if (how !== 'cancel') await s.editWord(u, e.index, e.value);
+    if (how !== 'next' && how !== 'prev') return;
+    const list = s.bundle.utterances, at = list.indexOf(u), now = s.wordsOf(u).length;
+    // the word after the ones typed (none, if it was deleted), or the one before
+    let utt = u, index = how === 'next' ? e.index + Math.max(0, now - before + 1) : e.index - 1;
+    if (index >= now) { const n = list.slice(at + 1).find((x) => s.wordsOf(x).length); if (!n) return; utt = n; index = 0; }
+    else if (index < 0) { const p = list.slice(0, at).reverse().find((x) => s.wordsOf(x).length); if (!p) return; utt = p; index = s.wordsOf(p).length - 1; }
+    await tick();
+    openWord(utt.id, index);
+  }
+  function wordKeys(e: KeyboardEvent) {
+    if (e.key === 'Enter') { e.preventDefault(); closeWord('keep'); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeWord('cancel'); }
+    else if (e.key === 'Tab') { e.preventDefault(); closeWord(e.shiftKey ? 'prev' : 'next'); }
+  }
+  const selectAll = (el: HTMLInputElement) => { el.focus(); el.select(); };
 
   // pinch to zoom, about the pointer; ordinary scrolling stays scrolling
   $effect(() => {
@@ -261,6 +379,7 @@
   const range = $derived.by(() => {
     const g = gesture;
     if (g?.kind === 'range' && g.moved) return { start: Math.min(g.start, g.now), end: Math.max(g.start, g.now), preview: true };
+    if (g?.kind === 'clip') return { ...g.span, preview: true };
     return pb.clip ? { ...pb.clip, preview: false } : null;
   });
   const marking = $derived.by(() => {
@@ -276,7 +395,7 @@
   const barStyle = (b: Bar, bar = { ...b, ...spanOf(b) }) => `left:${bar.start * pps}px; width:${Math.max(3, (bar.end - bar.start) * pps - 1)}px; top:${bar.top ?? (bar.row ?? 0) * ROW_H + 3}px;${bar.colour ? ` background:${bar.colour};` : ''}`;
 </script>
 
-<svelte:window {onpointermove} {onpointerup} />
+<svelte:window {onpointermove} {onpointerup} onkeydown={heldKeys} onkeyup={heldKeys} onblur={() => (held = null)} />
 
 {#snippet bars(list: Bar[], summary = false)}
   {#each list as bar (bar.key)}
@@ -284,17 +403,17 @@
       <div class="bar summary" style="left:{bar.start * pps}px; width:{Math.max(3, (bar.end - bar.start) * pps - 1)}px; top:3px; background:{bar.colour}"></div>
     {:else}
       <!-- no focus on click: a focused button would also take the Space meant for play/pause -->
-      <button class="bar {bar.flags.join(' ')}" class:draggable={!!bar.drag} class:retimable={!!bar.retime} style={barStyle(bar)} data-key={bar.key}
+      <button class="bar {bar.flags.join(' ')}" class:draggable={!!bar.drag} class:retimable={!!bar.retime} class:word={!!bar.word} style={barStyle(bar)} data-key={bar.key} data-start={spanOf(bar).start} data-end={spanOf(bar).end}
         title={bar.retime ? `${bar.title} · double-click to set its value · drag to move, drag an end to change its length` : bar.title} tabindex="-1" onmousedown={(e) => e.preventDefault()}
-        onpointerdown={bar.drag ? (e) => speechDown(e, bar) : bar.retime ? (e) => retimeDown(e, bar) : undefined} onclick={() => barClick(bar)}
-        ondblclick={bar.retime ? () => (s.noteMenu = bar.retime!) : undefined}
+        onpointerdown={bar.drag ? (e) => speechDown(e, bar) : bar.retime ? (e) => retimeDown(e, bar) : undefined} onclick={(e) => barClick(bar, e)}
+        ondblclick={bar.retime ? () => (s.noteMenu = bar.retime!) : bar.word ? () => openWord(bar.word!.utt, bar.word!.index) : undefined}
         >{#if bar.retime}<span class="end-grip start" aria-hidden="true"></span>{/if}{bar.text ?? ''}{#if bar.retime}<span class="end-grip end" aria-hidden="true"></span>{/if}</button>
     {/if}
   {/each}
 {/snippet}
 
-<section class="timeline" class:busy={gesture?.kind === 'reorder' || gesture?.kind === 'speech'} class:retiming={gesture?.kind === 'retime' && gesture.moved}
-  style:--retime-cursor={gesture?.kind === 'retime' ? (gesture.mode === 'move' ? 'grabbing' : 'ew-resize') : undefined} style="--label-w:{LABEL_W}px; --tl-h:{s.view.s.timelineH ? `${s.view.s.timelineH}px` : '42vh'}">
+<section class="timeline" class:busy={gesture?.kind === 'reorder' || gesture?.kind === 'speech'} class:retiming={(gesture?.kind === 'retime' || gesture?.kind === 'clip') && gesture.moved}
+  style:--retime-cursor={gesture?.kind === 'retime' || gesture?.kind === 'clip' ? (gesture.mode === 'move' ? 'grabbing' : 'ew-resize') : undefined} style="--label-w:{LABEL_W}px; --tl-h:{s.view.s.timelineH ? `${s.view.s.timelineH}px` : '42vh'}">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="timeline-resize" class:active={resizingTimeline} title="Drag to give the timeline more or less height · double-click to reset" onpointerdown={startTimelineResize} ondblclick={onresetheight}></div>
   <div class="tl-tools">
@@ -311,13 +430,22 @@
     <label class="zoom">Zoom <input type="range" min="1" max={ZOOM_MAX} step="0.01" bind:value={zoom} title="Zoom (or pinch on the timeline)" onchange={(e) => e.currentTarget.blur()} /></label>
   </div>
 
-  <div class="tl-scroll" bind:this={scroller} bind:clientWidth={scrollerW} onscroll={() => (scrollLeft = scroller!.scrollLeft)}>
-    <div class="tl-content" bind:this={content} style="width:{LABEL_W + duration * pps}px">
+  <div class="tl-scroll" bind:this={scroller} bind:clientWidth={scrollerW} onscroll={() => { scrollLeft = scroller!.scrollLeft; placeWord(); }}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="tl-content" class:clip-move={!!pb.clip && held === 'move'} class:clip-extend={!!pb.clip && held === 'extend'} bind:this={content}
+      style="width:{LABEL_W + duration * pps}px" onpointerdowncapture={clipKeysDown}>
       <div class="lane ruler">
         <div class="lane-label ruler-label"></div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="lane-body" style="width:{duration * pps}px; height:20px" title="Drag to scrub" onpointerdown={rulerDown}>
           {#each ticks as t (t)}<span class="tick" style="left:{t * pps}px">{fmt(t).replace(/\.\d$/, '')}</span>{/each}
+          {#if range && !(gesture?.kind === 'range')}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="clip-band" style="left:{range.start * pps}px; width:{Math.max(4, (range.end - range.start) * pps)}px" onpointerdown={clipDown}
+              title={`The clip: Space plays it · drag it, or ${CMD}drag anywhere, to move it · drag an end, ⇧-click or ⇧-drag anywhere, or ${CMD}←/→, to change its length · Esc lets it go`}>
+              <span class="end-grip start" aria-hidden="true"></span><span class="end-grip end" aria-hidden="true"></span>
+            </div>
+          {/if}
         </div>
       </div>
 
@@ -368,7 +496,10 @@
             {/if}
             {#if hiddenHere.length}<button class="link restore" title="Show hidden rows" onclick={(e) => { e.stopPropagation(); s.view.showRows(hiddenHere); }}>+{hiddenHere.length} hidden</button>{/if}
           </div>
-          <div class="lane-body" style="width:{duration * pps}px; height:{collapsed ? 24 : 22}px">
+          <!-- as empty space anywhere: a click moves the playhead, a drag selects a clip (its summary bars are not hit) -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="lane-body" style="width:{duration * pps}px; height:{collapsed ? 24 : 22}px"
+            onpointerdown={(e) => bodyDown(e, { id: `group:${group.key}`, label: { kind: 'text', text: '' }, bars: [] })}>
             {#if collapsed}{@render bars(group.summary, true)}{/if}
           </div>
         </div>
@@ -398,14 +529,20 @@
       {#if marking}<div class="marking" style="left:{LABEL_W + marking.start * pps}px; width:{(marking.end - marking.start) * pps}px"></div>{/if}
       {#if range}<div class="clip-span" style="left:{LABEL_W + range.start * pps}px; width:{(range.end - range.start) * pps}px"></div>{/if}
       <div class="playhead" style="left:{LABEL_W + pb.time * pps}px"></div>
-      {#if gesture?.kind === 'retime' && gesture.at !== null}<div class="snap-line" style="left:{LABEL_W + gesture.at * pps}px"></div>{/if}
+      {#if (gesture?.kind === 'retime' || gesture?.kind === 'clip') && gesture.at !== null}<div class="snap-line" style="left:{LABEL_W + gesture.at * pps}px"></div>{/if}
       {#if gesture?.kind === 'reorder' && gesture.lineY !== null}<div class="reorder-line" style="top:{gesture.lineY}px"></div>{/if}
     </div>
   </div>
 </section>
 
+{#if wordEdit}
+  <!-- over the word, at least wide enough to type in; Enter keeps, Esc does not, Tab goes on -->
+  <input class="word-edit" aria-label="Correct this word" spellcheck="true" bind:value={wordEdit.value} use:selectAll
+    style="left:{wordEdit.x}px; top:{wordEdit.y - 3}px; width:{Math.max(90, wordEdit.w + 24)}px; height:{wordEdit.h + 6}px"
+    onkeydown={wordKeys} onblur={() => closeWord('keep')} />
+{/if}
 {#key s.noteMenu}{#if s.noteMenu}<NoteMenu id={s.noteMenu} />{/if}{/key}   <!-- one per annotation: each opens fresh -->
-{#if gesture?.kind === 'retime' && gesture.moved}
+{#if (gesture?.kind === 'retime' || gesture?.kind === 'clip') && gesture.moved}
   <!-- above the pointer: annotation rows are often at the foot of the window -->
   <div class="retime-tip" style="left:{gesture.px + 12}px; top:{gesture.py - 36}px">{fmt(gesture.span.start)}–{fmt(gesture.span.end)} · {(gesture.span.end - gesture.span.start).toFixed(1)} s</div>
 {/if}
@@ -454,11 +591,23 @@
   .bar.caption { background: var(--color-bg-elevated); color: var(--color-text-secondary); text-align: left; text-overflow: ellipsis; border: 1px solid var(--color-border-default); }
   .bar.speech { height: 10px; border-radius: 3px; padding: 0; }   /* when a person speaks; the words are in the transcript row */
   .bar.draggable, .bar.retimable { cursor: grab; }
+  .bar.word { padding: 0 2px; }
+  .word-edit { position: fixed; z-index: 30; padding: 0 6px; font-size: 12px; border-radius: 4px; box-sizing: border-box;
+               background: var(--color-bg-elevated); color: var(--color-text-primary); border: 1px solid var(--color-primary); }
   /* an annotation's ends: drag to change its length (a third of a narrow bar, so its middle can still be taken) */
   .end-grip { position: absolute; top: 0; bottom: 0; width: min(6px, 33%); cursor: ew-resize; }
   .end-grip.start { left: 0; }
   .end-grip.end { right: 0; }
   .bar.retimable:hover .end-grip, .bar.retimable.selected .end-grip { background: rgba(255, 255, 255, .35); }
+  /* the clip on the ruler, as a DAW's cycle region: its middle moves it, its ends (always shown) change its length */
+  .clip-band { position: absolute; top: 2px; bottom: 2px; z-index: 2; cursor: grab; border-radius: 3px;
+               background: rgba(76, 175, 80, .45); border: 1px solid var(--color-primary); }
+  .clip-band:hover { background: rgba(76, 175, 80, .6); }
+  .tl-content.clip-move .lane-body, .tl-content.clip-move .bar { cursor: grab; }
+  .tl-content.clip-extend .lane-body, .tl-content.clip-extend .bar { cursor: col-resize; }
+  .clip-band .end-grip { width: min(7px, 33%); background: var(--color-primary); }
+  .clip-band .end-grip.start { border-radius: 2px 0 0 2px; }
+  .clip-band .end-grip.end { border-radius: 0 2px 2px 0; }
   .snap-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--color-primary); z-index: 7; pointer-events: none; }
   .retime-tip { position: fixed; z-index: 30; pointer-events: none; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-variant-numeric: tabular-nums;
                 background: var(--color-bg-elevated); border: 1px solid var(--color-border-strong); color: var(--color-text-primary); }

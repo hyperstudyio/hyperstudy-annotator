@@ -43,7 +43,7 @@ test('the timeline keeps its scale and the page its width, whatever shot is on s
   expect(zoomed.scroller).toBe(first.scroller);
 });
 
-test('a drag across empty timeline loops the range under the pointer, and the shading stays where the drag was', async ({ page }) => {
+test('a drag across empty timeline makes the range under the pointer the clip, paused for Space, and the shading stays where the drag was', async ({ page }) => {
   await open(page);
   // the ruler's own labels give the scale on screen
   const tickX = async (label: string) => (await page.locator('.tick', { hasText: new RegExp(`^${label}$`) }).boundingBox())!.x;
@@ -57,6 +57,8 @@ test('a drag across empty timeline loops the range under the pointer, and the sh
   await page.mouse.move(xAt(16.9), y, { steps: 5 });
   await page.mouse.up();
   await page.waitForFunction(() => { const v = document.querySelector('video')!; return v.currentTime > 12 && v.currentTime < 17.5; });
+  expect(await page.evaluate(() => document.querySelector('video')!.paused)).toBe(true);   // selected, not played (testers, 2026-11)
+  await expect(page.locator('.transport .clip')).toContainText('Clip 0:12');
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   const shade = (await page.locator('.clip-span').boundingBox())!;
   expect(Math.abs(shade.x - xAt(12.1))).toBeLessThan(2);

@@ -1,7 +1,8 @@
 <script lang="ts">
   // An open bundle: header, the video with its overlay and transport, the timeline, and the drawer. This is the
   // piece HyperStudy embeds: give it a Session and the BundleSource it came from.
-  // Keys (the prototype's settled scheme): Space play/pause the whole video · Shift+Space play the selection · L loop
+  // Keys (the prototype's settled scheme): Space play/pause (the clip, else the video) · Shift+Space play the selection ·
+  // ⌘←/→ the clip's end moves that way (⇧ 1 s, ⌥ the inner end: shrink) · L loop
   // on/off · ←/→ previous/next segment in the selected row · Shift+←/→ one second · , . shots · j k review queue ·
   // [ ] annotate · 1-9 o m u x speaker · Esc stop and deselect · Cmd+Z undo · \ the panel.
   import type { Snippet } from 'svelte';
@@ -35,7 +36,7 @@
   const TIMELINE_MIN_H = 120, VIDEO_MIN_H = 220;
 
   $effect(() => source.corrections.subscribe?.(() => { s.load(); }));   // another tab of this bundle saved
-  $effect(() => { if (!active) s.playback.stop(); });
+  $effect(() => { if (!active) s.playback.pause(); });
   $effect(() => { onmodal?.(s.modal); return () => onmodal?.(false); });
 
   function onkeydown(e: KeyboardEvent) {
@@ -53,6 +54,14 @@
     if (document.activeElement?.tagName === 'BUTTON' && e.key === ' ') (document.activeElement as HTMLElement).blur();
     const k = e.key, sel = s.selection, utt = sel?.kind === 'utt' ? s.bundle.utt.get(sel.id) ?? null : null;
     if ((e.metaKey || e.ctrlKey) && k.toLowerCase() === 'z') { e.preventDefault(); s.undo(); return; }
+    // ⌘←/→: an end of the clip moves that way, 0.1 s a press (⇧: 1 s): the outer end, so it grows; ⌥: the inner end,
+    // so it shrinks
+    if ((e.metaKey || e.ctrlKey) && (k === 'ArrowLeft' || k === 'ArrowRight')) {
+      e.preventDefault();
+      const dir = k === 'ArrowLeft' ? -1 : 1, outer = dir < 0 ? 'start' : 'end', inner = dir < 0 ? 'end' : 'start';
+      pb.moveEdge(e.altKey ? inner : outer, dir * (e.shiftKey ? 1 : 0.1));
+      return;
+    }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (k === ' ') { e.preventDefault(); if (e.shiftKey) s.playSelection(); else pb.toggle(); }
     else if (k === '\\') s.view.toggleDrawer();

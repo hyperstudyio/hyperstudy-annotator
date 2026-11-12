@@ -3,6 +3,7 @@
   // for (? or its button), and the handle that resizes it. Collapsed (\), the video and timeline take the width.
   import { untrack } from 'svelte';
   import { useSession } from '../model/context';
+  import { ALT, CMD } from '../platformKeys';
   import type { Tab } from '../model/view.svelte';
   import Inspector from './inspect/Inspector.svelte';
   import ReviewTab from './tabs/ReviewTab.svelte';
@@ -63,9 +64,10 @@
         {#if kind === 'binary'}<kbd>y</kbd> yes <kbd>n</kbd> no{:else}<kbd>1</kbd>–<kbd>9</kbd> value{/if} <kbd>↵</kbd> menu <kbd>⌫</kbd> delete <kbd>a</kbd> annotate <kbd>space</kbd> play <kbd>←</kbd><kbd>→</kbd> segment
       {:else}
         <kbd>space</kbd> play <kbd>⇧space</kbd> clip <kbd>l</kbd> loop <kbd>←</kbd><kbd>→</kbd> segment <kbd>⇧←→</kbd> 1 s <kbd>,</kbd><kbd>.</kbd> shot
+        <kbd>{CMD}←→</kbd> grow clip <kbd>{ALT}{CMD}←→</kbd> shrink <kbd>⇧click</kbd> extend <kbd>{CMD}drag</kbd> move clip
         <kbd>a</kbd> annotate selection <kbd>[</kbd><kbd>]</kbd> mark a span <kbd>j</kbd> review <kbd>\</kbd> panel
       {/if}
-      <kbd>⌘Z</kbd> undo <kbd>?</kbd> hide these
+      <kbd>{CMD}Z</kbd> undo <kbd>?</kbd> hide these
     </div>{/if}
   {/if}
 </aside>

@@ -6,6 +6,7 @@
   // no step uses (0.0.2 listed every key) is shown so it can be removed. A pipeline from before steps were listed gives
   // only the models: they are listed by step ref, and the keys the app keeps are shown below them. A feature in several
   // steps (objects: its names, its tracks, itself; the pipeline says, perception #45) is one row, each model and key once.
+  // The Anthropic key has its own part above the steps, saying what needs it; the steps that use it link there.
   import KeyRow from './KeyRow.svelte';
   import HfAccess from './HfAccess.svelte';
   import { accessOf, gatedModels, repoOf } from '../hfAccess';
@@ -13,7 +14,7 @@
   import { LICENCE_TEXT, downloadSize, modelNote } from '@hyperstudyio/annotator';
   import type { LicenceMode } from '@hyperstudyio/annotator';
   import { loadDefaults, saveDefault } from '../stepDefaults';
-  import { choiceLabel, choiceName, keyRows, oncePerModel, stepGroups, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
+  import { choiceLabel, choiceName, givesOf, keyRows, listed, neededFor, oncePerModel, stepGroups, type CheckResult, type CliKeys, type KeyStatus, type ModelInfo, type ModelsListing, type PipelineApi, type StepInfo } from '../pipeline';
   let { api, keys, cli, models, problem = null, allSteps = null, onkeys, onbusy }: {
     api: PipelineApi; keys: KeyStatus[]; cli: CliKeys | null;
     /** the models and steps; null: not known (an older pipeline, or the listing failed: `problem`) */
@@ -55,6 +56,16 @@
     at?.scrollIntoView({ block: 'start' });
     at?.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
   };
+  // The Anthropic key, set up once above the steps with what needs it (scene descriptions, on-screen text, objects: none
+  // of them run without it, and the steps' names alone did not say so); each step that uses it points there.
+  const ANTHROPIC = 'ANTHROPIC_API_KEY';
+  const anthropic = $derived(models?.nodes && used.has(ANTHROPIC) ? key(ANTHROPIC) : undefined);
+  const anthropicFor = $derived(neededFor(steps, ANTHROPIC));
+  const toAnthropic = () => {
+    const at = document.getElementById('anthropic-key');
+    at?.scrollIntoView({ block: 'start' });
+    at?.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
+  };
   // a pipeline that does not list its steps: the Anthropic key, as before
   const anthropicOld = $derived(!models?.nodes ? key('ANTHROPIC_API_KEY') : undefined);
   // every other key saved that no step here names (0.0.2 listed every key): it still reaches the pipeline's commands,
@@ -89,6 +100,13 @@
   <HfAccess {api} k={hf} elsewhere={hf.elsewhere} {gated} {stepTitle} bind:check={hfCheck} {onkeys} {onbusy} />
 {/if}
 
+{#if anthropic}
+  <section class="set-part" id="anthropic-key" aria-labelledby="anthropic-heading">
+    <div class="set-head"><h2 id="anthropic-heading" tabindex="-1">Anthropic</h2></div>
+    {#if anthropicFor.length}<p class="muted">{capital(listed(anthropicFor))} come from Claude. Without this key, runs leave them out.</p>{/if}
+    <ul class="set-rows"><KeyRow {api} k={anthropic} elsewhere={anthropic.elsewhere} label="Anthropic key" onchange={onkeys} {onbusy} /></ul>
+  </section>
+{/if}
 <section class="set-part" aria-labelledby="models-heading">
   <div class="set-head"><h2 id="models-heading">The steps' models</h2></div>
   <p class="muted">What each step runs, and what it needs from you. The choices here are the defaults; Extract can change them for one run.</p>
@@ -99,7 +117,7 @@
       {#each groups as { step: s, parts } (s.node)}
         {@const ms = featureModels(parts)}
         <li class="step" aria-label={s.title}>
-          <span class="title">{s.title}</span>
+          <span class="title">{s.title}{#if givesOf(s.node)}<span class="gives">{capital(givesOf(s.node)!)}</span>{/if}</span>
           <div class="body">
             {#each ms as m (m.id)}
               {@const n = note(m)}
@@ -122,7 +140,11 @@
                 {/each}
               </div>
             {/if}
-            {#each [...new Set(parts.flatMap((p) => p.secrets))].filter((n) => !(hfShown && n === 'HF_TOKEN')) as name (name)}
+            {#if anthropic && parts.some((p) => p.secrets.includes(ANTHROPIC))}
+              {@const ready = anthropic.stored || !!anthropic.elsewhere}
+              <button class="link uses" class:missing={!ready} onclick={toAnthropic}>{ready ? 'Uses the Anthropic key' : 'Needs the Anthropic key'}</button>
+            {/if}
+            {#each [...new Set(parts.flatMap((p) => p.secrets))].filter((n) => !(hfShown && n === 'HF_TOKEN') && !(anthropic && n === ANTHROPIC)) as name (name)}
               {@const k = key(name)}
               {#if k}<ul class="set-rows keys"><KeyRow {api} {k} elsewhere={k.elsewhere} label={`${k.label} key`} onchange={onkeys} {onbusy} /></ul>{/if}
             {/each}
@@ -148,6 +170,9 @@
 <style>
   .step { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 4px 16px; align-items: baseline; }
   .title { color: var(--color-text-secondary); }
+  .gives { display: block; font-size: 12px; color: var(--color-text-muted); }
+  .uses { font-size: 12px; justify-self: start; text-align: left; color: var(--color-text-muted); }
+  .uses.missing { color: var(--color-caution); }
   .body { display: grid; gap: 6px; min-width: 0; }
   .model { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; min-width: 0; }
   .name { overflow-wrap: anywhere; text-align: left; }

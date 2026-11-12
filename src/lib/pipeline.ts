@@ -87,6 +87,25 @@ export function stepGroups(steps: StepInfo[]): { step: StepInfo; parts: StepInfo
   const head = (s: StepInfo) => (s.part_of && s.part_of !== id(s) && steps.find((x) => id(x) === s.part_of)) || s;
   return steps.filter((s) => head(s) === s).map((s) => ({ step: s, parts: [s, ...steps.filter((x) => x !== s && head(x) === s)] }));
 }
+/** What a step gives you, as people ask for it, where its name does not say: on-screen text comes from the shot
+ *  captions (Claude reads it off the frames; the pipeline has no OCR step of its own), so without the Anthropic key there
+ *  is none (testers, 2026-11, could not tell). By step id, any version. */
+const GIVES: Record<string, string[]> = {
+  'vlm.shot-captions': ['scene descriptions', 'on-screen text'],
+  'vlm.shot-captions-objects': ['scene descriptions', 'on-screen text'],
+};
+/** "a", "a and b", "a, b and c" */
+export const listed = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+export const givesOf = (ref: string): string | null => { const g = GIVES[ref.replace(/@.*/, '')]; return g ? listed(g) : null; };
+/** The things the features that need `key` give, each once, in their order: what they give where known, else their
+ *  name. A feature needs it when any of its parts does (as Settings lists the steps: stepGroups), whether or not the
+ *  feature's own step does: Objects needs the key for its names. */
+export function neededFor(steps: StepInfo[], key: string): string[] {
+  const out = stepGroups(steps).filter((g) => g.parts.some((s) => s.secrets.includes(key)))
+    .flatMap(({ step: s }) => GIVES[s.node.replace(/@.*/, '')] ?? [s.title.toLowerCase()]);
+  return [...new Set(out)];
+}
+
 /** The models and steps of the steps a graph runs (STEPS, by ref): the pipeline lists every step it has registered,
  *  some only in other graphs (a step the full graph has replaced keeps its title). All of them when STEPS is not known. */
 export function ofGraph(listing: ModelsListing, steps: string[] | null): ModelsListing {

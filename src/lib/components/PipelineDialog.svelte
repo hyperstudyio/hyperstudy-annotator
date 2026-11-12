@@ -18,7 +18,7 @@
   import { defaultsFor, loadDefaults, withDefaults } from '../stepDefaults';
   import type { SettingsSection } from './Settings.svelte';
   import { upToCent, blockers, canPick, choiceLabel, consentFor, dest, keepChoices, mustTurnOnFirst, placeTick, machineCost, unagreed, defaultFeatures, duration, FULL_GRAPH, foldRun, picked, placeLabel, placeName, placesFor,
-    featureOf, featureRows, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, tooOld, machineTitle, POD, type CliKeys, type RemotePlan, type RemoteRun, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
+    featureOf, featureRows, givesOf, featureState, neededFeature, oncePerModel, stepsOf, tickFeature, untickFeature, withMoves, settingsFor, spendingCap, totalEstimate, tooOld, machineTitle, POD, type CliKeys, type RemotePlan, type RemoteRun, type KeyStatus, type CloudStatus, type Host, type Places, type Doctor, type GraphPreset, type PipelineApi, type PipelineMessage, type Plan, type PlanNode, type SetupStatus, type SetupStep, type Settings, type Ticked } from '../pipeline';
 
   let { api, visible = true, configBusy = null, onsettings, onnew, onopen, onstatus }: {
     api: PipelineApi;
@@ -604,6 +604,8 @@
               {:else if on && !done && steps.some((p) => 'estimate_s' in p)}<span class="muted">No estimate</span>{/if}
             </span>
             <div class="notes">
+              <!-- what a step gives that its name does not say (on-screen text comes with the captions) -->
+              {#if !started && givesOf(n.uses)}{@const g = givesOf(n.uses)!}<span class="muted">{g.charAt(0).toUpperCase() + g.slice(1)}</span>{/if}
               {#if started}{#if s.message}<span class="muted">{s.message}</span>{/if}
               {:else if on}
                 {#if needed}<span class="muted" id={`needed-${n.id}`}>Needed by {list(titlesOf(needed))}</span>{/if}
@@ -613,6 +615,10 @@
                 {#each [...new Set(steps.flatMap((p) => p.missing_secrets))] as k (k)}<span class="error">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
               {:else if before.length}
                 <span class="muted" id={`before-${n.id}`}>Turn on {list(before)} first: {before.length === 1 ? 'it sends' : 'they send'} data off this machine</span>
+              {:else}
+                <!-- off, and could not run if turned on: say so now, not only after it is ticked (testers, 2026-11, ran
+                     without captions and did not know on-screen text came with them) -->
+                {#each [...new Set(steps.flatMap((p) => p.missing_secrets))] as k (k)}<span class="muted">Needs the {keyLabel(k)} key: <button class="link" onclick={() => onsettings?.(k === 'RUNPOD_API_KEY' ? 'compute' : 'models')}>add it in Settings</button></span>{/each}
               {/if}
             </div>
             {#if open === n.id}

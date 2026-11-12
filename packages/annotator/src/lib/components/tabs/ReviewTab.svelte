@@ -23,6 +23,7 @@
 
 {#if cur}
   <div class="current"><InspectUtterance u={cur} /></div>
+  <label class="row"><input type="checkbox" bind:checked={s.autoAdvance} /> After choosing, go to the next uncertain utterance</label>
 {:else}
   <div class="callout info">Pick an utterance below, or press <kbd>j</kbd> to start. Its faces are numbered on the video.</div>
 {/if}
