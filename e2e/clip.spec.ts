@@ -50,3 +50,12 @@ test('after a ⇧-click on empty space changes the clip, Enter on a segment stil
   await page.keyboard.press('Enter');
   await expect(page.locator('.bar.selected[data-key="sound:1"]')).toBeVisible();
 });
+
+for (const [platform, move] of [['MacIntel', '⌘drag'], ['Linux x86_64', 'Ctrl+drag']] as const) {
+  test(`on ${platform}, the key reminders name the key to hold: ${move}`, async ({ page }) => {
+    await page.addInitScript((p) => Object.defineProperty(Navigator.prototype, 'platform', { get: () => p }), platform);
+    await openSynthetic(page);
+    await page.keyboard.press('?');
+    await expect(page.locator('kbd', { hasText: move })).toBeVisible();
+  });
+}

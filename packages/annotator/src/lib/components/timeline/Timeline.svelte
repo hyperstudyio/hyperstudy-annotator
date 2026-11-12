@@ -25,6 +25,7 @@
   import NoteMenu from './NoteMenu.svelte';
   import RowLabel from './RowLabel.svelte';
   import PlotCanvas from './PlotCanvas.svelte';
+  import { CMD, cmdKey } from '../../platformKeys';
 
   let { onresizeheight, onresetheight }: { onresizeheight: (dy: number, start: number) => void; onresetheight: () => void } = $props();
   const s = useSession();
@@ -65,10 +66,8 @@
   let resizingTimeline = $state(false);
   // ⌘ or ⇧ held, for the cursor to say what a press on the timeline would do to the clip
   let held = $state<'move' | 'extend' | null>(null);
-  // the key that moves the clip: ⌘ on a Mac, Ctrl elsewhere (Linux's Super key is the window manager's; a Mac's
-  // Ctrl-click is a right-click), as ⌘←/→ is Ctrl+←/→ there
-  const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
-  const moveKey = (e: KeyboardEvent | PointerEvent) => (MAC ? e.metaKey : e.ctrlKey || e.metaKey);
+  // the key that moves the clip: ⌘ on a Mac, Ctrl elsewhere, as ⌘←/→ is Ctrl+←/→ there (platformKeys.ts)
+  const moveKey = cmdKey;
   const heldKeys = (e: KeyboardEvent) => { held = moveKey(e) ? 'move' : e.shiftKey ? 'extend' : null; };
 
   const timeOf = (e: PointerEvent) => timeAtX(e.clientX, content!.getBoundingClientRect().left, pps, duration);
@@ -443,7 +442,7 @@
           {#if range && !(gesture?.kind === 'range')}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="clip-band" style="left:{range.start * pps}px; width:{Math.max(4, (range.end - range.start) * pps)}px" onpointerdown={clipDown}
-              title="The clip: Space plays it · drag it, or ⌘-drag anywhere, to move it · drag an end, ⇧-click or ⇧-drag anywhere, or ⌘←/→, to change its length · Esc lets it go">
+              title={`The clip: Space plays it · drag it, or ${CMD}drag anywhere, to move it · drag an end, ⇧-click or ⇧-drag anywhere, or ${CMD}←/→, to change its length · Esc lets it go`}>
               <span class="end-grip start" aria-hidden="true"></span><span class="end-grip end" aria-hidden="true"></span>
             </div>
           {/if}
