@@ -34,3 +34,19 @@ for (const [platform, key] of [['MacIntel', 'Meta'], ['Linux x86_64', 'Control']
     await expect(page.locator('.bar.selected[data-key="utt:0"]').first()).toBeVisible();   // still the utterance
   });
 }
+
+test('after a ⇧-click on empty space changes the clip, Enter on a segment still selects it', async ({ page }) => {
+  await openSynthetic(page, { speech: true });
+  await page.locator('.lane-body .bar[data-key="utt:0"]').first().click();
+  const lane = page.locator('.lane-body', { has: page.locator('.bar[data-key="sound:0"]') });
+  await lane.scrollIntoViewIfNeeded();
+  const box = (await lane.boundingBox())!;
+  const pps = await page.locator('.tl-content').evaluate((el) => el.getBoundingClientRect().width / 20);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(box.x + pps * 9, box.y + box.height / 2);   // 9 s: between the sounds, past the clip's end
+  await page.keyboard.up('Shift');
+  expect((await clip(page)).end).toBeGreaterThan(7.5);
+  await page.locator('.lane-body .bar[data-key="sound:1"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.bar.selected[data-key="sound:1"]')).toBeVisible();
+});

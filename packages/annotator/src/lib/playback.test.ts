@@ -100,6 +100,20 @@ describe('clip ends from the keys', () => {
     expect(pb.clip).toEqual({ start: 20, end: 21 });
   });
 
+  test('with no clip, shrinking makes none, nor does growing where there is no room', () => {
+    const { pb } = attached();
+    pb.seek(20);
+    pb.moveEdge('start', 0.1);   // ⌥⌘→
+    pb.moveEdge('end', -0.1);    // ⌥⌘←
+    expect(pb.clip).toBeNull();
+    pb.seek(0);
+    pb.moveEdge('start', -0.1);  // ⌘← at 0:00
+    expect(pb.clip).toBeNull();
+    pb.moveEdge('start', -0.1);
+    pb.moveEdge('end', 0.1);     // ⌘→ there does
+    expect(pb.clip).toEqual({ start: 0, end: 0.1 });
+  });
+
   test('a clip changed while it plays keeps playing where it was', () => {
     const { pb, v } = attached();
     pb.playClip({ start: 10, end: 14 });

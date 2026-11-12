@@ -116,6 +116,9 @@
       times: clipTimes(), moved: false, px: e.clientX, py: e.clientY, keyed: false };
   }
   // A click on a segment that a ⇧ or ⌘ gesture took is not also a selection (a segment's click comes after pointerup).
+  // Only a pointer's click is the gesture's: one from the keyboard (Enter or Space on a focused segment, detail 0) is
+  // always a selection, even when a gesture left this set (a ⇧-click on empty space, or a drag let go off the segment,
+  // makes no click on a segment to clear it). The next press sets it again either way.
   let tookClick = false;
   /** With a clip, anywhere on the timeline, before the row or the segment under the pointer gets it:
    *  ⇧-click or ⇧-drag: the nearer end goes to the pointer (on a segment: the clip grows to take it in), as an editor's
@@ -262,8 +265,10 @@
     }
   }
 
-  function barClick(bar: Bar) {
-    if (tookClick) { tookClick = false; return; }   // ⇧ or ⌘ on a segment changed the clip instead
+  function barClick(bar: Bar, e: MouseEvent) {
+    const took = tookClick;
+    tookClick = false;
+    if (took && e.detail > 0) return;   // ⇧ or ⌘ on a segment changed the clip instead
     if (!bar.sel || bar.drag || bar.retime) return;   // speech and annotations are handled on pointerup (a click, or a drag)
     if (bar.clip) { s.select(bar.sel.kind, bar.sel.id, { seek: false }); pb.setClip(bar.clip); return; }   // a word: just it
     s.select(bar.sel.kind, bar.sel.id);
@@ -401,7 +406,7 @@
       <!-- no focus on click: a focused button would also take the Space meant for play/pause -->
       <button class="bar {bar.flags.join(' ')}" class:draggable={!!bar.drag} class:retimable={!!bar.retime} class:word={!!bar.word} style={barStyle(bar)} data-key={bar.key} data-start={spanOf(bar).start} data-end={spanOf(bar).end}
         title={bar.retime ? `${bar.title} · double-click to set its value · drag to move, drag an end to change its length` : bar.title} tabindex="-1" onmousedown={(e) => e.preventDefault()}
-        onpointerdown={bar.drag ? (e) => speechDown(e, bar) : bar.retime ? (e) => retimeDown(e, bar) : undefined} onclick={() => barClick(bar)}
+        onpointerdown={bar.drag ? (e) => speechDown(e, bar) : bar.retime ? (e) => retimeDown(e, bar) : undefined} onclick={(e) => barClick(bar, e)}
         ondblclick={bar.retime ? () => (s.noteMenu = bar.retime!) : bar.word ? () => openWord(bar.word!.utt, bar.word!.index) : undefined}
         >{#if bar.retime}<span class="end-grip start" aria-hidden="true"></span>{/if}{bar.text ?? ''}{#if bar.retime}<span class="end-grip end" aria-hidden="true"></span>{/if}</button>
     {/if}

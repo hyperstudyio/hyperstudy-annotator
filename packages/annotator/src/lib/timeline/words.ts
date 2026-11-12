@@ -61,9 +61,17 @@ export function alignWords(heard: TimedWord[], text: string): TimedWord[] {
   return out;
 }
 
-/** The utterance's text with word `index` replaced by `text` (several words: it is split; empty: it is deleted). */
-export function replaceWord(words: string[], index: number, text: string): string {
-  const next = [...words];
-  next.splice(index, 1, ...tokens(text));
-  return next.join(' ');
+/** `text` with its word `index` (as `tokens` counts them) replaced by `word`: several words split it, none deletes it
+ *  (with the space after it, or before it at the end). The rest of the text is left byte for byte as it was, its
+ *  spacing too (a transcriber's leading space, a line break typed in Inspect), so a word left as it is changes nothing. */
+export function replaceWord(text: string, index: number, word: string): string {
+  const m = [...text.matchAll(/\S+/g)][index];
+  if (!m) return text;
+  const at = m.index, end = at + m[0].length, put = tokens(word).join(' ');
+  if (put === m[0]) return text;
+  if (put) return text.slice(0, at) + put + text.slice(end);
+  const after = /^\s*/.exec(text.slice(end))![0].length;
+  if (end + after < text.length) return text.slice(0, at) + text.slice(end + after);
+  const before = /\s*$/.exec(text.slice(0, at))![0].length;
+  return text.slice(0, at - before) + text.slice(end);
 }

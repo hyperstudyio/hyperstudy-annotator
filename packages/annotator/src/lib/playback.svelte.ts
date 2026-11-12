@@ -5,7 +5,7 @@
 //   the whole video from the playhead: Play with no clip (Esc, or a click elsewhere on the timeline, lets it go).
 // Keys that step to a segment (arrows, j k) and a panel's "play" still play it straight away: they ask to.
 import type { Span } from './types';
-import { retime } from './timeline/retime';
+import { MIN_LEN_S, retime } from './timeline/retime';
 
 const SOUND_KEY = 'hyperstudy-annotator:sound';
 
@@ -89,10 +89,14 @@ export class Playback {
     else if (this.time < span.start || this.time >= span.end) this.#jump(span.start);
   }
 
-  /** Move one end of the clip by dt seconds (⌘←/→): never past the other end. With no clip, one starts at the playhead. */
+  /** Move one end of the clip by dt seconds (⌘←/→): never past the other end. With no clip, one grows from the
+   *  playhead: outwards only (there is nothing to shrink), and not at all where there is no room (⌘← at 0:00). */
   moveEdge(edge: 'start' | 'end', dt: number) {
+    if (!this.clip && (edge === 'end') !== (dt > 0)) return;
     const from = this.clip ?? { start: this.time, end: this.time };
-    this.reshapeClip(retime(edge, from, dt, this.duration || from.end + Math.max(0, dt)), edge);
+    const span = retime(edge, from, dt, this.duration || from.end + Math.max(0, dt));
+    if (!this.clip && span.end - span.start < MIN_LEN_S - 1e-9) return;
+    this.reshapeClip(span, edge);
   }
 
   /** Select a clip and play it now (a key that steps to a segment, a panel's "play"). */

@@ -473,6 +473,18 @@ describe('words on the timeline', () => {
     expect(s.ops.at(-1)).toMatchObject({ op: 'utterance.text', text: 'Hello there, friends.' });
   });
 
+  test('a word opened and left as it was adds nothing to the log, whatever the spacing of the text', async () => {
+    const b = timed();
+    const t = b.layers.transcript!;
+    const { s } = session(makeBundle({ transcript: { ...t, utterances: t.utterances.map((u) => (u.id === 'utt:0' ? { ...u, text: ' hello there  friend.' } : u)) } }));
+    const u = s.bundle.utt.get('utt:0')!;
+    const n = s.ops.length;
+    for (const [i, w] of ['hello', 'there', 'friend.'].entries()) expect(await s.editWord(u, i, w)).toBe(false);
+    expect(s.ops.length).toBe(n);
+    await s.editWord(u, 1, 'their');
+    expect(s.ops.at(-1)).toMatchObject({ op: 'utterance.text', text: ' hello their  friend.' });
+  });
+
   test('an utterance without word times has none to show', () => {
     const { s } = session();
     expect(s.wordsOf(s.bundle.utterances[0])).toEqual([]);

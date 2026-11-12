@@ -293,7 +293,7 @@ export class Session {
   /** Correct one word of an utterance (on the timeline): its whole text is the edit, as Inspect's is. Several words
    *  split it, none deletes it. False when nothing changed. */
   async editWord(u: Utterance, index: number, text: string): Promise<boolean> {
-    const next = replaceWord(this.wordsOf(u).map((x) => x.w), index, text);
+    const next = replaceWord(this.uttText(u), index, text);
     if (next === this.uttText(u)) return false;
     await this.commit({ op: 'utterance.text', utt: u.id, text: next });
     return true;

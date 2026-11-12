@@ -61,9 +61,21 @@ describe('words where they are spoken', () => {
   });
 
   test('editing one word of an utterance', () => {
-    const ws = ['As', 'far', 'as', 'recent', 'trends,'];
-    expect(replaceWord(ws, 3, 'current')).toBe('As far as current trends,');
-    expect(replaceWord(ws, 3, 'very  recent')).toBe('As far as very recent trends,');
-    expect(replaceWord(ws, 0, '')).toBe('far as recent trends,');
+    const t = 'As far as recent trends,';
+    expect(replaceWord(t, 3, 'current')).toBe('As far as current trends,');
+    expect(replaceWord(t, 3, 'very  recent')).toBe('As far as very recent trends,');
+    expect(replaceWord(t, 0, '')).toBe('far as recent trends,');
+    expect(replaceWord(t, 4, '')).toBe('As far as recent');
+    expect(replaceWord(t, 2, '')).toBe('As far recent trends,');
+    expect(replaceWord('one', 0, '')).toBe('');
+  });
+
+  test('the rest of the text is left as it was, spacing and all; a word left as it is changes nothing', () => {
+    const t = ' Hello  there,\nfriend.';   // a transcriber's leading space, a double space, a line break
+    expect(replaceWord(t, 1, 'there,')).toBe(t);
+    expect(replaceWord(t, 1, ' there, ')).toBe(t);
+    expect(replaceWord(t, 2, 'friends.')).toBe(' Hello  there,\nfriends.');
+    expect(replaceWord(t, 0, 'Hi')).toBe(' Hi  there,\nfriend.');
+    expect(replaceWord(t, 9, 'x')).toBe(t);   // no such word
   });
 });
