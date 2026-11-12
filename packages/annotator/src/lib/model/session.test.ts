@@ -142,6 +142,20 @@ describe('segments', () => {
     s.step(-1);
     expect(s.selection).toEqual({ kind: 'utt', id: 'utt:1' });
   });
+
+  test('something selected outside the timeline is the clip, not the one before; a person is no clip, and clears it', () => {
+    const { s } = session();
+    s.select('utt', 'utt:0');
+    s.selectClip();   // a click on its segment
+    expect(s.playback.clip).toEqual({ start: 0.5, end: 2 });
+    s.select('face', 'face:2');   // a face in a person's appearances, in Inspect
+    expect(s.playback.clip).toEqual({ start: 10, end: 14 });
+    expect(s.playback.time).toBe(10);
+    s.select('person', 'person:Person A');
+    expect(s.playback.clip).toBeNull();
+    s.select('utt', 'utt:3', { seek: false });   // the playhead and the clip stay as they were
+    expect(s.playback.clip).toBeNull();
+  });
 });
 
 // A real corrections file from the annotator prototype, against the bundle converted from the same run: set

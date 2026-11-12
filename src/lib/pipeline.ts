@@ -97,11 +97,12 @@ const GIVES: Record<string, string[]> = {
 /** "a", "a and b", "a, b and c" */
 export const listed = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
 export const givesOf = (ref: string): string | null => { const g = GIVES[ref.replace(/@.*/, '')]; return g ? listed(g) : null; };
-/** The things the steps that need `key` give, each once, in their order: what they give where known, else their name
- *  (a step part of another feature is that feature's). */
+/** The things the features that need `key` give, each once, in their order: what they give where known, else their
+ *  name. A feature needs it when any of its parts does (as Settings lists the steps: stepGroups), whether or not the
+ *  feature's own step does: Objects needs the key for its names. */
 export function neededFor(steps: StepInfo[], key: string): string[] {
-  const out = steps.filter((s) => s.secrets.includes(key) && (!s.part_of || !steps.some((x) => x.node.replace(/@.*/, '') === s.part_of)))
-    .flatMap((s) => GIVES[s.node.replace(/@.*/, '')] ?? [s.title.toLowerCase()]);
+  const out = stepGroups(steps).filter((g) => g.parts.some((s) => s.secrets.includes(key)))
+    .flatMap(({ step: s }) => GIVES[s.node.replace(/@.*/, '')] ?? [s.title.toLowerCase()]);
   return [...new Set(out)];
 }
 

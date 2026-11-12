@@ -404,7 +404,14 @@ export class Session {
     this.selection = { kind, id };
     // Review keeps its place while you work down its list, and People opens a person where you are
     if (!(this.tab === 'review' && (kind === 'utt' || kind === 'sound')) && !(this.tab === 'people' && kind === 'person')) this.tab = 'inspect';
-    if (seek) { const span = this.spanOf(this.selection); if (span) this.playback.seek(span.start, { keepClip: true }); }
+    // wherever it is selected from (the timeline, Inspect, Review, the lightbox), as a click on its segment: it is the
+    // clip, waiting at its start for Play. An identity (a person, an object) is not a clip: the playhead goes to it and
+    // the clip before goes, so Space does not play what was selected before.
+    if (seek) {
+      const clip = this.clipOf(this.selection), span = clip ?? this.spanOf(this.selection);
+      if (clip) this.playback.setClip(clip);
+      else if (span) this.playback.seek(span.start);
+    }
   }
 
   /** Play the selection as a clip. */

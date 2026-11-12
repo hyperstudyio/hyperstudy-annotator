@@ -103,7 +103,7 @@
 {#if anthropic}
   <section class="set-part" id="anthropic-key" aria-labelledby="anthropic-heading">
     <div class="set-head"><h2 id="anthropic-heading" tabindex="-1">Anthropic</h2></div>
-    <p class="muted">{capital(listed(anthropicFor))} come from Claude. Without this key, runs leave them out.</p>
+    {#if anthropicFor.length}<p class="muted">{capital(listed(anthropicFor))} come from Claude. Without this key, runs leave them out.</p>{/if}
     <ul class="set-rows"><KeyRow {api} k={anthropic} elsewhere={anthropic.elsewhere} label="Anthropic key" onchange={onkeys} {onbusy} /></ul>
   </section>
 {/if}

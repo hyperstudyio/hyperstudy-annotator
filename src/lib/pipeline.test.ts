@@ -486,4 +486,10 @@ describe('what a key is needed for', () => {
     expect(givesOf('vlm.shot-captions@1.0.0')).toBe('scene descriptions and on-screen text');
     expect(givesOf('vision.face-track@1.4.0')).toBeNull();
   });
+  test('a feature that needs the key only in one of its parts is still named, as itself', () => {
+    const parts = [step('vision.objects@2.0.0', 'Objects', []), step('vision.objects-names@1.0.0', 'Object names', ['ANTHROPIC_API_KEY'], 'vision.objects')];
+    expect(neededFor(parts, 'ANTHROPIC_API_KEY')).toEqual(['objects']);
+    expect(neededFor([step('vision.objects-names@1.0.0', 'Object names', ['ANTHROPIC_API_KEY'], 'vision.objects')], 'ANTHROPIC_API_KEY')).toEqual(['object names']);   // its feature not listed
+    expect(neededFor(steps, 'OPENAI_API_KEY')).toEqual([]);
+  });
 });
