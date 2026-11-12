@@ -220,11 +220,11 @@ export class Session {
   colourOf(p: string | null): string {
     if (!p || p === UNKNOWN) return NEUTRAL;
     if (p === NOT_PERSON) return '#5a5a5a';
-    const chosen = this.view.s.colours?.[p];
-    if (chosen) return chosen;
+    // the palette slot first, chosen colour or not: the palette goes round in the order people are first coloured,
+    // so a person who skipped theirs would shift everyone after them, on the next load
     let c = this.#colour.get(p);
     if (!c) { c = PALETTE[this.#colour.size % PALETTE.length]; this.#colour.set(p, c); }
-    return c;
+    return this.view.s.colours?.[p] ?? c;
   }
   readonly tracksOf = $derived.by(() => {
     const m = new Map<string, FaceTrack[]>();
@@ -507,7 +507,9 @@ export class Session {
 
   async setSpeaker(u: Utterance, speaker: Speaker | null) {
     await this.commit({ op: 'utterance.speaker', utt: u.id, speaker });
-    if (speaker && this.autoAdvance && this.uncertain(u)) this.nextInQueue(1);
+    // on to the next uncertain one only while working down Review's list, where the setting is: in Inspect, the
+    // utterance just corrected stays in view
+    if (speaker && this.autoAdvance && this.tab === 'review' && this.uncertain(u)) this.nextInQueue(1);
   }
 
   // --- annotations ------------------------------------------------------------------------------------------------

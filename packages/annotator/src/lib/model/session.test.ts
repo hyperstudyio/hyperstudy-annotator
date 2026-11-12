@@ -66,16 +66,27 @@ describe('speakers and the review queue', () => {
     expect(s.queue.pairs).toEqual([]);
   });
 
-  test('choosing a speaker marks it reviewed and moves to the next open utterance', async () => {
+  test('choosing a speaker in Review marks it reviewed and moves to the next open utterance', async () => {
     const { s } = session();
     const u1 = s.bundle.utt.get('utt:1')!;
     expect(s.openInQueue).toBe(3);   // two speakers and one pair
+    s.tab = 'review';
     s.select('utt', 'utt:1');
     await s.setSpeaker(u1, { kind: 'face', face: 'face:0' });
     expect(s.reviewed(u1)).toBe(true);
     expect(s.speakerPerson(s.speakerOf(u1))).toBe('person:Person A');
     expect(s.selection).toEqual({ kind: 'utt', id: 'utt:3' });
     expect(s.openInQueue).toBe(2);
+  });
+
+  test('in Inspect, where the auto-advance setting is not, the utterance just corrected stays selected', async () => {
+    const { s } = session();
+    const u1 = s.bundle.utt.get('utt:1')!;
+    s.select('utt', 'utt:1');
+    expect(s.tab).toBe('inspect');
+    await s.setSpeaker(u1, { kind: 'face', face: 'face:0' });
+    expect(s.reviewed(u1)).toBe(true);
+    expect(s.selection).toEqual({ kind: 'utt', id: 'utt:1' });
   });
 
   test('speech dropped on a person is their face when on screen in that shot, else them off camera', () => {
@@ -451,6 +462,18 @@ describe('colours', () => {
     expect(s.colourOf('person:Person A')).toBe(own);
     s.view.setColour('object:cup', '#abcdef');
     expect(s.objColour('object:cup')).toBe('#abcdef');
+  });
+
+  test('a colour chosen for one person leaves everyone else\'s as it was, after a reload too', async () => {
+    // the bundle's people have their palette places from the start; people made here get theirs as they are coloured
+    const storage = new MemoryStorage();
+    const made = ['person:new-1', 'person:new-2', 'person:new-3'];
+    const first = session(makeBundle(), storage).s;
+    for (const p of made) await first.commit({ op: 'person.create', person: p, name: p.slice(7) });
+    const before = made.map((p) => first.colourOf(p));
+    first.view.setColour(made[0], '#123456');
+    const again = session(makeBundle(), storage).s;   // a new session on the same log and view: the next load
+    expect(made.map((p) => again.colourOf(p))).toEqual(['#123456', before[1], before[2]]);
   });
 });
 
