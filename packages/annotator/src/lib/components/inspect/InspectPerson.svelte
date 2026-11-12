@@ -5,6 +5,7 @@
   import { coVisible, plural } from '../../model/session.svelte';
   import Crop from '../ui/Crop.svelte';
   import Swatch from '../ui/Swatch.svelte';
+  import ColourPick from '../ui/ColourPick.svelte';
   import Name from '../ui/Name.svelte';
   import PersonSelect from '../ui/PersonSelect.svelte';
 
@@ -35,9 +36,9 @@
   {#if crop}<Crop path={crop} size="lg" label="Show every track of this person" onclick={() => (s.lightbox = { kind: 'person', person: p })} />
   {:else}<Swatch colour={s.colourOf(p)} size={28} />{/if}
   <div style="min-width:0; flex:1">
-    <h2><Name text={s.nameOf(p)} id={p} area="panel" onrename={s.special(p) ? undefined : rename} /></h2>
+    <h2 class="named">{#if !s.special(p)}<ColourPick id={p} colour={s.colourOf(p)} size={14} label={`${s.nameOf(p)}'s colour`} />{/if}<Name text={s.nameOf(p)} id={p} area="panel" onrename={s.special(p) ? undefined : rename} /></h2>
     <div class="meta">
-      {plural(tracks.length, 'track')} · {secs.toFixed(1)} s on screen{#if s.S.names[p] && s.isMachinePerson(p)} · machine label {p.slice(7)}{/if}
+      {secs.toFixed(1)} s on screen{#if s.S.names[p] && s.isMachinePerson(p)} · machine label {p.slice(7)}{/if}
       {#if !s.special(p)} · <button class="link" onclick={() => (s.renaming = `${p}@panel`)}>rename</button>{/if}
     </div>
   </div>
@@ -57,8 +58,10 @@
       <button class="link" onclick={async () => { await s.commit({ op: 'person.merge', from: q, into: p }); s.toast(`Merged ${s.machineLabel(q)} into ${s.nameOf(p)}`); }}>merge them</button>
     </div>
   {/each}
-  <h3>Same person as</h3>
-  <div class="row"><PersonSelect current={null} onpick={merge} allowSpecial={false} allowNew={false} placeholder="Choose a person…" label="Same person as" /></div>
+  <div class="row actions">
+    <PersonSelect current={null} onpick={merge} allowSpecial={false} allowNew={false} placeholder="Same person as…" label="Same person as" />
+    <button class="plain" onclick={notPerson} title="A false detection, or a face in a picture or on a screen">Not a person</button>
+  </div>
   {#if suggestions.length}
     <div class="list">
       {#each suggestions as q (q.a + q.b)}
@@ -73,18 +76,23 @@
       {/each}
     </div>
   {/if}
-  <div class="row" style="margin-top:10px">
-    <button onclick={notPerson}>Not a person</button>
-    <span class="meta">false detection, or a face in a picture or on a screen</span>
-  </div>
 {/if}
-<h3>Appearances</h3>
-<div class="list">
+<h3>{plural(tracks.length, 'appearance')}</h3>
+<!-- each track as its face, in time order: a face that is someone else stands out among the rest -->
+<div class="strip">
   {#each tracks as t (t.id)}
-    <button class="item" class:done={!s.includedFace(t)} onclick={() => s.select('face', t.id)}>
-      {#if t.crop}<Crop path={t.crop} size="xs" />{/if}
-      <span class="grow">{fmt(t.start)}–{fmt(t.end)} · shot {(s.bundle.shotNumber(t.shot) ?? 0) + 1}</span>
-      <span class="meta">#{t.id.slice(5)}</span>
+    <button class="face" class:done={!s.includedFace(t)} onclick={() => s.select('face', t.id)} title={`${fmt(t.start)}–${fmt(t.end)} · shot ${(s.bundle.shotNumber(t.shot) ?? 0) + 1}`}>
+      {#if t.crop}<Crop path={t.crop} size="sm" />{:else}<span class="time">{fmt(t.start)}</span>{/if}
     </button>
   {/each}
 </div>
+
+<style>
+  .named { display: flex; align-items: center; gap: 8px; }
+  .actions { margin-top: 14px; }
+  .strip { display: flex; flex-wrap: wrap; gap: 6px; }
+  .face { padding: 0; border: 1px solid transparent; border-radius: 6px; background: none; line-height: 0; }
+  .face:hover { border-color: var(--color-text-muted); }
+  .face.done { opacity: .45; }
+  .time { display: inline-block; line-height: 1; padding: 8px; font-size: 11px; color: var(--color-text-muted); background: var(--color-bg-elevated); border-radius: 6px; }
+</style>

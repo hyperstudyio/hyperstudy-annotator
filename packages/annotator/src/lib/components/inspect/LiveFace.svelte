@@ -19,26 +19,31 @@
     return g ? `${s.lookName(g.target)} (Gaze-LLE)` : null;
   });
   const deg = (r: number) => `${Math.round(r * 57.3)}°`;
+  let allShown = $state(false);
+  const emotions = $derived(d && s.detail ? s.detail.emotion_names.map((n, i) => ({ n, v: d!.emo[i] })).sort((a, b) => b.v - a.v) : []);
 </script>
 
 {#if !s.bundle.layers.faces?.detail}
-  <div class="meta">This bundle has no py-feat detail for faces.</div>
+  <div class="meta">No py-feat detail in this bundle.</div>
 {:else if !s.detail}
-  <div class="meta">Loading py-feat detail…</div>
+  <div class="meta">Loading…</div>
 {:else if !d}
-  <div class="meta">Move the playhead inside this track ({fmt(track.start)}–{fmt(track.end)}) to see py-feat for that frame.</div>
+  <div class="meta">Move the playhead into this track to see its frame.</div>
 {:else}
-  <div class="meta">Sample at {fmt(d.t)}</div>
-  {#if look}<div class="row"><b>Looking at:</b> {look}</div>{/if}
-  <div class="meta">Gaze yaw {deg(d.gaze[0])}, pitch {deg(d.gaze[1])} · head yaw {deg(d.head[0])}, pitch {deg(d.head[1])}, roll {deg(d.head[2])} · valence {d.va[0].toFixed(2)}, arousal {d.va[1].toFixed(2)}</div>
-  <h3>Emotions</h3>
+  <h3>At {fmt(d.t)} <span class="src">py-feat, academic use</span></h3>
+  {#if look}<div class="row">Looking at {look}</div>{/if}
+  <!-- the strongest emotions; the rest, the action units and the angles when asked -->
   <div class="bars">
-    {#each s.detail.emotion_names as n, i (n)}<span>{n}</span><div class="fill emo" style="width:{Math.round(d.emo[i] * 100)}%"></div><span class="val">{d.emo[i].toFixed(2)}</span>{/each}
+    {#each (allShown ? emotions : emotions.slice(0, 3)) as e (e.n)}<span>{e.n}</span><div class="fill emo" style="width:{Math.round(e.v * 100)}%"></div><span class="val">{e.v.toFixed(2)}</span>{/each}
   </div>
-  <h3>Action units</h3>
-  <div class="bars">
-    {#each s.detail.au_names as n, i (n)}<span title={AU_NAMES[n] ?? ''}>{n}</span><div class="fill" title={AU_NAMES[n] ?? ''} style="width:{Math.round(Math.min(1, Math.max(0, d.au[i])) * 100)}%"></div><span class="val">{d.au[i].toFixed(2)}</span>{/each}
-  </div>
+  <button class="link more" onclick={() => (allShown = !allShown)}>{allShown ? 'Fewer' : 'All emotions, action units and angles'}</button>
+  {#if allShown}
+    <h3>Action units</h3>
+    <div class="bars">
+      {#each s.detail.au_names as n, i (n)}<span title={AU_NAMES[n] ?? ''}>{n}</span><div class="fill" title={AU_NAMES[n] ?? ''} style="width:{Math.round(Math.min(1, Math.max(0, d.au[i])) * 100)}%"></div><span class="val">{d.au[i].toFixed(2)}</span>{/each}
+    </div>
+    <div class="meta angles">Gaze yaw {deg(d.gaze[0])}, pitch {deg(d.gaze[1])} · head yaw {deg(d.head[0])}, pitch {deg(d.head[1])}, roll {deg(d.head[2])} · valence {d.va[0].toFixed(2)}, arousal {d.va[1].toFixed(2)}</div>
+  {/if}
 {/if}
 
 <style>
@@ -46,4 +51,7 @@
   .fill { height: 8px; border-radius: 4px; background: var(--color-info); min-width: 1px; }
   .fill.emo { background: #a78bfa; }
   .val { color: var(--color-text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .src { font-weight: 400; color: var(--color-text-muted); margin-left: 4px; }
+  .more { margin-top: 6px; font-size: 12px; }
+  .angles { margin-top: 8px; font-size: 12px; }
 </style>

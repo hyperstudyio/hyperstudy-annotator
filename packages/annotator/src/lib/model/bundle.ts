@@ -6,7 +6,7 @@ import type {
   GestureEvent, GesturesLayer,
   HandsLayer, HandTrack, Manifest, ObjectIdentity, ObjectTrack, ObjectsLayer, ProsodyLayer, ProsodyUtterance, Shot,
   ShotsLayer, SoundEvent, SoundsLayer, SpeakerPrediction, SpeakersLayer, Span, TextItem, TextLayer, TranscriptLayer,
-  Utterance, WaveformLayer,
+  TranscriptWord, Utterance, WaveformLayer,
 } from '../types';
 
 export interface Layers {
@@ -37,6 +37,8 @@ export class Bundle {
 
   readonly shots: Shot[];
   readonly utterances: Utterance[];
+  /** Every word the transcriber heard, timed (an utterance's `words` index them); none from a bundle without them. */
+  readonly words: TranscriptWord[];
   readonly faces: FaceTrack[];
   readonly objects: ObjectTrack[];
   readonly sounds: SoundEvent[];
@@ -78,6 +80,7 @@ export class Bundle {
 
     this.shots = [...(layers.shots?.shots ?? [])].sort((a, b) => a.start - b.start);
     this.utterances = [...(layers.transcript?.utterances ?? [])].sort((a, b) => a.start - b.start);
+    this.words = layers.transcript?.words ?? [];
     this.faces = layers.faces?.tracks ?? [];
     this.objects = layers.objects?.tracks ?? [];
     this.sounds = [...(layers.sounds?.events ?? [])].sort((a, b) => a.start - b.start);

@@ -11,6 +11,7 @@ import { View, type Tab } from './view.svelte';
 import { Playback } from '../playback.svelte';
 import type { CarryRecord, CorrectionStore, EarlierVersion, Lineage } from '../source';
 import { carryOver } from './carryover';
+import { alignWords, replaceWord, type TimedWord } from '../timeline/words';
 import type {
   FaceTrack, FacesDetail, FacingEvent, GazeEvent, GestureEvent, ObjectTrack, Shot, SoundEvent, Span, Speaker, TextItem, Utterance,
 } from '../types';
@@ -219,6 +220,8 @@ export class Session {
   colourOf(p: string | null): string {
     if (!p || p === UNKNOWN) return NEUTRAL;
     if (p === NOT_PERSON) return '#5a5a5a';
+    const chosen = this.view.s.colours?.[p];
+    if (chosen) return chosen;
     let c = this.#colour.get(p);
     if (!c) { c = PALETTE[this.#colour.size % PALETTE.length]; this.#colour.set(p, c); }
     return c;
@@ -278,6 +281,23 @@ export class Session {
     return p.predicted.kind !== 'face' || (p.margin ?? 0) < UNCERTAIN_GAP;
   }
   uttText(u: Utterance) { return this.S.uttText[u.id] ?? u.text; }
+  /** An utterance's words where they are spoken: as heard, or its corrected text placed on those times (words.ts).
+   *  None for a bundle without word times. */
+  wordsOf(u: Utterance): TimedWord[] {
+    const r = u.words, all = this.bundle.words;
+    if (!r || !all.length) return [];
+    const heard = all.slice(r[0], r[1] + 1).map((x) => ({ w: x.w, start: x.start, end: x.end }));
+    const text = this.S.uttText[u.id];
+    return text === undefined ? heard : alignWords(heard, text);
+  }
+  /** Correct one word of an utterance (on the timeline): its whole text is the edit, as Inspect's is. Several words
+   *  split it, none deletes it. False when nothing changed. */
+  async editWord(u: Utterance, index: number, text: string): Promise<boolean> {
+    const next = replaceWord(this.wordsOf(u).map((x) => x.w), index, text);
+    if (next === this.uttText(u)) return false;
+    await this.commit({ op: 'utterance.text', utt: u.id, text: next });
+    return true;
+  }
   /** The speaker a drop onto a person's row means: that person's face if it is on screen in the utterance's shot,
    *  else the person off camera. Unknown has no off-camera form (null). */
   speakerForPerson(u: Utterance, p: string): Speaker | null {
@@ -291,7 +311,7 @@ export class Session {
 
   identityOf(o: ObjectTrack) { return follow(this.S.objMergedInto, this.S.objTrackIdentity[o.id] ?? o.identity); }
   objName(i: string) { return this.S.objNames[i] ?? (i.startsWith('objid:user:') ? 'New object' : stripKind(i)); }
-  objColour(i: string) { let h = 0; for (const c of i) h = (h * 31 + c.charCodeAt(0)) >>> 0; return OBJ_PALETTE[h % OBJ_PALETTE.length]; }
+  objColour(i: string) { const chosen = this.view.s.colours?.[i]; if (chosen) return chosen; let h = 0; for (const c of i) h = (h * 31 + c.charCodeAt(0)) >>> 0; return OBJ_PALETTE[h % OBJ_PALETTE.length]; }
   readonly objectsOf = $derived.by(() => {
     const m = new Map<string, ObjectTrack[]>();
     for (const o of this.bundle.objects) { const i = this.identityOf(o); if (!m.has(i)) m.set(i, []); m.get(i)!.push(o); }
@@ -393,10 +413,10 @@ export class Session {
     if (!span) { this.toast('Select an utterance, shot, sound, track or event to play it as a clip'); return; }
     this.playback.playClip(span);
   }
-  /** A click on a timeline segment: play it (looping by default); a second click on the playing segment stops it. */
-  clickPlay() {
+  /** A click on a timeline segment: it becomes the clip, paused at its start, for Play (Space) to play. */
+  selectClip() {
     const span = this.clipOf(this.selection);
-    if (span) this.playback.toggleClip(span);
+    if (span) this.playback.setClip(span);
   }
 
   /** The segments of the selection's row: the next utterance, the same person's next track, the same object's next

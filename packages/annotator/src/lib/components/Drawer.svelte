@@ -63,6 +63,7 @@
         {#if kind === 'binary'}<kbd>y</kbd> yes <kbd>n</kbd> no{:else}<kbd>1</kbd>–<kbd>9</kbd> value{/if} <kbd>↵</kbd> menu <kbd>⌫</kbd> delete <kbd>a</kbd> annotate <kbd>space</kbd> play <kbd>←</kbd><kbd>→</kbd> segment
       {:else}
         <kbd>space</kbd> play <kbd>⇧space</kbd> clip <kbd>l</kbd> loop <kbd>←</kbd><kbd>→</kbd> segment <kbd>⇧←→</kbd> 1 s <kbd>,</kbd><kbd>.</kbd> shot
+        <kbd>⌘←→</kbd> grow clip <kbd>⌥⌘←→</kbd> shrink <kbd>⇧click</kbd> extend <kbd>⌘drag</kbd> move clip
         <kbd>a</kbd> annotate selection <kbd>[</kbd><kbd>]</kbd> mark a span <kbd>j</kbd> review <kbd>\</kbd> panel
       {/if}
       <kbd>⌘Z</kbd> undo <kbd>?</kbd> hide these

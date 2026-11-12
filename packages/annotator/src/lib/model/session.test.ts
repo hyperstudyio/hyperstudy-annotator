@@ -424,3 +424,45 @@ test('a delete pressed twice before the first is saved deletes once, so one undo
   await s.undo();
   expect(s.S.notes.has(id)).toBe(true);
 });
+
+describe('colours', () => {
+  test('a colour the viewer chose is the person\'s and the object\'s everywhere, kept with the layout, and can go back', () => {
+    const { s, storage } = session();
+    const own = s.colourOf('person:Person A');
+    s.view.setColour('person:Person A', '#123456');
+    expect(s.colourOf('person:Person A')).toBe('#123456');
+    expect(new View(SHA, storage).s.colours).toEqual({ 'person:Person A': '#123456' });   // saved, per video
+    expect(s.ops).toEqual([]);   // never a correction
+    s.view.setColour('person:Person A', null);
+    expect(s.colourOf('person:Person A')).toBe(own);
+    s.view.setColour('object:cup', '#abcdef');
+    expect(s.objColour('object:cup')).toBe('#abcdef');
+  });
+});
+
+describe('words on the timeline', () => {
+  // utterance 0 heard as three words, the bundle's word times
+  const timed = () => {
+    const b = makeBundle();
+    const t = b.layers.transcript!;
+    return makeBundle({ transcript: { ...t, words: [{ w: 'hello', start: 0.5, end: 1 }, { w: 'there', start: 1, end: 1.5 }, { w: 'friend.', start: 1.5, end: 2 }],
+      utterances: t.utterances.map((u) => (u.id === 'utt:0' ? { ...u, text: 'hello there friend.', words: [0, 2] as [number, number] } : u)) } });
+  };
+
+  test('a word corrected on the timeline is the utterance\'s text, and keeps its place; Inspect\'s edit lines up too', async () => {
+    const { s } = session(timed());
+    const u = s.bundle.utt.get('utt:0')!;
+    expect(s.wordsOf(u).map((w) => w.w)).toEqual(['hello', 'there', 'friend.']);
+    expect(await s.editWord(u, 1, 'their')).toBe(true);
+    expect(s.ops.at(-1)).toMatchObject({ op: 'utterance.text', utt: 'utt:0', text: 'hello their friend.' });
+    expect(s.wordsOf(u)[1]).toMatchObject({ w: 'their', start: 1, end: 1.5 });
+    expect(await s.editWord(u, 1, 'their')).toBe(false);   // nothing changed: no op
+    await s.commit({ op: 'utterance.text', utt: 'utt:0', text: 'hello my friend.' });   // as Inspect's textarea does
+    expect(s.wordsOf(u)[1]).toMatchObject({ w: 'my', start: 1, end: 1.5 });
+  });
+
+  test('an utterance without word times has none to show', () => {
+    const { s } = session();
+    expect(s.wordsOf(s.bundle.utterances[0])).toEqual([]);
+  });
+});

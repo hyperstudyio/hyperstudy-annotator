@@ -8,6 +8,7 @@
   import type { Row } from '../../timeline/rows';
   import Crop from '../ui/Crop.svelte';
   import Swatch from '../ui/Swatch.svelte';
+  import ColourPick from '../ui/ColourPick.svelte';
   import Name from '../ui/Name.svelte';
   import ModelInfo from './ModelInfo.svelte';
   import Popover from '../ui/Popover.svelte';
@@ -39,15 +40,17 @@
   {/if}
   {#if L.kind === 'person'}
     {@const crop = s.cropOf(L.person)}
-    {#if crop}<Crop path={crop} size="row" label="Every track of this person" onclick={(e) => { e.stopPropagation(); s.lightbox = { kind: 'person', person: L.person }; }} />
-    {:else}<Swatch colour={s.colourOf(L.person)} size={9} />{/if}
+    {#if crop}<Crop path={crop} size="row" label="Every track of this person" onclick={(e) => { e.stopPropagation(); s.lightbox = { kind: 'person', person: L.person }; }} />{/if}
+    {#if s.special(L.person)}<Swatch colour={s.colourOf(L.person)} size={9} />
+    {:else}<ColourPick id={L.person} colour={s.colourOf(L.person)} size={9} label={`${s.nameOf(L.person)}'s colour`} />{/if}
     <Name text={s.nameOf(L.person)} id={L.person} area="timeline" grow onrename={s.special(L.person) ? undefined : (name) => s.commit({ op: 'person.rename', person: L.person, name })} />
   {:else if L.kind === 'voice'}
     <Swatch colour={NEUTRAL} size={9} />
     <Name text={s.voiceName(L.voice)} id={L.voice ?? 'voice:'} area="timeline" grow onrename={L.voice ? (name) => s.commit({ op: 'voice.rename', voice: L.voice!, name }) : undefined} />
   {:else if L.kind === 'object'}
     {@const crop = s.objCrop(L.identity)}
-    {#if crop}<Crop path={crop} size="row" />{:else}<Swatch colour={s.objColour(L.identity)} size={9} />{/if}
+    {#if crop}<Crop path={crop} size="row" />{/if}
+    <ColourPick id={L.identity} colour={s.objColour(L.identity)} size={9} label={`${s.objName(L.identity)}'s colour`} />
     <Name text={s.objName(L.identity)} id={L.identity} area="timeline" grow onrename={(name) => s.commit({ op: 'object.rename', identity: L.identity, name })} />
   {:else if L.kind === 'type'}
     {@const type = s.typeOf(L.type)}

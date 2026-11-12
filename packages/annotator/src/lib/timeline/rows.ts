@@ -25,6 +25,10 @@ export interface Bar extends Span {
   drag?: { utt: string; ghost: string };
   /** An annotation (its id): drag its middle to move it, an end to change its length. */
   retime?: string;
+  /** A word of an utterance's transcript: a double-click edits it. */
+  word?: { utt: string; index: number };
+  /** What a click makes the clip, when it is not the selection's own span (a word: the word, not its utterance). */
+  clip?: Span;
 }
 
 export type Label =
@@ -106,6 +110,15 @@ export function buildGroups(s: Session): Group[] {
       title: `${fmt(u.start)} ${s.speakerName(sp)}: ${text}\nClick to select · drag onto a person's row to change the speaker`,
       sel: { kind: 'utt', id: u.id }, drag: { utt: u.id, ghost: text } };
   }) });
+  // each word where it is spoken (as corrected: words.ts), in its speaker's colour; a click makes it the clip, a
+  // double-click edits it. Only for a bundle with word times.
+  if (b.layers.transcript && b.words.length) audio.push({ id: 'words', label: { kind: 'text', text: 'Words', title: 'Each word where it is spoken · click to make it the clip · double-click to correct it (zoom in to read them)' },
+    bars: b.utterances.flatMap((u) => {
+      const col = s.speakerColour(s.speakerOf(u)), sel = s.isSel('utt', u.id);
+      return s.wordsOf(u).map((w, index): Bar => ({ key: `${u.id}#${index}`, start: w.start, end: w.end, text: w.w, colour: col ?? undefined,
+        flags: flags(sel && 'selected', !col && 'neutral'), title: `${w.w} · ${fmt(w.start)}–${fmt(w.end)}\nDouble-click to correct it`,
+        sel: { kind: 'utt', id: u.id }, clip: { start: w.start, end: w.end }, word: { utt: u.id, index } }));
+    }) });
   if (audio.length) groups.push({ key: 'audio', label: 'Audio & speech', count: '', rows: audio,
     summary: b.utterances.map((u) => ({ key: u.id, start: u.start, end: u.end, colour: s.speakerColour(s.speakerOf(u)) ?? NEUTRAL, flags: [] })) });
 

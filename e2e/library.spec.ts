@@ -141,7 +141,7 @@ test('People opens a person in place, and All people goes back to the list', asy
   await panel(page).getByRole('button', { name: 'People' }).click();
   await page.locator('.drawer-panel .item').first().click();
   await expect(panel(page).getByRole('button', { name: 'People' })).toHaveAttribute('aria-pressed', 'true');   // still People
-  await expect(page.getByRole('heading', { name: 'Appearances' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^\d+ appearances?$/ })).toBeVisible();
   await page.getByRole('button', { name: '← All people' }).click();
   await expect(page.getByText('Who face clustering found.', { exact: false })).toBeVisible();
 });

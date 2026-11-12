@@ -31,6 +31,10 @@ export interface ViewState {
   drawerClosed: boolean;
   drawerW: number | null;
   timelineH: number | null;
+  /** person or object id -> the colour the viewer chose for it (timeline, overlays, panels); else its own */
+  colours: Record<string, string>;
+  /** the kinds of thing (face, utt…) whose Details the viewer keeps open in Inspect */
+  detailsOpen: string[];
 }
 
 export const defaultView = (): ViewState => ({
@@ -39,7 +43,7 @@ export const defaultView = (): ViewState => ({
   styles: {},
   // Gaze-LLE is the default: on OOO it read more accurately by eye than PaGE and the py-feat ray (user review 2026-10-23)
   gazeSource: 'gaze_lle',
-  drawerClosed: false, drawerW: null, timelineH: null,
+  drawerClosed: false, drawerW: null, timelineH: null, colours: {}, detailsOpen: [],
 });
 
 export const MIN_ROW_H = 14, MAX_ROW_H = 480;
@@ -109,6 +113,17 @@ export class View {
   styleOf(key: OverlayKey): OverlayStyle { return { ...DEFAULT_STYLE, ...this.s.styles?.[key] }; }
   /** Every overlay drawn as it is at first: on or off as before, each in its default style. */
   resetStyles() { this.s.styles = {}; this.save(); }
+  /** A person's or an object's colour; null: back to its own. */
+  setColour(id: string, colour: string | null) {
+    const colours = { ...this.s.colours };
+    if (colour === null) delete colours[id]; else colours[id] = colour;
+    this.s.colours = colours; this.save();
+  }
+  setDetailsOpen(kind: string, open: boolean) {
+    if (open === this.s.detailsOpen.includes(kind)) return;
+    this.s.detailsOpen = open ? [...this.s.detailsOpen, kind] : this.s.detailsOpen.filter((k) => k !== kind);
+    this.save();
+  }
   toggleDrawer() { this.s.drawerClosed = !this.s.drawerClosed; this.save(); }
   setDrawerW(w: number | null) { this.s.drawerW = w === null ? null : Math.max(DRAWER_W[0], Math.min(DRAWER_W[1], Math.round(w))); }
   setTimelineH(h: number | null) { this.s.timelineH = h === null ? null : Math.round(h); }

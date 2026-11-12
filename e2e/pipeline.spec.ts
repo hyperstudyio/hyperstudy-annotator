@@ -512,7 +512,7 @@ test('a lab server takes your keys to its runs only once you say so, naming them
   await expect(allow).not.toBeChecked();                                         // off until you say so
   await expect(allow).toHaveAccessibleDescription('Its runs get the keys their steps need. While a run goes, root and your own processes on lab can read them.');
   settings = await settingsAt(page, /^Models$/);
-  const anthropic = settings.getByRole('listitem', { name: 'Shot captions' }).getByRole('listitem', { name: 'Anthropic key' });
+  const anthropic = settings.getByRole('region', { name: 'Anthropic' }).getByRole('listitem', { name: 'Anthropic key' });
   await anthropic.getByRole('button', { name: 'Add the Anthropic key' }).click();
   await anthropic.getByRole('textbox', { name: 'Anthropic key' }).fill('sk-ant-test-0123456789');
   await anthropic.getByRole('button', { name: 'Save' }).click();
@@ -692,12 +692,17 @@ test('a pipeline that does not say which steps are part of objects shows each st
 
 // --- keys, set in Settings where they are used: Models (shot captions, gated models), Machines (a cloud provider) -----
 
-test('a key is saved to the keychain where its step is listed, leaves the page at once, and can be removed', async ({ page }) => {
+test('the Anthropic key is set in its own part, which says what needs it; it is saved to the keychain, leaves the page at once, and can be removed', async ({ page }) => {
   const dialog = await planned(page, '/?pipeline-demo');
   const settings = await settingsAt(page, /^Models$/);
   const captions = settings.getByRole('listitem', { name: 'Shot captions' });
   await expect(captions).toContainText('Runs on the Anthropic API');
-  const anthropic = captions.getByRole('listitem', { name: 'Anthropic key' });
+  await expect(captions).toContainText('Scene descriptions and on-screen text');   // where on-screen text comes from
+  await expect(captions.getByRole('listitem', { name: 'Anthropic key' })).toHaveCount(0);   // once, above the steps
+  await expect(captions.getByRole('button', { name: 'Needs the Anthropic key' })).toBeVisible();
+  const part = settings.getByRole('region', { name: 'Anthropic' });
+  await expect(part).toContainText('Scene descriptions and on-screen text come from Claude. Without this key, runs leave them out.');
+  const anthropic = part.getByRole('listitem', { name: 'Anthropic key' });
   await expect(anthropic).toContainText('Not set. Get one at console.anthropic.com/settings/keys');
   await expect(anthropic.getByRole('textbox')).toHaveCount(0);                            // a field only when asked for
   await anthropic.getByRole('button', { name: 'Add the Anthropic key' }).click();
@@ -707,6 +712,7 @@ test('a key is saved to the keychain where its step is listed, leaves the page a
   await field.fill('sk-ant-test-0123456789');
   await anthropic.getByRole('button', { name: 'Save' }).click();
   await expect(anthropic).toContainText('Saved in the keychain');
+  await expect(captions.getByRole('button', { name: 'Uses the Anthropic key' })).toBeVisible();
   await expect(anthropic.getByRole('textbox')).toHaveCount(0);                            // not kept in the page
   expect(await page.content()).not.toContain('sk-ant-test-0123456789');
   await expect(anthropic.getByRole('button', { name: 'Replace the Anthropic key' })).toBeVisible();
@@ -777,7 +783,11 @@ test('Models lists objects once: each of its models and its key once, a download
   await expect(objects.getByRole('button', { name: 'facebook/sam3' })).toHaveCount(1);
   await expect(objects.getByRole('button', { name: 'facebook/dinov3-vitl16-pretrain-lvd1689m' })).toHaveCount(1);
   await expect(objects).toContainText('Runs on your computers and the Anthropic API · 3.4 GB, downloaded once · 1.2 GB, downloaded once');
-  await expect(objects.getByRole('listitem', { name: 'Anthropic key' })).toHaveCount(1);
+  await expect(objects.getByRole('button', { name: 'Needs the Anthropic key' })).toHaveCount(1);
+  const anthropic = settings.getByRole('region', { name: 'Anthropic' });
+  await expect(anthropic).toContainText('Scene descriptions, on-screen text and objects come from Claude.');
+  await expect(anthropic.getByRole('listitem', { name: 'Anthropic key' })).toHaveCount(1);
+  await expect(settings.getByRole('listitem', { name: 'Anthropic key' })).toHaveCount(1);   // the key once, not under each step
   await expect(model(hf, 'SAM 3')).toContainText('Objects');
   await expect(model(hf, 'DINOv3')).toContainText('Objects');
   await expect(hf).not.toContainText('Object tracks');
