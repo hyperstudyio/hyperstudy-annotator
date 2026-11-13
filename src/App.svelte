@@ -17,6 +17,7 @@
   import PipelineDialog from './lib/components/PipelineDialog.svelte';
   import { tauriPipeline, type PipelineApi, type SetupStatus } from './lib/pipeline';
   import { tauriUpdater, Updates } from './lib/updates.svelte';
+  import UpdateNotice from './lib/components/UpdateNotice.svelte';
   import { tauriLibrary, type LibraryApi } from './lib/library';
 
   let source = $state<BundleSource | null>(null);
@@ -33,7 +34,8 @@
   let run = $state<RunStatus | null>(null);
   let modal = $state(false);   // the viewer waits on a dialog: the rail is out of reach, as the page behind it is
   let runKey = $state(0);   // New run: Extract starts over
-  // the app's updates: checked quietly at launch; the macOS app menu's Check for Updates… asks again, in Settings
+  // the app's updates: checked quietly at launch, and one found is said on the page in front (UpdateNotice) and on the
+  // rail; the macOS app menu's Check for Updates… asks again, in Settings
   let updates = $state<Updates | null>(null);
   let settingsShow = $state<SettingsSection | null>(null);   // the part of Settings to bring into view
   // a key, a server or the cloud being changed in Settings: Start run on Extract waits for it (it would race the change)
@@ -158,6 +160,8 @@
           onbusy={(b) => (configBusy = b)} />
       </div>
     {/if}
+
+    {#if updates}<UpdateNotice {updates} show={page !== 'settings' && !modal} {holdRelaunch} {relaunchCaution} />{/if}
   </main>
 </div>
 

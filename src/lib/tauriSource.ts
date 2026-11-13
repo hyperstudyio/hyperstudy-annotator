@@ -1,7 +1,7 @@
 // The desktop app's source: an imported bundle, through the app's commands; corrections in the app's SQLite database.
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { typesIn } from '@hyperstudyio/annotator';
+import { bundlePath, typesIn } from '@hyperstudyio/annotator';
 import type { Unmatched, Op, BundleSource, CarryRecord, FoundFile, BundleSummary, Manifest } from '@hyperstudyio/annotator';
 
 export const inTauri = () => '__TAURI_INTERNALS__' in window;
@@ -72,7 +72,9 @@ export async function tauriSource(id: string): Promise<BundleSource> {
       return name in manifest.layers ? (JSON.parse(await api.readLayer(id, name)) as T) : null;
     },
     async file<T>(path: string) { return JSON.parse(await api.readFile(id, path)) as T; },
-    assetUrl: (path) => convertFileSrc(`${bundle_dir}/${path}`),
+    // a path the bundle names (a crop), checked as the browser's source and the app's own commands check theirs:
+    // a bundle can come from anyone, and the asset protocol would serve whatever its scope allows
+    assetUrl: (path) => convertFileSrc(`${bundle_dir}/${bundlePath(path)}`),
     findPrototypeCorrections: () => api.findPrototypeCorrections(id),
     async pickCorrectionsFile() {
       const path = await open({ title: 'Import edits from a file', filters: [{ name: 'Edits', extensions: ['json'] }] });

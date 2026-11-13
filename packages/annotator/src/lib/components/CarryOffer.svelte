@@ -1,9 +1,11 @@
 <script lang="ts">
   // A re-run of a video opens with an empty log: offer the newest earlier version's corrections, re-anchored to this
-  // version's ids (model/carryover.ts). What cannot be carried waits in the Review tab; the earlier log is only read.
+  // version's ids (model/carryover.ts), and the colours chosen there with them. What cannot be carried waits in the
+  // Review tab; the earlier log is only read.
   import { untrack } from 'svelte';
   import { Bundle } from '../model/bundle';
-  import { carryOver } from '../model/carryover';
+  import { carryColours, carryOver } from '../model/carryover';
+  import { coloursOf } from '../model/view.svelte';
   import { useSession, useSource } from '../model/context';
   import { plural, stampAfter } from '../model/session.svelte';
   import type { EarlierVersion } from '../source';
@@ -37,6 +39,7 @@
       // provenance by manifest sha256, which means the same on every machine (from.id is this library's)
       const r = carryOver(ops, bundle, s.bundle, bundle.key ?? from.id, stampAfter(undefined));
       await lineage.carry(from.id, r.ops, r.unmatched);
+      if (bundle.key) s.view.adoptColours(carryColours(coloursOf(bundle.key), bundle, s.bundle));
       await s.load();
       s.carry = await lineage.record();
       offer = null;

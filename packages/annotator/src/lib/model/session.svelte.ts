@@ -124,7 +124,7 @@ export class Session {
   constructor(bundle: Bundle, store: CorrectionStore, view?: View) {
     this.bundle = bundle;
     this.store = store;
-    this.view = view ?? new View(bundle.sha256);
+    this.view = view ?? new View(bundle.sha256, undefined, bundle.key);
     this.playback.duration = bundle.duration;
     (bundle.layers.faces?.people ?? []).forEach((p, i) => this.#colour.set(p.id, PALETTE[i % PALETTE.length]));
   }
@@ -224,7 +224,7 @@ export class Session {
     // so a person who skipped theirs would shift everyone after them, on the next load
     let c = this.#colour.get(p);
     if (!c) { c = PALETTE[this.#colour.size % PALETTE.length]; this.#colour.set(p, c); }
-    return this.view.s.colours?.[p] ?? c;
+    return this.view.colours[p] ?? c;
   }
   readonly tracksOf = $derived.by(() => {
     const m = new Map<string, FaceTrack[]>();
@@ -311,7 +311,7 @@ export class Session {
 
   identityOf(o: ObjectTrack) { return follow(this.S.objMergedInto, this.S.objTrackIdentity[o.id] ?? o.identity); }
   objName(i: string) { return this.S.objNames[i] ?? (i.startsWith('objid:user:') ? 'New object' : stripKind(i)); }
-  objColour(i: string) { const chosen = this.view.s.colours?.[i]; if (chosen) return chosen; let h = 0; for (const c of i) h = (h * 31 + c.charCodeAt(0)) >>> 0; return OBJ_PALETTE[h % OBJ_PALETTE.length]; }
+  objColour(i: string) { const chosen = this.view.colours[i]; if (chosen) return chosen; let h = 0; for (const c of i) h = (h * 31 + c.charCodeAt(0)) >>> 0; return OBJ_PALETTE[h % OBJ_PALETTE.length]; }
   readonly objectsOf = $derived.by(() => {
     const m = new Map<string, ObjectTrack[]>();
     for (const o of this.bundle.objects) { const i = this.identityOf(o); if (!m.has(i)) m.set(i, []); m.get(i)!.push(o); }

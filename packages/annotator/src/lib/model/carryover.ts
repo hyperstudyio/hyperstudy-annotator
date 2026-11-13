@@ -123,6 +123,19 @@ export function anchor(from: Bundle, to: Bundle) {
   return { map, reasons };
 }
 
+/** The colours a viewer chose on `from`, keyed by the same people and objects in `to`, matched as corrections are. One
+ *  made in the app (a new person or object) keeps its id, which a carried correction keeps too; one whose id has no
+ *  match stays behind, never landing on whoever has that id in `to`. */
+export function carryColours(colours: Record<string, string>, from: Bundle, to: Bundle): Record<string, string> {
+  const { map } = anchor(from, to);
+  const out: Record<string, string> = {};
+  for (const [id, colour] of Object.entries(colours)) {
+    const next = from.has(id) ? map.get(id) : id;
+    if (next) out[next] = colour;
+  }
+  return out;
+}
+
 /** When in the earlier version an id applies (a person: from their first to their last track). */
 function spanIn(b: Bundle, id: string): Span | null {
   switch (kindOf(id)) {
