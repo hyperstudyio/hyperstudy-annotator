@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { MemoryStorage } from './fixture.test-helpers';
-import { DEFAULT_STYLE, GROUP_KEYS, MAX_ROW_H, MIN_ROW_H, View, moveTo, ordered } from './view.svelte';
+import { DEFAULT_STYLE, GROUP_KEYS, MAX_ROW_H, MIN_ROW_H, View, coloursOf, moveTo, ordered } from './view.svelte';
 
 test('moving an item lands it before the item that was at the drop index', () => {
   expect(moveTo(['a', 'b', 'c', 'd'], 'a', 3)).toEqual(['b', 'c', 'a', 'd']);
@@ -48,4 +48,34 @@ test('an overlay\'s style is saved per video, read back, and reset; a view saved
   delete saved.styles;   // as a view saved by 0.0.2 has none
   old.setItem(old.key(0)!, JSON.stringify(saved));
   expect(new View('old', old).styleOf('objects')).toEqual(DEFAULT_STYLE);
+});
+
+test('chosen colours are kept per run, the layout per video: a re-run of the video starts with its own colours', () => {
+  const storage = new MemoryStorage();
+  const v = new View('video', storage, 'run-1');
+  v.setColour('person:Person A', '#123456');
+  v.hideRow('waveform');
+  const rerun = new View('video', storage, 'run-2');
+  expect(rerun.s.hidden).toEqual(['waveform']);
+  expect(rerun.colours).toEqual({});   // its person:Person A may be someone else
+  expect(new View('video', storage, 'run-1').colours).toEqual({ 'person:Person A': '#123456' });
+  expect(coloursOf('run-1', storage)).toEqual({ 'person:Person A': '#123456' });
+  expect(new View('video', storage).colours).toEqual({});   // a bundle without a key: the video's own
+});
+
+test('colours carried over from an earlier run are kept, and one already chosen on this run stays', () => {
+  const storage = new MemoryStorage();
+  const v = new View('video', storage, 'run-2');
+  v.setColour('person:Person A', '#aaaaaa');
+  v.adoptColours({ 'person:Person A': '#111111', 'person:Person B': '#222222' });
+  expect(new View('video', storage, 'run-2').colours).toEqual({ 'person:Person A': '#aaaaaa', 'person:Person B': '#222222' });
+});
+
+test('colours saved in the layout by 0.0.6, whose run is not known, are not given to any run', () => {
+  const storage = new MemoryStorage();
+  storage.setItem('hyperstudy-annotator:view:video', JSON.stringify({ hidden: ['waveform'], colours: { 'person:Person A': '#123456' } }));
+  const v = new View('video', storage, 'run-2');
+  expect(v.colours).toEqual({});
+  expect(v.s.hidden).toEqual(['waveform']);
+  expect('colours' in v.s).toBe(false);
 });

@@ -451,12 +451,12 @@ test('a delete pressed twice before the first is saved deletes once, so one undo
 });
 
 describe('colours', () => {
-  test('a colour the viewer chose is the person\'s and the object\'s everywhere, kept with the layout, and can go back', () => {
+  test('a colour the viewer chose is the person\'s and the object\'s everywhere, saved, and can go back', () => {
     const { s, storage } = session();
     const own = s.colourOf('person:Person A');
     s.view.setColour('person:Person A', '#123456');
     expect(s.colourOf('person:Person A')).toBe('#123456');
-    expect(new View(SHA, storage).s.colours).toEqual({ 'person:Person A': '#123456' });   // saved, per video
+    expect(new View(SHA, storage).colours).toEqual({ 'person:Person A': '#123456' });   // saved (per run: view.test.ts)
     expect(s.ops).toEqual([]);   // never a correction
     s.view.setColour('person:Person A', null);
     expect(s.colourOf('person:Person A')).toBe(own);

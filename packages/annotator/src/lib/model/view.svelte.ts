@@ -1,5 +1,7 @@
 // Per-viewer layout: which timeline groups and rows are hidden, collapsed, reordered or resized, the overlay layers,
 // the drawer and the splitters. Kept in localStorage per video. Never corrections: nothing here changes the data.
+// The colours chosen for people and objects are kept per run instead: they name ids, and a re-run of the video names
+// its people and objects afresh (its person:3 can be someone else), so they reach a re-run only when carried over.
 
 export const GROUP_KEYS = ['audio', 'prosody', 'people', 'objects', 'gestures', 'social', 'sounds', 'text', 'annotations'] as const;
 export type GroupKey = (typeof GROUP_KEYS)[number];
@@ -31,8 +33,6 @@ export interface ViewState {
   drawerClosed: boolean;
   drawerW: number | null;
   timelineH: number | null;
-  /** person or object id -> the colour the viewer chose for it (timeline, overlays, panels); else its own */
-  colours: Record<string, string>;
   /** the kinds of thing (face, utt…) whose Details the viewer keeps open in Inspect */
   detailsOpen: string[];
 }
@@ -43,7 +43,7 @@ export const defaultView = (): ViewState => ({
   styles: {},
   // Gaze-LLE is the default: on OOO it read more accurately by eye than PaGE and the py-feat ray (user review 2026-10-23)
   gazeSource: 'gaze_lle',
-  drawerClosed: false, drawerW: null, timelineH: null, colours: {}, detailsOpen: [],
+  drawerClosed: false, drawerW: null, timelineH: null, detailsOpen: [],
 });
 
 export const MIN_ROW_H = 14, MAX_ROW_H = 480;
@@ -64,26 +64,42 @@ export function ordered<T>(items: T[], key: (x: T) => string, order: string[]): 
   return items.map((x, i) => [x, i] as const).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([x]) => x);
 }
 
+type Colours = Record<string, string>;
+const browserStorage = () => (typeof localStorage === 'undefined' ? null : localStorage);
+const coloursKey = (run: string) => `hyperstudy-annotator:colours:${run}`;
+
+function read<T>(storage: Storage | null, key: string): T | null {
+  try { return JSON.parse(storage?.getItem(key) ?? 'null'); }
+  catch { return null; }   // a first visit, or storage blocked: the default layout
+}
+function write(storage: Storage | null, key: string, value: unknown) {
+  try { storage?.setItem(key, JSON.stringify(value)); }
+  catch { /* layout is a convenience; nothing is lost */ }
+}
+
+/** The colours chosen on the run `run` (a bundle's key), to carry over to a re-run. */
+export const coloursOf = (run: string, storage: Storage | null = browserStorage()): Colours => read<Colours>(storage, coloursKey(run)) ?? {};
+
 export class View {
   s = $state<ViewState>(defaultView());
+  /** person or object id -> the colour the viewer chose for it (timeline, overlays, panels); else its own */
+  colours = $state<Colours>({});
   readonly key: string;
+  readonly coloursKey: string;
   #storage: Storage | null;
 
-  constructor(sha256: string, storage: Storage | null = typeof localStorage === 'undefined' ? null : localStorage) {
+  /** `sha256`: the video's, for the layout. `run`: the bundle's key, for the colours (the video's when unknown). */
+  constructor(sha256: string, storage: Storage | null = browserStorage(), run: string | null = null) {
     this.key = `hyperstudy-annotator:view:${sha256}`;
+    this.coloursKey = coloursKey(run ?? sha256);
     this.#storage = storage;
-    const saved = this.#read();
-    if (saved) this.s = { ...defaultView(), ...saved, layers: { ...defaultView().layers, ...saved.layers } };
+    // colours saved in the layout (0.0.6) are left there: which run's ids they named is not known
+    const { colours: _unknownRun, ...saved } = read<Partial<ViewState> & { colours?: unknown }>(storage, this.key) ?? {};
+    this.s = { ...defaultView(), ...saved, layers: { ...defaultView().layers, ...saved.layers } };
+    this.colours = read<Colours>(storage, this.coloursKey) ?? {};
   }
 
-  #read(): Partial<ViewState> | null {
-    try { return JSON.parse(this.#storage?.getItem(this.key) ?? 'null'); }
-    catch { return null; }   // a first visit, or storage blocked: the default layout
-  }
-  save() {
-    try { this.#storage?.setItem(this.key, JSON.stringify(this.s)); }
-    catch { /* layout is a convenience; nothing is lost */ }
-  }
+  save() { write(this.#storage, this.key, this.s); }
 
   toggleCollapsed(group: string) { this.s.collapsed = toggled(this.s.collapsed, group); this.save(); }
   setGroupShown(group: string, shown: boolean) {
@@ -115,9 +131,13 @@ export class View {
   resetStyles() { this.s.styles = {}; this.save(); }
   /** A person's or an object's colour; null: back to its own. */
   setColour(id: string, colour: string | null) {
-    const colours = { ...this.s.colours };
+    const colours = { ...this.colours };
     if (colour === null) delete colours[id]; else colours[id] = colour;
-    this.s.colours = colours; this.save();
+    this.colours = colours; write(this.#storage, this.coloursKey, colours);
+  }
+  /** Colours carried over from an earlier run, already keyed by this run's ids; a colour chosen here stays. */
+  adoptColours(carried: Colours) {
+    this.colours = { ...carried, ...this.colours }; write(this.#storage, this.coloursKey, this.colours);
   }
   setDetailsOpen(kind: string, open: boolean) {
     if (open === this.s.detailsOpen.includes(kind)) return;

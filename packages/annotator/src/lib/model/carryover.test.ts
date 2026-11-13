@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { carryOver, describe as describeOp } from './carryover';
+import { carryColours, carryOver, describe as describeOp } from './carryover';
 import { fold, type Op } from './corrections';
 import { face, makeBundle, utt } from './fixture.test-helpers';
 import type { FacesLayer, FaceTrack, TranscriptLayer } from '../types';
@@ -179,5 +179,19 @@ describe('carryOver', () => {
   test('every op kind has a line for the review list', () => {
     expect(describeOp({ op: 'person.rename', person: 'person:Person C', name: 'Carol' })).toBe('Person C named “Carol”');
     expect(describeOp({ op: 'shot.caption', shot: 'shot:4', caption: 'x' })).toBe('Caption of shot 5 edited');
+  });
+});
+
+describe('carryColours', () => {
+  test('a chosen colour follows its person and object to the re-run, never the id they had, and one made here keeps its id', () => {
+    const chosen = { 'person:Person A': '#111111', 'person:Person B': '#222222', 'person:Person C': '#333333',
+      'person:made-1': '#444444', 'objid:user:1': '#555555' };
+    expect(carryColours(chosen, old, rerun())).toEqual({ 'person:Person B': '#111111', 'person:Person A': '#222222',
+      'person:Person D': '#333333', 'person:made-1': '#444444', 'objid:user:1': '#555555' });
+  });
+
+  test('a colour whose person has no match in the re-run stays behind', () => {
+    const tracks = [face(10, 'person:Person B', 0, 0, 4), face(11, 'person:Person A', 0, 0, 4, 500), face(12, 'person:Person B', 1, 10, 14)];
+    expect(carryColours({ 'person:Person C': '#333333', 'person:Person A': '#111111' }, old, rerun(tracks))).toEqual({ 'person:Person B': '#111111' });
   });
 });
