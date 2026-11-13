@@ -1,10 +1,11 @@
 // Updating the app, against browser mode's scripted stand-in for the releases (?update-demo): Tauri's updater is absent
-// here. The launch check is quiet; an update shows on the rail and in Settings, downloads when asked, and the relaunch
-// waits for a run in progress.
+// here. The launch check is quiet; an update is said on the page in front, on the rail and in Settings, downloads when
+// asked, and the relaunch waits for a run in progress.
 import { expect, test, type Page } from '@playwright/test';
 
 const rail = (page: Page) => page.getByRole('navigation', { name: 'App' });
 const updatesIn = (page: Page) => page.getByRole('region', { name: 'Updates' });
+const notice = (page: Page) => page.getByRole('region', { name: 'Update', exact: true });
 
 test('an update found at launch shows on the rail, installs when asked, then relaunches', async ({ page }) => {
   await page.goto('/?update-demo=available');
@@ -37,6 +38,9 @@ test('a launch check that cannot reach the releases interrupts nothing; asking s
   const updates = updatesIn(page);
   await expect(updates.getByText(/The last check could not reach the releases/)).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
+  await rail(page).getByRole('button', { name: 'Annotator' }).click();
+  await expect(notice(page)).toHaveCount(0);
+  await rail(page).getByRole('button', { name: 'Settings' }).click();
   await updates.getByRole('button', { name: 'Check for updates' }).click();
   await expect(updates.getByText(/^Could not check for updates: Could not fetch a valid release JSON/)).toBeVisible();
   await expect(updates.getByRole('button', { name: 'Try again' })).toBeEnabled();
@@ -88,4 +92,54 @@ test('the relaunch waits while the pipeline is being set up, then is offered', a
   await page.clock.runFor(1000);                                              // past the setup's 1.5 s
   await expect(updates.getByRole('button', { name: 'Relaunch now' })).toBeEnabled();
   await expect(updates.getByText(/being set up/)).toHaveCount(0);
+});
+
+test('an update found at launch is said on the page in front, without taking the focus, and installs and relaunches from there', async ({ page }) => {
+  await page.goto('/?update-demo=available');
+  const n = notice(page);
+  await expect(n.getByText('Version 0.0.2 is available.')).toBeVisible();
+  expect(await page.evaluate(() => !!document.activeElement?.closest('[aria-label="Update"]'))).toBe(false);
+  await rail(page).getByRole('button', { name: 'Settings' }).click();
+  await expect(n).toHaveCount(0);                                                             // Settings says it there
+  await rail(page).getByRole('button', { name: 'Annotator' }).click();
+  await n.getByRole('button', { name: 'Install update' }).click();
+  await expect(n.getByRole('progressbar', { name: 'Download' })).toBeVisible();
+  await expect(n.getByText('Version 0.0.2 is installed.')).toBeVisible();
+  await n.getByRole('button', { name: 'Relaunch now' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __relaunched?: boolean }).__relaunched)).toBe(true);
+});
+
+test('Later puts the notice away until the update is installed; the rail keeps the reminder', async ({ page }) => {
+  await page.goto('/?update-demo=available');
+  await notice(page).getByRole('button', { name: 'Later' }).click();
+  await expect(notice(page)).toHaveCount(0);
+  await rail(page).getByRole('button', { name: 'Settings' }).click();
+  await rail(page).getByRole('button', { name: 'Annotator' }).click();
+  await expect(notice(page)).toHaveCount(0);                                                  // still put away
+  await rail(page).getByRole('button', { name: 'Update' }).click();
+  await updatesIn(page).getByRole('button', { name: 'Install update' }).click();
+  await expect(updatesIn(page).getByText('Version 0.0.2 is installed.')).toBeVisible();
+  await rail(page).getByRole('button', { name: 'Annotator' }).click();
+  await expect(notice(page).getByRole('button', { name: 'Relaunch now' })).toBeVisible();   // its next step is said
+});
+
+test('an install from the notice that fails says why there, and can be tried again', async ({ page }) => {
+  await page.goto('/?update-demo=bad-download');
+  const n = notice(page);
+  await n.getByRole('button', { name: 'Install update' }).click();
+  await expect(n.getByText(/^The update did not install: the signature of the update does not match/)).toBeVisible();
+  await n.getByRole('button', { name: 'Try again' }).click();
+  await expect(n.getByText('Version 0.0.2 is available.')).toBeVisible();
+});
+
+test('the notice\'s relaunch waits while a run is going on Extract', async ({ page }) => {
+  await page.goto('/?pipeline-demo=slow-start&update-demo=available');
+  const extract = page.getByRole('region', { name: 'Extract' });
+  await extract.getByRole('button', { name: 'Choose a video…' }).click();
+  await extract.getByRole('button', { name: 'Start run' }).click();
+  await expect(extract.getByRole('button', { name: 'Cancel run' })).toBeVisible();
+  const n = notice(page);
+  await n.getByRole('button', { name: 'Install update' }).click();
+  await expect(n.getByText('A run is going on Extract, and a relaunch would stop it. Relaunch once it ends.')).toBeVisible();
+  await expect(n.getByRole('button', { name: 'Relaunch now' })).toBeDisabled();
 });
